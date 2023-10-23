@@ -6,5 +6,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-hyper = { version = "0.14.27" , features = ["full"] }
-tokio = { version = "1.33.0" , features = ["full"] }
+base32 = "0.4.0"
+fast_qr = "0.10.3"
+hyper = { version = "0.14.27", features = ["full"] }
+ring = "0.17.5"
+tokio = { version = "1.33.0", features = ["full"] }
+totp-rs = "5.4.0"
