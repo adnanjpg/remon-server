@@ -4,8 +4,7 @@ use hyper::{Body, Request, Response, Server};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 
-mod get_otp_qr;
-mod get_totp;
+mod get_otp;
 
 async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     match req.uri().path() {
@@ -18,9 +17,12 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
             Ok(response)
         }
         "/get-otp-qr" => {
-            let qr_code = get_otp_qr::generate_otp_qr_code();
+            // TODO(adnanjpg): take from request
+            let user_name = "adnanjpg";
 
-            get_otp_qr::outputqr(&qr_code.to_string()).unwrap();
+            let qr_code = get_otp::generate_otp_qr_code(user_name.to_owned());
+
+            get_otp::outputqr(&qr_code.to_string()).unwrap();
 
             let response = Response::builder()
                 .status(200)
@@ -31,13 +33,10 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
             Ok(response)
         }
         "/get-current-totp" => {
-            // The TOTP time step is typically 30 seconds.
-            let time_step = 30;
-
             // TODO(adnanjpg): get from saved secret
             let randomk = "F23FZGOU3CW4AYDQYXAGUNUYKLCHKVYB";
 
-            let totp = get_totp::generate_totp(randomk.to_owned(), time_step);
+            let totp = get_otp::generate_totp(randomk.to_owned());
 
             println!("totp iss {}", totp);
 
