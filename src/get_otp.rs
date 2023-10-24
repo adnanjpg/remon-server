@@ -13,19 +13,23 @@ const OTP_DIGITS: usize = 6;
 const OTP_SKEW: u8 = 1;
 const OTP_ALGORITHM: Algorithm = Algorithm::SHA1;
 
+pub const TOTP_KEY: &str = "JJFECVSHKJBUYSS2JVDFKUZSIRFFURSVINKTES2JKE";
+
 fn generate_totp_secret() -> String {
-    let rng = SystemRandom::new();
-    let mut secret = vec![0u8; 20];
+    // let rng = SystemRandom::new();
+    // let mut secret = vec![0u8; 20];
 
-    rng.fill(&mut secret).unwrap();
+    // rng.fill(&mut secret).unwrap();
 
-    // Encode the shared secret in base32
-    let encoded_secret = encode(Alphabet::RFC4648 { padding: false }, secret.as_slice());
+    // // Encode the shared secret in base32
+    // let encoded_secret = encode(Alphabet::RFC4648 { padding: false }, secret.as_slice());
 
-    let totp = generate_totp_obj(encoded_secret).unwrap();
-    let otp_base32 = totp.get_secret_base32();
+    // let totp = generate_totp_obj(&encoded_secret).unwrap();
+    // let otp_base32 = totp.get_secret_base32();
 
-    otp_base32
+    // otp_base32
+
+    TOTP_KEY.to_owned()
 }
 
 pub fn generate_otp_qr_code(user_name: String) -> String {
@@ -57,22 +61,30 @@ pub fn outputqr(input: &str) -> Result<(), ConvertError> {
     Ok(())
 }
 
-fn generate_totp_obj(secret: String) -> Result<TOTP, TotpUrlError> {
+fn generate_totp_obj(secret: &str) -> Result<TOTP, TotpUrlError> {
     let totp = TOTP::new(
         OTP_ALGORITHM,
         OTP_DIGITS,
         OTP_SKEW,
         OTP_TIME_STEP,
-        Secret::Encoded(secret).to_bytes().unwrap(),
+        Secret::Encoded(secret.to_owned()).to_bytes().unwrap(),
     );
 
     return totp;
 }
 
-pub fn generate_totp(secret: String) -> String {
+pub fn generate_totp(secret: &str) -> String {
     let totp = generate_totp_obj(secret).unwrap();
 
     let result = totp.generate_current().unwrap();
+
+    result
+}
+
+pub fn check_totp_match(key: &str, secret: &str) -> bool {
+    let totp = generate_totp_obj(secret).unwrap();
+
+    let result = totp.check_current(key).unwrap();
 
     result
 }

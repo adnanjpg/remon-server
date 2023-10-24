@@ -1,10 +1,20 @@
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
+use serde::Serialize;
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
 
 mod get_otp;
+
+use serde_json;
+
+use crate::get_otp::TOTP_KEY;
+
+#[derive(serde::Deserialize, Serialize)] // Derive Deserialize and Serialize for your struct
+struct ValidateOtpData {
+    token: String,
+}
 
 async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     match req.uri().path() {
@@ -32,11 +42,26 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
 
             Ok(response)
         }
-        "/get-current-totp" => {
-            // TODO(adnanjpg): get from saved secret
-            let randomk = "F23FZGOU3CW4AYDQYXAGUNUYKLCHKVYB";
+        "/validate-totp" => {
+            // Read the request body into a byte buffer
+            let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap();
+            let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
 
-            let totp = get_otp::generate_totp(randomk.to_owned());
+            // Parse the request body as JSON
+            let request_data: Result<ValidateOtpData, serde_json::Error> =
+                serde_json::from_str(&body_str);
+
+            let is_matching = get_otp::check_totp_match(&request_data.unwrap().token, TOTP_KEY);
+
+            let response = Response::builder()
+                .status(200)
+                .header("Content-Type", "text/plain")
+                .body(Body::from(is_matching.to_string()))
+                .unwrap();
+            Ok(response)
+        }
+        "/get-current-totp" => {
+            let totp = get_otp::generate_totp(TOTP_KEY);
 
             println!("totp iss {}", totp);
 
