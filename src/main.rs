@@ -60,19 +60,6 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 .unwrap();
             Ok(response)
         }
-        "/get-current-totp" => {
-            let totp = get_otp::generate_totp(TOTP_KEY);
-
-            println!("totp iss {}", totp);
-
-            let response = Response::builder()
-                .status(200)
-                .header("Content-Type", "text/plain")
-                .body(Body::from(""))
-                .unwrap();
-
-            Ok(response)
-        }
         _ => {
             let response = Response::builder()
                 .status(404)
