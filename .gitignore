@@ -7,3 +7,5 @@ Cargo.toml.orig
 Cargo.lock.orig
 
 .DS_Store
+
+.env
