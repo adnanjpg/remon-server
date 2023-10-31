@@ -1,5 +1,10 @@
 # Remon
 
+**Disclaimer: Early Development Stage •
+Please note that this application is currently in the early development stages and may not be stable for production use.**
+
+
+
 ## Overview
 Remon is an open-source application that allows you to monitor your server's status in real-time and receive notifications when critical events occur. This project consists of two main components: a server application that runs on your server and a mobile app that you can install on your smartphone.
 
