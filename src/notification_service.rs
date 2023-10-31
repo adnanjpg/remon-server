@@ -62,16 +62,20 @@ pub async fn access_token() -> Result<String, ()> {
     Ok(token_no_bearer.to_string())
 }
 
-pub async fn send_notification_to(device_id: &str) -> Result<bool, String> {
-    send_notification_to_multi(&vec![device_id]).await
-}
-
-pub async fn send_notification_to_multi(device_ids: &Vec<&str>) -> Result<bool, String> {
-    let project_id = match get_project_id() {
-        Ok(project_id) => project_id,
-        Err(err) => return Err(err),
+async fn get_auth_token() -> Result<String, String> {
+    let tkn = match access_token().await {
+        Ok(tkn) => tkn,
+        Err(_) => return Err("could not get access token".to_string()),
     };
 
+    Ok(tkn)
+}
+
+async fn send_notification_to(
+    device_id: &str,
+    auth_token: &str,
+    project_id: &str,
+) -> Result<bool, String> {
     // https://firebase.google.com/docs/reference/fcm/rest/v1/projects.messages/send
     let url = format!(
         "https://fcm.googleapis.com/v1/projects/{}/messages:send",
@@ -80,7 +84,7 @@ pub async fn send_notification_to_multi(device_ids: &Vec<&str>) -> Result<bool, 
 
     let body = json!({
         "message": {
-            "token": device_ids[0],
+            "token": device_id,
             "notification": {
                 "title": format!("test title {}", chrono::Utc::now().timestamp()),
                 "body": format!("test body {}", chrono::Utc::now().timestamp()),
@@ -88,16 +92,11 @@ pub async fn send_notification_to_multi(device_ids: &Vec<&str>) -> Result<bool, 
         }
     });
 
-    let tkn = match access_token().await {
-        Ok(tkn) => tkn,
-        Err(_) => return Err("could not get access token".to_string()),
-    };
-
     let client = reqwest::Client::new();
     let req = client
         .post(&url)
         .header("Content-Type", "application/json")
-        .bearer_auth(tkn)
+        .bearer_auth(auth_token)
         .body(body.to_string());
 
     let res = req.send().await;
@@ -114,4 +113,33 @@ pub async fn send_notification_to_multi(device_ids: &Vec<&str>) -> Result<bool, 
             Err(err.to_string())
         }
     }
+}
+
+pub async fn send_notification_to_multi(device_ids: &Vec<&str>) -> Result<bool, String> {
+    let project_id = match get_project_id() {
+        Ok(project_id) => project_id,
+        Err(err) => return Err(err),
+    };
+
+    let tkn = match get_auth_token().await {
+        Ok(tkn) => tkn,
+        Err(err) => return Err(err),
+    };
+
+    let mut results = Vec::new();
+
+    for device_id in device_ids {
+        let res = send_notification_to(device_id, &tkn, &project_id).await;
+
+        match res {
+            Ok(res) => results.push(res),
+            Err(err) => return Err(err),
+        }
+    }
+
+    Ok(results.iter().all(|&x| x))
+}
+
+pub async fn send_notification_to_single(device_id: &str) -> Result<bool, String> {
+    send_notification_to_multi(&vec![device_id]).await
 }
