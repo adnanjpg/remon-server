@@ -6,10 +6,19 @@ mod jwt;
 
 use fb_access_token::ServiceAccount;
 
-const SERVICE_KEY_FILE_NAME: &str = ".remon-mobile-fcm-creds.json";
+// reads the service key file name from the environment
+// variable GOOGLE_APPLICATION_CREDENTIALS
+fn get_service_key_file_name() -> Result<String, String> {
+    let key_path = match dotenv::var("GOOGLE_APPLICATION_CREDENTIALS") {
+        Ok(key_path) => key_path,
+        Err(err) => return Err(err.to_string()),
+    };
+
+    Ok(key_path)
+}
 
 fn read_service_key_file() -> Result<String, String> {
-    let key_path = SERVICE_KEY_FILE_NAME;
+    let key_path = get_service_key_file_name()?;
 
     let private_key_content = match std::fs::read(key_path) {
         Ok(content) => content,
@@ -47,14 +56,14 @@ fn get_project_id() -> Result<String, String> {
     Ok(project_id.to_string())
 }
 
-pub async fn access_token() -> Result<String, ()> {
+pub async fn access_token() -> Result<String, String> {
     let scopes = vec!["https://www.googleapis.com/auth/firebase.messaging"];
-    let key_path = SERVICE_KEY_FILE_NAME;
+    let key_path = get_service_key_file_name()?;
 
-    let mut service_account = ServiceAccount::from_file(key_path, scopes);
+    let mut service_account = ServiceAccount::from_file(&key_path, scopes);
     let access_token = match service_account.access_token().await {
         Ok(access_token) => access_token,
-        Err(_) => return Err(()),
+        Err(err) => return Err(err),
     };
 
     let token_no_bearer = access_token.split(" ").collect::<Vec<&str>>()[1];

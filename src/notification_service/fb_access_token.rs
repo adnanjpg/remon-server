@@ -50,7 +50,7 @@ impl ServiceAccount {
     /// Returns an access token
     /// If the access token is not expired, it will return the cached access token
     /// Otherwise, it will exchange the JWT token for an access token
-    pub async fn access_token(&mut self) -> Result<String, ()> {
+    pub async fn access_token(&mut self) -> Result<String, String> {
         match (self.access_token.as_ref(), self.expires_at) {
             (Some(access_token), Some(expires_at))
                 if expires_at > Utc::now().timestamp() as u64 =>
@@ -61,7 +61,7 @@ impl ServiceAccount {
                 let jwt_token = self.jwt_token()?;
                 let token = match self.exchange_jwt_token_for_access_token(jwt_token).await {
                     Ok(token) => token,
-                    Err(_) => return Err(()),
+                    Err(err) => return Err(err.to_string()),
                 };
 
                 let expires_at = Utc::now().timestamp() as u64 + token.expires_in - 30;
@@ -125,7 +125,7 @@ impl ServiceAccount {
         Ok(token)
     }
 
-    fn jwt_token(&self) -> Result<jwt::JwtToken, ()> {
+    fn jwt_token(&self) -> Result<jwt::JwtToken, String> {
         let token = jwt::JwtToken::from_file(&self.key_path).unwrap();
 
         Ok(match self.user_email {
