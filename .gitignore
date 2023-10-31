@@ -7,3 +7,7 @@ Cargo.toml.orig
 Cargo.lock.orig
 
 .DS_Store
+
+# DB files
+*.sqlite3
+*.sqlite3-journal

@@ -39,10 +39,8 @@ fn generate_totp_secret() -> String {
     TOTP_KEY.to_owned()
 }
 
-pub fn generate_otp_qr_code(user_name: String) -> String {
+pub fn generate_otp_qr_url(user_name: &str) -> String {
     let encoded_secret = generate_totp_secret();
-
-    let user_name = user_name;
 
     // otpauth://totp/YourAppName:username?secret=sharedsecret&issuer=YourAppName&algorithm=SHA1&digits=6&period=30
     let otpcode = format!(

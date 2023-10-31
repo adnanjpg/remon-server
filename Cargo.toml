@@ -7,11 +7,14 @@ edition = "2021"
 
 [dependencies]
 base32 = "0.4.0"
+chrono = "0.4.31"
 fast_qr = "0.10.3"
 hyper = { version = "0.14.27", features = ["full"] }
+jsonwebtoken = "9.1.0"
 ring = "0.17.5"
 serde = { version = "1.0.189", features = ["derive"] }
 serde_json = "1.0.107"
+sqlx = { version = "0.7.2", features = ["sqlite", "runtime-tokio"] }
 sysinfo = "0.29.10"
 tokio = { version = "1.33.0", features = ["full"] }
 totp-rs = "5.4.0"
