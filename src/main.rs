@@ -12,8 +12,6 @@ use serde_json;
 
 use crate::get_otp::TOTP_KEY;
 
-use notification_service::access_token;
-
 #[derive(serde::Deserialize, Serialize)] // Derive Deserialize and Serialize for your struct
 struct ValidateOtpData {
     token: String,
@@ -87,7 +85,3 @@ async fn main() {
         eprintln!("server error: {}", e);
     }
 }
-
-// fn main() {
-//     access_token();
-// }
