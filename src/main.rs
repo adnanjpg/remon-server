@@ -6,6 +6,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 
 mod get_otp;
+mod notification_service;
 
 use serde_json;
 
@@ -73,6 +74,9 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
 
 #[tokio::main]
 async fn main() {
+    notification_service::send_notification_to("ctAejajmThuWJtoPQ4A5Sy:APA91bEsn3f4uLDn7OktHVk_14srAEt9kM7iR2FxyFQkL1WJ16wA7Q7d1c9ny1Sa5me4LMPzbS_SavjxXRmPASE8aVLjwO31mdZAE4HdmyfGX2TyV1TfuGbnjWDWtiJ_XUBBsBJg8E4L")
+        .await
+        .unwrap();
     let server = Server::bind(&SocketAddr::from(([127, 0, 0, 1], 8080))).serve(make_service_fn(
         |_conn| async { Ok::<_, Infallible>(service_fn(req_handler)) },
     ));

@@ -9,3 +9,4 @@ Cargo.lock.orig
 .DS_Store
 
 .env
+.remon-mobile-fcm-creds.json
