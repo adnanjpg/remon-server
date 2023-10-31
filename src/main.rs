@@ -61,6 +61,31 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 .unwrap();
             Ok(response)
         }
+        "/send-test-notification" => {
+            // Read the request body into a byte buffer
+            let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap();
+            let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+            let body_json: serde_json::Value = serde_json::from_str(&body_str).unwrap();
+
+            let device_ids = body_json["device_tokens"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_str().unwrap())
+                .collect::<Vec<&str>>();
+
+            notification_service::send_notification_to_multi(&device_ids)
+                .await
+                .unwrap();
+
+            let response = Response::builder()
+                .status(200)
+                .header("Content-Type", "text/plain")
+                .body(Body::from(""))
+                .unwrap();
+
+            Ok(response)
+        }
         _ => {
             let response = Response::builder()
                 .status(404)
@@ -74,9 +99,6 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
 
 #[tokio::main]
 async fn main() {
-    notification_service::send_notification_to_single("ctAejajmThuWJtoPQ4A5Sy:APA91bEsn3f4uLDn7OktHVk_14srAEt9kM7iR2FxyFQkL1WJ16wA7Q7d1c9ny1Sa5me4LMPzbS_SavjxXRmPASE8aVLjwO31mdZAE4HdmyfGX2TyV1TfuGbnjWDWtiJ_XUBBsBJg8E4L")
-        .await
-        .unwrap();
     let server = Server::bind(&SocketAddr::from(([127, 0, 0, 1], 8080))).serve(make_service_fn(
         |_conn| async { Ok::<_, Infallible>(service_fn(req_handler)) },
     ));

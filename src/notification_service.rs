@@ -140,6 +140,7 @@ pub async fn send_notification_to_multi(device_ids: &Vec<&str>) -> Result<bool, 
     Ok(results.iter().all(|&x| x))
 }
 
+#[allow(dead_code)]
 pub async fn send_notification_to_single(device_id: &str) -> Result<bool, String> {
     send_notification_to_multi(&vec![device_id]).await
 }
