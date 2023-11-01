@@ -1,10 +1,5 @@
+use gauth::serv_account::ServiceAccount;
 use serde_json::json;
-
-mod errors;
-mod fb_access_token;
-mod jwt;
-
-use fb_access_token::ServiceAccount;
 
 // reads the service key file name from the environment
 // variable GOOGLE_APPLICATION_CREDENTIALS
@@ -63,7 +58,7 @@ pub async fn access_token() -> Result<String, String> {
     let mut service_account = ServiceAccount::from_file(&key_path, scopes);
     let access_token = match service_account.access_token().await {
         Ok(access_token) => access_token,
-        Err(err) => return Err(err),
+        Err(err) => return Err(err.to_string()),
     };
 
     let token_no_bearer = access_token.split(" ").collect::<Vec<&str>>()[1];
