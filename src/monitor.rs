@@ -1,6 +1,6 @@
 use sysinfo::{CpuExt, System, SystemExt};
 
-use serde::{de, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use sqlx::ConnectOptions;
@@ -12,7 +12,6 @@ pub struct ServerDescription {
     description: String,
 }
 
-// this is going to be improved later
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct MonitorConfig {
     pub device_id: String,
@@ -21,9 +20,9 @@ pub struct MonitorConfig {
     pub storage_threshold: f64,
 }
 
-const LE_DOT: &str = " • ";
-
 const SQLITE_DB_PATH: &str = "sqlite:./db/mon.sqlite3";
+
+const LE_DOT: &str = " • ";
 
 pub fn get_default_server_desc() -> ServerDescription {
     let mut system = System::new_all();
@@ -45,28 +44,6 @@ pub fn get_default_server_desc() -> ServerDescription {
         + &format!("{:.1}GB", &mem);
 
     ServerDescription { name, description }
-}
-
-/// not tested yet
-pub async fn create_table() -> Result<(), sqlx::Error> {
-    let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
-        .unwrap()
-        .journal_mode(SqliteJournalMode::Wal)
-        .connect()
-        .await?;
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS configs (
-            device_id TEXT PRIMARY KEY,
-            cpu_threshold REAL NOT NULL,
-            mem_threshold REAL NOT NULL,
-            storage_threshold REAL NOT NULL
-        )",
-    )
-    .execute(&mut conn)
-    .await?;
-
-    Ok(())
 }
 
 pub async fn fetch_monitor_config(device_id: &str) -> Result<MonitorConfig, sqlx::Error> {
@@ -100,4 +77,53 @@ pub async fn insert_monitor_config(config: &MonitorConfig) -> Result<(), sqlx::E
         .await?;
 
     Ok(())
+}
+
+pub async fn insert_test(id: &str) {
+    let mut conn = SqliteConnectOptions::from_str("sqlite:./db/test.sqlite3")
+        .unwrap()
+        .journal_mode(SqliteJournalMode::Wal)
+        .connect()
+        .await
+        .unwrap();
+
+    sqlx::query("INSERT INTO tests (device_id, cpu_threshold, mem_threshold, storage_threshold) VALUES (?, ?, ?, ?)")
+        .bind(id)
+        .bind(0.5)
+        .bind(0.5)
+        .bind(0.5)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+}
+
+pub async fn init_db() {
+    // check if db folder exists
+    if !std::path::Path::new("./db").exists() {
+        // create db folder
+        std::fs::create_dir("./db").unwrap();
+    }
+    // if db file not exists, create it
+    if !std::path::Path::new("./db/test.sqlite3").exists() {
+        // create db file
+        std::fs::File::create("./db/test.sqlite3").unwrap();
+    }
+
+    let mut conn = SqliteConnectOptions::from_str("sqlite:./db/test.sqlite3")
+        .unwrap()
+        .journal_mode(SqliteJournalMode::Wal)
+        .connect()
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS tests (
+        device_id TEXT PRIMARY KEY,
+        cpu_threshold REAL NOT NULL,
+        mem_threshold REAL NOT NULL,
+        storage_threshold REAL NOT NULL
+    )",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
 }
