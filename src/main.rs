@@ -4,13 +4,12 @@ use hyper::{Body, Method, Request, Response, Server};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 
-mod get_otp;
 mod notification_service;
 
 use serde::{Deserialize, Serialize};
 use serde_json;
 
-mod auth_token;
+mod auth;
 mod monitor;
 
 async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
@@ -28,6 +27,14 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 .status(hyper::StatusCode::OK)
                 .header("Content-Type", "text/plain")
                 .body(Body::from("Hello World!\r\n"))
+                .unwrap();
+            Ok(response)
+        }
+        (&Method::GET, "/teapot") => {
+            let response = Response::builder()
+                .status(hyper::StatusCode::IM_A_TEAPOT)
+                .header("Content-Type", "text/plain")
+                .body(Body::from("I'm a teapot!\r\n"))
                 .unwrap();
             Ok(response)
         }
@@ -70,9 +77,9 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
 
             // TODO(isaidsari): handle invalid device_id cases
 
-            let url = get_otp::generate_otp_qr_url(&device_id);
+            let url = auth::otp::generate_otp_qr_url(&device_id);
 
-            match get_otp::outputqr(&url) {
+            match auth::otp::outputqr(&url) {
                 Ok(qr) => {
                     // Print the QR code to the terminal
                     println!("{}\r\n{}", url, qr);
@@ -105,7 +112,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
             let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap();
             let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
 
-            let login = match serde_json::from_str::<auth_token::LoginRequest>(&body_str) {
+            let login = match serde_json::from_str::<auth::token::LoginRequest>(&body_str) {
                 Ok(req_json) => req_json,
                 Err(_) => {
                     let response = Response::builder()
@@ -122,8 +129,8 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 }
             };
 
-            if get_otp::check_totp_match(&login.otp, get_otp::TOTP_KEY) {
-                let token = auth_token::generate_token(&login.device_id).await.unwrap();
+            if auth::otp::check_totp_match(&login.otp, auth::otp::TOTP_KEY) {
+                let token = auth::token::generate_token(&login.device_id).await.unwrap();
 
                 let response = Response::builder()
                     .status(hyper::StatusCode::OK)
@@ -148,10 +155,26 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
             }
         }
         (&Method::POST, "/update-info") => {
-            let auth_header = req.headers().get("Authorization").unwrap();
-            let auth_header_str = auth_header.to_str().unwrap();
+            let auth_header = req.headers().get("Authorization");
 
-            if !auth_token::validate_token(auth_header_str).await.is_ok() {
+            let auth_header = match auth_header {
+                Some(h) => h.to_str().unwrap(),
+                None => {
+                    let response = Response::builder()
+                        .status(hyper::StatusCode::FORBIDDEN)
+                        .header("Content-Type", "text/plain")
+                        .body(Body::from(
+                            serde_json::to_string(&ResponseBody::error(
+                                "Missing auth token.".to_string(),
+                            ))
+                            .unwrap(),
+                        ))
+                        .unwrap();
+                    return Ok(response);
+                }
+            };
+
+            if !auth::token::validate_token(auth_header).await.is_ok() {
                 let response = Response::builder()
                     .status(hyper::StatusCode::UNAUTHORIZED)
                     .header("Content-Type", "text/plain")
@@ -247,11 +270,26 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
             Ok(response)
         }
         (&Method::GET, "/validate-token-test") => {
-            // TODO(isaidsari): handle cases where the header is missing
-            let auth_header = req.headers().get("Authorization").unwrap();
-            let auth_header_str = auth_header.to_str().unwrap();
+            let auth_header = req.headers().get("Authorization");
 
-            match auth_token::validate_token(auth_header_str).await {
+            let auth_header = match auth_header {
+                Some(h) => h.to_str().unwrap(),
+                None => {
+                    let response = Response::builder()
+                        .status(hyper::StatusCode::FORBIDDEN)
+                        .header("Content-Type", "text/plain")
+                        .body(Body::from(
+                            serde_json::to_string(&ResponseBody::error(
+                                "Missing auth token.".to_string(),
+                            ))
+                            .unwrap(),
+                        ))
+                        .unwrap();
+                    return Ok(response);
+                }
+            };
+
+            match auth::token::validate_token(auth_header).await {
                 Ok(_) => {
                     let response = Response::builder()
                         .status(hyper::StatusCode::OK)
@@ -295,6 +333,8 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
 
 #[tokio::main]
 async fn main() {
+    monitor::init_db().await;
+
     let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
 
     let server = Server::bind(&addr).serve(make_service_fn(|_conn| async {
