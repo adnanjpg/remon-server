@@ -79,24 +79,6 @@ pub async fn insert_monitor_config(config: &MonitorConfig) -> Result<(), sqlx::E
     Ok(())
 }
 
-pub async fn insert_test(id: &str) {
-    let mut conn = SqliteConnectOptions::from_str("sqlite:./db/test.sqlite3")
-        .unwrap()
-        .journal_mode(SqliteJournalMode::Wal)
-        .connect()
-        .await
-        .unwrap();
-
-    sqlx::query("INSERT INTO tests (device_id, cpu_threshold, mem_threshold, storage_threshold) VALUES (?, ?, ?, ?)")
-        .bind(id)
-        .bind(0.5)
-        .bind(0.5)
-        .bind(0.5)
-        .execute(&mut conn)
-        .await
-        .unwrap();
-}
-
 pub async fn init_db() {
     // check if db folder exists
     if !std::path::Path::new("./db").exists() {
@@ -104,19 +86,19 @@ pub async fn init_db() {
         std::fs::create_dir("./db").unwrap();
     }
     // if db file not exists, create it
-    if !std::path::Path::new("./db/test.sqlite3").exists() {
+    if !std::path::Path::new("./db/mon.sqlite3").exists() {
         // create db file
-        std::fs::File::create("./db/test.sqlite3").unwrap();
+        std::fs::File::create("./db/mon.sqlite3").unwrap();
     }
 
-    let mut conn = SqliteConnectOptions::from_str("sqlite:./db/test.sqlite3")
+    let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
         .unwrap()
         .journal_mode(SqliteJournalMode::Wal)
         .connect()
         .await
         .unwrap();
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS tests (
+        "CREATE TABLE IF NOT EXISTS configs (
         device_id TEXT PRIMARY KEY,
         cpu_threshold REAL NOT NULL,
         mem_threshold REAL NOT NULL,

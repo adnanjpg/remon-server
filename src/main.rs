@@ -188,6 +188,8 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 return Ok(response);
             }
 
+            // TODO(): check if the device_id in the token matches the device_id in the request body
+
             let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap();
             let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
 
