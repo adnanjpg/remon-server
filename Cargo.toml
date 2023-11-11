@@ -24,3 +24,5 @@ sysinfo = "0.29.10"
 tokio = { version = "1.33.0", features = ["full"] }
 totp-rs = "5.4.0"
 gauth = "0.6.0"
+env_logger = "0.10.0"
+log = "0.4.14"

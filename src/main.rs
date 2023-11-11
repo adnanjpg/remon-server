@@ -9,6 +9,9 @@ mod notification_service;
 use serde::{Deserialize, Serialize};
 use serde_json;
 
+use env_logger;
+use log::{debug, error, info, warn};
+
 mod auth;
 mod monitor;
 
@@ -337,6 +340,19 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
 async fn main() {
     monitor::init_db().await;
 
+    // Initialize the logger here
+    if cfg!(debug_assertions) {
+        env_logger::init(); // In debug builds, use default configuration
+        debug!("Mary has a little lamb");
+        error!("{}", "Its fleece was white as snow");
+        info!("{:?}", "And every where that Mary went");
+        warn!("{:#?}", "The lamb was sure to go");
+    } else {
+        env_logger::builder()
+            .filter_level(log::LevelFilter::Debug)
+            .init(); // In release builds, set log level to Error
+    }
+    
     let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
 
     let server = Server::bind(&addr).serve(make_service_fn(|_conn| async {
@@ -346,4 +362,6 @@ async fn main() {
     if let Err(e) = server.await {
         eprintln!("server error: {}", e);
     }
+
+    
 }
