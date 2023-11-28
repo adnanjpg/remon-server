@@ -29,7 +29,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
             let response = Response::builder()
                 .status(hyper::StatusCode::OK)
                 .header("Content-Type", "text/plain")
-                .body(Body::from("Hello World!\r\n"))
+                .body(Body::from("Hello World!"))
                 .unwrap();
             Ok(response)
         }
@@ -37,7 +37,15 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
             let response = Response::builder()
                 .status(hyper::StatusCode::IM_A_TEAPOT)
                 .header("Content-Type", "text/plain")
-                .body(Body::from("I'm a teapot!\r\n"))
+                .body(Body::from("I'm a teapot!"))
+                .unwrap();
+            Ok(response)
+        }
+        (&Method::GET, "/healthcheck") => {
+            let response = Response::builder()
+                .status(hyper::StatusCode::OK)
+                .header("Content-Type", "text/plain")
+                .body(Body::from("Running smoothly!"))
                 .unwrap();
             Ok(response)
         }
