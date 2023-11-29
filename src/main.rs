@@ -106,7 +106,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 Err(_) => {
                     let response = Response::builder()
                         .status(hyper::StatusCode::INTERNAL_SERVER_ERROR)
-                        .header("Content-Type", "text/plain")
+                        .header("Content-Type", "application/json")
                         .body(Body::from(
                             serde_json::to_string(&ResponseBody::error(
                                 "Failed to generate QR code.".to_string(),
@@ -128,7 +128,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 Err(_) => {
                     let response = Response::builder()
                         .status(hyper::StatusCode::BAD_REQUEST)
-                        .header("Content-Type", "text/plain")
+                        .header("Content-Type", "application/json")
                         .body(Body::from(
                             serde_json::to_string(&ResponseBody::error(
                                 "Invalid JSON.".to_string(),
@@ -154,7 +154,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
             } else {
                 let response = Response::builder()
                     .status(hyper::StatusCode::UNAUTHORIZED)
-                    .header("Content-Type", "text/plain")
+                    .header("Content-Type", "application/json")
                     .body(Body::from(
                         serde_json::to_string(&ResponseBody::error(
                             "Invalid OTP code.".to_string(),
@@ -173,7 +173,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 None => {
                     let response = Response::builder()
                         .status(hyper::StatusCode::FORBIDDEN)
-                        .header("Content-Type", "text/plain")
+                        .header("Content-Type", "application/json")
                         .body(Body::from(
                             serde_json::to_string(&ResponseBody::error(
                                 "Missing auth token.".to_string(),
@@ -188,7 +188,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
             if !auth::token::validate_token(auth_header).await.is_ok() {
                 let response = Response::builder()
                     .status(hyper::StatusCode::UNAUTHORIZED)
-                    .header("Content-Type", "text/plain")
+                    .header("Content-Type", "application/json")
                     .body(Body::from(
                         serde_json::to_string(&ResponseBody::error(
                             "Invalid auth token.".to_string(),
@@ -209,7 +209,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 Err(_) => {
                     let response = Response::builder()
                         .status(hyper::StatusCode::BAD_REQUEST)
-                        .header("Content-Type", "text/plain")
+                        .header("Content-Type", "application/json")
                         .body(Body::from(
                             serde_json::to_string(&ResponseBody::error(
                                 "Invalid JSON.".to_string(),
@@ -235,7 +235,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 Err(_) => {
                     let response = Response::builder()
                         .status(hyper::StatusCode::INTERNAL_SERVER_ERROR)
-                        .header("Content-Type", "text/plain")
+                        .header("Content-Type", "application/json")
                         .body(Body::from(
                             serde_json::to_string(&ResponseBody::error(
                                 "Failed to update monitor config.".to_string(),
@@ -276,8 +276,10 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
 
             let response = Response::builder()
                 .status(200)
-                .header("Content-Type", "text/plain")
-                .body(Body::from(""))
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&ResponseBody::success(true)).unwrap(),
+                ))
                 .unwrap();
 
             Ok(response)
@@ -290,7 +292,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 None => {
                     let response = Response::builder()
                         .status(hyper::StatusCode::FORBIDDEN)
-                        .header("Content-Type", "text/plain")
+                        .header("Content-Type", "application/json")
                         .body(Body::from(
                             serde_json::to_string(&ResponseBody::error(
                                 "Missing auth token.".to_string(),
@@ -316,7 +318,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 Err(_) => {
                     let response = Response::builder()
                         .status(hyper::StatusCode::UNAUTHORIZED)
-                        .header("Content-Type", "text/plain")
+                        .header("Content-Type", "application/json")
                         .body(Body::from(
                             serde_json::to_string(&ResponseBody::error(
                                 "Invalid auth token.".to_string(),
@@ -331,7 +333,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
         (_, _) => {
             let response = Response::builder()
                 .status(hyper::StatusCode::NOT_FOUND)
-                .header("Content-Type", "text/plain")
+                .header("Content-Type", "application/json")
                 .body(Body::from(
                     serde_json::to_string(&ResponseBody::error(
                         "The requested resource was not found.".to_string(),
