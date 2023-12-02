@@ -2,7 +2,7 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server};
 
 use std::convert::Infallible;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 mod notification_service;
 
@@ -14,6 +14,39 @@ use log::{debug, error, info, warn};
 
 mod auth;
 mod monitor;
+
+use local_ip_address::local_ip;
+
+// TODO(adnanjpg): get port from env var
+const DEFAULT_PORT: u16 = 8080;
+
+fn get_ip_array() -> Option<[u8; 4]> {
+    match local_ip() {
+        Ok(ip) => {
+            let ip_str = ip.to_string();
+
+            let ip_array: [u8; 4] = ip_str
+                .split(".")
+                .map(|x| x.parse::<u8>().unwrap())
+                .collect::<Vec<u8>>()
+                .try_into()
+                .unwrap();
+
+            Some(ip_array)
+        }
+        Err(_) => {
+            error!("Failed to get local IP address.");
+            None
+        }
+    }
+}
+
+fn get_socket_addr() -> Option<SocketAddr> {
+    match get_ip_array() {
+        Some(ip_array) => Some(SocketAddr::from((ip_array, DEFAULT_PORT))),
+        None => None,
+    }
+}
 
 async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     #[derive(Serialize, Deserialize)]
@@ -348,12 +381,12 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
 
 fn init_logger() {
     if cfg!(debug_assertions) {
-        // use default configuration
-        env_logger::init();
+        env_logger::builder()
+            .filter_level(log::LevelFilter::Debug)
+            .init();
     } else {
         env_logger::builder()
-            // remove debug level logs in prod
-            .filter_level(log::LevelFilter::Debug)
+            .filter_level(log::LevelFilter::Error)
             .init();
     }
 }
@@ -364,9 +397,17 @@ async fn main() {
 
     init_logger();
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
+    let socket_addr = match get_socket_addr() {
+        Some(addr) => addr,
+        None => {
+            error!("Failed to get local IP address.");
+            return;
+        }
+    };
 
-    let server = Server::bind(&addr).serve(make_service_fn(|_conn| async {
+    debug!("Starting server at {}", socket_addr);
+
+    let server = Server::bind(&socket_addr).serve(make_service_fn(|_conn| async {
         Ok::<_, Infallible>(service_fn(req_handler))
     }));
 
