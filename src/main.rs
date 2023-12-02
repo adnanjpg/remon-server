@@ -2,7 +2,7 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server};
 
 use std::convert::Infallible;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::SocketAddr;
 
 mod notification_service;
 
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 
 use env_logger;
-use log::{debug, error, info, warn};
+use log::{debug, error};
 
 mod auth;
 mod monitor;
@@ -173,7 +173,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 }
             };
 
-            if auth::otp::check_totp_match(&login.otp, auth::otp::TOTP_KEY) {
+            if auth::otp::check_totp_match_dev_id(&login.otp, &login.device_id) {
                 let token = auth::token::generate_token(&login.device_id).await.unwrap();
 
                 let response = Response::builder()

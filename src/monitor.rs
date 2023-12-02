@@ -46,21 +46,6 @@ pub fn get_default_server_desc() -> ServerDescription {
     ServerDescription { name, description }
 }
 
-pub async fn fetch_monitor_config(device_id: &str) -> Result<MonitorConfig, sqlx::Error> {
-    let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
-        .unwrap()
-        .journal_mode(SqliteJournalMode::Wal)
-        .connect()
-        .await?;
-
-    let config = sqlx::query_as::<_, MonitorConfig>("SELECT * FROM configs WHERE device_id = ?")
-        .bind(device_id)
-        .fetch_one(&mut conn)
-        .await?;
-
-    Ok(config)
-}
-
 pub async fn insert_monitor_config(config: &MonitorConfig) -> Result<(), sqlx::Error> {
     let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
         .unwrap()
