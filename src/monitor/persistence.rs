@@ -1,50 +1,10 @@
-use sysinfo::{CpuExt, System, SystemExt};
-
-use serde::{Deserialize, Serialize};
-
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use sqlx::ConnectOptions;
 use std::str::FromStr;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ServerDescription {
-    name: String,
-    description: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
-pub struct MonitorConfig {
-    pub device_id: String,
-    pub cpu_threshold: f64,
-    pub mem_threshold: f64,
-    pub storage_threshold: f64,
-}
+use crate::monitor::sys_status::{MonitorConfig, ServerDescription, MonitorStatus};
 
 const SQLITE_DB_PATH: &str = "sqlite:./db/mon.sqlite3";
-
-const LE_DOT: &str = " • ";
-
-pub fn get_default_server_desc() -> ServerDescription {
-    let mut system = System::new_all();
-    system.refresh_all();
-
-    // TODO: add pc name / user name
-    let cpu = system.cpus()[0].brand();
-    let mem = (system.total_memory() as f64) / 1024.0 / 1024.0 / 1024.0;
-    let name = system.name().unwrap_or("Unknown".to_string())
-        + LE_DOT
-        + match system.global_cpu_info().vendor_id() {
-            "GenuineIntel" => "Intel",
-            _ => "Unknown",
-        };
-    let description = system.long_os_version().unwrap_or("Unknown".to_string())
-        + LE_DOT
-        + cpu
-        + LE_DOT
-        + &format!("{:.1}GB", &mem);
-
-    ServerDescription { name, description }
-}
 
 pub async fn fetch_monitor_config(device_id: &str) -> Result<MonitorConfig, sqlx::Error> {
     let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
@@ -61,6 +21,20 @@ pub async fn fetch_monitor_config(device_id: &str) -> Result<MonitorConfig, sqlx
     Ok(config)
 }
 
+pub async fn fetch_monitor_configs() -> Result<Vec<MonitorConfig>, sqlx::Error> {
+    let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
+        .unwrap()
+        .journal_mode(SqliteJournalMode::Wal)
+        .connect()
+        .await?;
+
+    let configs = sqlx::query_as::<_, MonitorConfig>("SELECT * FROM configs")
+        .fetch_all(&mut conn)
+        .await?;
+
+    Ok(configs)
+}
+
 pub async fn insert_monitor_config(config: &MonitorConfig) -> Result<(), sqlx::Error> {
     let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
         .unwrap()
@@ -73,6 +47,38 @@ pub async fn insert_monitor_config(config: &MonitorConfig) -> Result<(), sqlx::E
         .bind(config.cpu_threshold)
         .bind(config.mem_threshold)
         .bind(config.storage_threshold)
+        .execute(&mut conn)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn fetch_monitor_status() -> Result<MonitorStatus, sqlx::Error> {
+    let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
+        .unwrap()
+        .journal_mode(SqliteJournalMode::Wal)
+        .connect()
+        .await?;
+
+    let status = sqlx::query_as::<_, MonitorStatus>("SELECT * FROM statuses ORDER BY id DESC LIMIT 1")
+        .fetch_one(&mut conn)
+        .await?;
+
+    Ok(status)
+}
+
+pub async fn insert_monitor_status(status: &MonitorStatus) -> Result<(), sqlx::Error> {
+    let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
+        .unwrap()
+        .journal_mode(SqliteJournalMode::Wal)
+        .connect()
+        .await?;
+
+    sqlx::query("INSERT OR REPLACE INTO statuses (cpu_usage, mem_usage, storage_usage, last_check) VALUES (?, ?, ?, ?)")
+        .bind(status.cpu_usage)
+        .bind(status.mem_usage)
+        .bind(status.storage_usage)
+        .bind(status.last_check)
         .execute(&mut conn)
         .await?;
 
@@ -103,6 +109,19 @@ pub async fn init_db() {
         cpu_threshold REAL NOT NULL,
         mem_threshold REAL NOT NULL,
         storage_threshold REAL NOT NULL
+    )",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS statuses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cpu_usage REAL NOT NULL,
+        mem_usage REAL NOT NULL,
+        storage_usage REAL NOT NULL,
+        last_check INTEGER NOT NULL
     )",
     )
     .execute(&mut conn)

@@ -2,7 +2,7 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server};
 
 use std::convert::Infallible;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::SocketAddr;
 
 mod notification_service;
 
@@ -290,6 +290,64 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 .unwrap();
             Ok(response)
         }
+        (&Method::GET, "/get-status") => {
+            let auth_header = req.headers().get("Authorization");
+
+            let auth_header = match auth_header {
+                Some(h) => h.to_str().unwrap(),
+                None => {
+                    let response = Response::builder()
+                        .status(hyper::StatusCode::FORBIDDEN)
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(
+                            serde_json::to_string(&ResponseBody::error(
+                                "Missing auth token.".to_string(),
+                            ))
+                            .unwrap(),
+                        ))
+                        .unwrap();
+                    return Ok(response);
+                }
+            };
+
+            if !auth::token::validate_token(auth_header).await.is_ok() {
+                let response = Response::builder()
+                    .status(hyper::StatusCode::UNAUTHORIZED)
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_string(&ResponseBody::error(
+                            "Invalid auth token.".to_string(),
+                        ))
+                        .unwrap(),
+                    ))
+                    .unwrap();
+                return Ok(response);
+            }
+
+            let status = match monitor::fetch_monitor_status().await {
+                Ok(status) => status,
+                Err(_) => {
+                    let response = Response::builder()
+                        .status(hyper::StatusCode::INTERNAL_SERVER_ERROR)
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(
+                            serde_json::to_string(&ResponseBody::error(
+                                "Failed to update monitor config.".to_string(),
+                            ))
+                            .unwrap(),
+                        ))
+                        .unwrap();
+                    return Ok(response);
+                }
+            };
+
+            let response = Response::builder()
+                .status(hyper::StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_string(&status).unwrap()))
+                .unwrap();
+            Ok(response)
+        }
         (&Method::POST, "/send-test-notification") => {
             // Read the request body into a byte buffer
             let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap();
@@ -393,17 +451,15 @@ fn init_logger() {
 
 #[tokio::main]
 async fn main() {
-    monitor::init_db().await;
-
     init_logger();
 
     let socket_addr = match get_socket_addr() {
-        Some(addr) => addr,
-        None => {
-            error!("Failed to get local IP address.");
-            return;
-        }
+        Some(addr) => /*addr*/SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT)),
+        None => SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT)),
     };
+
+    monitor::init().await;
+    debug!("Mointoring service started");
 
     debug!("Starting server at {}", socket_addr);
 
@@ -412,6 +468,6 @@ async fn main() {
     }));
 
     if let Err(e) = server.await {
-        eprintln!("server error: {}", e);
+        error!("server error: {}", e);
     }
 }
