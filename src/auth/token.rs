@@ -57,10 +57,13 @@ pub async fn validate_token(auth_token: &str) -> Result<String, JwtError> {
 
     let jwt = auth_token.trim_start_matches("Bearer ");
 
-    decode::<Claims>(
+    let dec = decode::<Claims>(
         jwt,
         &DecodingKey::from_secret(JWT_SECRET.as_ref()),
         &Validation::new(Algorithm::HS256),
-    )
-    .map(|data| data.claims.device_id)
+    );
+
+    let dev_id = dec.map(|data| data.claims.device_id);
+
+    dev_id
 }

@@ -14,7 +14,6 @@ pub struct ServerDescription {
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct MonitorConfig {
-    pub device_id: String,
     pub cpu_threshold: f64,
     pub mem_threshold: f64,
     pub storage_threshold: f64,
@@ -61,7 +60,10 @@ pub async fn fetch_monitor_config(device_id: &str) -> Result<MonitorConfig, sqlx
     Ok(config)
 }
 
-pub async fn insert_monitor_config(config: &MonitorConfig) -> Result<(), sqlx::Error> {
+pub async fn insert_monitor_config(
+    config: &MonitorConfig,
+    device_id: &str,
+) -> Result<(), sqlx::Error> {
     let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
         .unwrap()
         .journal_mode(SqliteJournalMode::Wal)
@@ -69,7 +71,7 @@ pub async fn insert_monitor_config(config: &MonitorConfig) -> Result<(), sqlx::E
         .await?;
 
     sqlx::query("INSERT OR REPLACE INTO configs (device_id, cpu_threshold, mem_threshold, storage_threshold) VALUES (?, ?, ?, ?)")
-        .bind(&config.device_id)
+        .bind(&device_id)
         .bind(config.cpu_threshold)
         .bind(config.mem_threshold)
         .bind(config.storage_threshold)
