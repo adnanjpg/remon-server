@@ -218,21 +218,22 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 }
             };
 
-            if !auth::token::validate_token(auth_header).await.is_ok() {
-                let response = Response::builder()
-                    .status(hyper::StatusCode::UNAUTHORIZED)
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_string(&ResponseBody::error(
-                            "Invalid auth token.".to_string(),
+            let dev_id: String = match auth::token::validate_token(auth_header).await {
+                Ok(value) => value,
+                Err(_) => {
+                    let response = Response::builder()
+                        .status(hyper::StatusCode::UNAUTHORIZED)
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(
+                            serde_json::to_string(&ResponseBody::error(
+                                "Invalid auth token.".to_string(),
+                            ))
+                            .unwrap(),
                         ))
-                        .unwrap(),
-                    ))
-                    .unwrap();
-                return Ok(response);
-            }
-
-            // TODO(): check if the device_id in the token matches the device_id in the request body
+                        .unwrap();
+                    return Ok(response);
+                }
+            };
 
             let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap();
             let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
@@ -254,7 +255,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 }
             };
 
-            match monitor::insert_monitor_config(&update_info).await {
+            match monitor::insert_monitor_config(&update_info, &dev_id).await {
                 Ok(_) => {
                     let response = Response::builder()
                         .status(hyper::StatusCode::OK)
