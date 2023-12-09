@@ -10,12 +10,15 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 
 use env_logger;
-use log::{debug, error};
+use log::{error, info};
 
 mod auth;
 mod monitor;
 
 use local_ip_address::local_ip;
+
+use std::convert::TryInto;
+use std::time;
 
 // TODO(adnanjpg): get port from env var
 const DEFAULT_PORT: u16 = 8080;
@@ -72,6 +75,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 .header("Content-Type", "text/plain")
                 .body(Body::from("I'm a teapot!"))
                 .unwrap();
+
             Ok(response)
         }
         (&Method::GET, "/healthcheck") => {
@@ -291,6 +295,101 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 .unwrap();
             Ok(response)
         }
+        (&Method::GET, "/get-status") => {
+            /*let auth_header = req.headers().get("Authorization");
+
+            let auth_header = match auth_header {
+                Some(h) => h.to_str().unwrap(),
+                None => {
+                    let response = Response::builder()
+                        .status(hyper::StatusCode::FORBIDDEN)
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(
+                            serde_json::to_string(&ResponseBody::error(
+                                "Missing auth token.".to_string(),
+                            ))
+                            .unwrap(),
+                        ))
+                        .unwrap();
+                    return Ok(response);
+                }
+            };
+
+            if !auth::token::validate_token(auth_header).await.is_ok() {
+                let response = Response::builder()
+                    .status(hyper::StatusCode::UNAUTHORIZED)
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_string(&ResponseBody::error(
+                            "Invalid auth token.".to_string(),
+                        ))
+                        .unwrap(),
+                    ))
+                    .unwrap();
+                return Ok(response);
+            }
+                        let status = match monitor::fetch_monitor_status().await {
+                            Ok(status) => status,
+                            Err(_) => {
+                                let response = Response::builder()
+                                    .status(hyper::StatusCode::INTERNAL_SERVER_ERROR)
+                                    .header("Content-Type", "application/json")
+                                    .body(Body::from(
+                                        serde_json::to_string(&ResponseBody::error(
+                                            "Failed to update monitor config.".to_string(),
+                                        ))
+                                        .unwrap(),
+                                    ))
+                                    .unwrap();
+                                return Ok(response);
+                            }
+                        };
+            */
+
+            let status = monitor::MonitorStatus {
+                cpu_usage: monitor::CpuStatus {
+                    vendor_id: "Intel".to_string(),
+                    brand: "Intel(R) Core(TM) i7-7700HQ CPU @ 2.80GHz".to_string(),
+                    cpu_usage: vec![
+                        monitor::CoreInfo {
+                            cpu_freq: 2.8,
+                            cpu_usage: 0.5,
+                        },
+                        monitor::CoreInfo {
+                            cpu_freq: 2.5,
+                            cpu_usage: 0.3,
+                        },
+                    ],
+                },
+                mem_usage: monitor::MemStatus {
+                    total: 100,
+                    available: 50,
+                },
+                storage_usage: vec![
+                    monitor::DiskStatus {
+                        name: "C:".to_string(),
+                        total: 100,
+                        available: 50,
+                    },
+                    monitor::DiskStatus {
+                        name: "D:".to_string(),
+                        total: 100,
+                        available: 50,
+                    },
+                ],
+                last_check: time::SystemTime::now()
+                    .duration_since(time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64,
+            };
+
+            let response = Response::builder()
+                .status(hyper::StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_string(&status).unwrap()))
+                .unwrap();
+            Ok(response)
+        }
         (&Method::POST, "/send-test-notification") => {
             // Read the request body into a byte buffer
             let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap();
@@ -394,8 +493,6 @@ fn init_logger() {
 
 #[tokio::main]
 async fn main() {
-    monitor::init_db().await;
-
     init_logger();
 
     let socket_addr = match get_socket_addr() {
@@ -406,13 +503,30 @@ async fn main() {
         }
     };
 
-    debug!("Starting server at {}", socket_addr);
+    monitor::init().await;
 
-    let server = Server::bind(&socket_addr).serve(make_service_fn(|_conn| async {
-        Ok::<_, Infallible>(service_fn(req_handler))
-    }));
+    info!("Starting server at {}", socket_addr);
 
-    if let Err(e) = server.await {
-        eprintln!("server error: {}", e);
+    if cfg!(debug_assertions) {
+        let server_local = Server::bind(&SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT))).serve(
+            make_service_fn(|_conn| async { Ok::<_, Infallible>(service_fn(req_handler)) }),
+        );
+
+        let server = Server::bind(&socket_addr).serve(make_service_fn(|_conn| async {
+            Ok::<_, Infallible>(service_fn(req_handler))
+        }));
+
+        tokio::select! {
+            _ = server_local => {},
+            _ = server => {},
+        }
+    } else {
+        let server = Server::bind(&socket_addr).serve(make_service_fn(|_conn| async {
+            Ok::<_, Infallible>(service_fn(req_handler))
+        }));
+
+        if let Err(e) = server.await {
+            error!("server error: {}", e);
+        }
     }
 }
