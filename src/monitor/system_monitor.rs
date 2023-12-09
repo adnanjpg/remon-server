@@ -1,5 +1,5 @@
 use crate::monitor::persistence::{fetch_monitor_configs, insert_monitor_status};
-use crate::monitor::{CpuStatus, CpuUsage, DiskStatus, MonitorConfig, MonitorStatus};
+use crate::monitor::{CpuStatus, CoreInfo, DiskStatus, MonitorConfig, MonitorStatus, MemStatus};
 use log::{debug, error, info, warn};
 use std::{
     sync::{Arc, Mutex},
@@ -61,15 +61,20 @@ impl SystemMonitor {
                     cpu_usage: vec![],
                 };
                 for cpu in system.cpus() {
-                    cpu_usage.cpu_usage.push(CpuUsage {
+                    cpu_usage.cpu_usage.push(CoreInfo {
                         cpu_freq: cpu.frequency() as f64,
                         cpu_usage: cpu.cpu_usage() as f64 / 100.0,
                     });
                 }
 
+                let mut mem_usage: MemStatus = MemStatus {
+                    total: system.total_memory(),
+                    available: system.free_memory(),
+                };
+
                 let status = MonitorStatus {
                     cpu_usage: cpu_usage,
-                    mem_usage: system.used_memory() as f64 / system.total_memory() as f64,
+                    mem_usage: mem_usage,
                     storage_usage,
                     last_check: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)

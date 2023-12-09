@@ -1,4 +1,4 @@
-use crate::monitor::{CpuStatus, DiskStatus, MonitorConfig, MonitorStatus};
+use crate::monitor::{CpuStatus, DiskStatus, MonitorConfig, MonitorStatus, MemStatus};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteRow};
 use sqlx::{ConnectOptions, Row};
 use sqlx::{Pool, Sqlite};
@@ -78,7 +78,10 @@ pub async fn fetch_monitor_status() -> Result<MonitorStatus, sqlx::Error> {
             brand: String::from("brand"),
             cpu_usage: vec![],
         },
-        mem_usage: 1.0,
+        mem_usage: MemStatus {
+            total: 1,
+            available: 1,
+        },
         storage_usage: vec![],
         last_check: 1,
     })

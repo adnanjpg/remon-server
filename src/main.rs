@@ -295,7 +295,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
             Ok(response)
         }
         (&Method::GET, "/get-status") => {
-            let auth_header = req.headers().get("Authorization");
+            /*let auth_header = req.headers().get("Authorization");
 
             let auth_header = match auth_header {
                 Some(h) => h.to_str().unwrap(),
@@ -327,7 +327,6 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                     .unwrap();
                 return Ok(response);
             }
-            /*
                         let status = match monitor::fetch_monitor_status().await {
                             Ok(status) => status,
                             Err(_) => {
@@ -351,17 +350,20 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                     vendor_id: "Intel".to_string(),
                     brand: "Intel(R) Core(TM) i7-7700HQ CPU @ 2.80GHz".to_string(),
                     cpu_usage: vec![
-                        monitor::CpuUsage {
+                        monitor::CoreInfo {
                             cpu_freq: 2.8,
                             cpu_usage: 0.5,
                         },
-                        monitor::CpuUsage {
+                        monitor::CoreInfo {
                             cpu_freq: 2.5,
                             cpu_usage: 0.3,
                         },
                     ],
                 },
-                mem_usage: 0.5,
+                mem_usage: monitor::MemStatus {
+                    total: 100,
+                    available: 50,
+                },
                 storage_usage: vec![
                     monitor::DiskStatus {
                         name: "C:".to_string(),

@@ -28,7 +28,7 @@ pub struct DiskStatus {
 }
 
 #[derive(Debug, Serialize, Deserialize, sqlx::Type)]
-pub struct CpuUsage {
+pub struct CoreInfo {
     pub cpu_freq: f64,
     pub cpu_usage: f64,
 }
@@ -37,13 +37,20 @@ pub struct CpuUsage {
 pub struct CpuStatus {
     pub vendor_id: String,
     pub brand: String,
-    pub cpu_usage: Vec<CpuUsage>,
+    pub cpu_usage: Vec<CoreInfo>,
 }
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct MemStatus {
+    pub total: u64,
+    pub available: u64,
+}
+
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct MonitorStatus {
     pub cpu_usage: CpuStatus,
-    pub mem_usage: f64,
+    pub mem_usage: MemStatus,
     pub storage_usage: Vec<DiskStatus>,
     pub last_check: i64,
 }
