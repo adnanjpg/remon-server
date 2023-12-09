@@ -53,6 +53,30 @@ pub struct MonitorStatus {
     pub last_check: i64,
 }
 
+// get-cpu-status
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GetCpuStatusRequest {
+    pub start_time: i64,
+    pub end_time: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::Type)]
+pub struct CpuCoreInfo {
+    pub freq: f64,
+    pub usage: f64,
+}
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct CpuFrameStatus {
+    pub cores_usage: Vec<CpuCoreInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct CpuStatusData {
+    pub frames: Vec<CpuFrameStatus>,
+}
+
+// get-hardware-info
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HardwareCpuInfo {
     pub vendor_id: String,

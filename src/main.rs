@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 
 use env_logger;
-use log::{error, info};
+use log::{debug, error, info};
 
 mod auth;
 mod monitor;
@@ -314,6 +314,63 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                     .duration_since(time::UNIX_EPOCH)
                     .unwrap()
                     .as_secs() as i64,
+            };
+
+            let response = Response::builder()
+                .status(hyper::StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_string(&status).unwrap()))
+                .unwrap();
+            Ok(response)
+        }
+        (&Method::GET, "/get-cpu-status") => {
+            // read query params and convert to GetCpuStatusRequest
+            let query_str = req.uri().query().unwrap();
+            let query_params: Vec<&str> = query_str.split("&").collect();
+            let start_time = query_params[0].split("=").collect::<Vec<&str>>()[1]
+                .parse::<i64>()
+                .unwrap();
+            let end_time = query_params[1].split("=").collect::<Vec<&str>>()[1]
+                .parse::<i64>()
+                .unwrap();
+            let req = monitor::GetCpuStatusRequest {
+                start_time: start_time,
+                end_time: end_time,
+            };
+
+            debug!("start_time: {}", req.start_time);
+            debug!("end_time: {}", req.end_time);
+
+            // TODO(isaidsari): read data frequency from config
+            // TODO(isaidsari): convert from static data to real data
+
+            let status = monitor::CpuStatusData {
+                frames: vec![
+                    monitor::CpuFrameStatus {
+                        cores_usage: vec![
+                            monitor::CpuCoreInfo {
+                                freq: 1.8,
+                                usage: 0.9,
+                            },
+                            monitor::CpuCoreInfo {
+                                freq: 2.5,
+                                usage: 0.1,
+                            },
+                        ],
+                    },
+                    monitor::CpuFrameStatus {
+                        cores_usage: vec![
+                            monitor::CpuCoreInfo {
+                                freq: 2.8,
+                                usage: 0.5,
+                            },
+                            monitor::CpuCoreInfo {
+                                freq: 2.1,
+                                usage: 0.4,
+                            },
+                        ],
+                    },
+                ],
             };
 
             let response = Response::builder()
