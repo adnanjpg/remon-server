@@ -1,10 +1,10 @@
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
-use sqlx::ConnectOptions;
+use crate::monitor::{CpuStatus, DiskStatus, MonitorConfig, MonitorStatus};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteRow};
+use sqlx::{ConnectOptions, Row};
+use sqlx::{Pool, Sqlite};
 use std::str::FromStr;
 
-use crate::monitor::sys_status::{MonitorConfig, ServerDescription, MonitorStatus};
-
-const SQLITE_DB_PATH: &str = "sqlite:./db/mon.sqlite3";
+const SQLITE_DB_PATH: &str = "sqlite:./db/monitor.sqlite3";
 
 pub async fn fetch_monitor_config(device_id: &str) -> Result<MonitorConfig, sqlx::Error> {
     let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
@@ -60,11 +60,28 @@ pub async fn fetch_monitor_status() -> Result<MonitorStatus, sqlx::Error> {
         .connect()
         .await?;
 
-    let status = sqlx::query_as::<_, MonitorStatus>("SELECT * FROM statuses ORDER BY id DESC LIMIT 1")
-        .fetch_one(&mut conn)
-        .await?;
+    let qu = sqlx::query(
+        "SELECT statuses.mem_usage, statuses.last_check, cpu_statuses.vendor_id, cpu_statuses.brand, disk_statuses.name, disk_statuses.total, disk_statuses.available FROM statuses
+        INNER JOIN cpu_statuses ON statuses.cpu_status_id = cpu_statuses.id
+        INNER JOIN disk_statuses ON statuses.id = disk_statuses.monitor_status_id
+        ORDER BY statuses.last_check DESC
+        LIMIT 1",
+    ).fetch_one(&mut conn).await?;
 
-    Ok(status)
+    let id: f64 = qu.get("statuses.mem_usage");
+
+    print!("{}", id);
+
+    Ok(MonitorStatus {
+        cpu_usage: CpuStatus {
+            vendor_id: String::from("vendor_id"),
+            brand: String::from("brand"),
+            cpu_usage: vec![],
+        },
+        mem_usage: 1.0,
+        storage_usage: vec![],
+        last_check: 1,
+    })
 }
 
 pub async fn insert_monitor_status(status: &MonitorStatus) -> Result<(), sqlx::Error> {
@@ -74,11 +91,10 @@ pub async fn insert_monitor_status(status: &MonitorStatus) -> Result<(), sqlx::E
         .connect()
         .await?;
 
-    sqlx::query("INSERT OR REPLACE INTO statuses (cpu_usage, mem_usage, storage_usage, last_check) VALUES (?, ?, ?, ?)")
-        .bind(status.cpu_usage)
-        .bind(status.mem_usage)
-        .bind(status.storage_usage)
-        .bind(status.last_check)
+    // insert dummy
+    sqlx::query("INSERT INTO cpu_statuses (vendor_id, brand) VALUES (?, ?)")
+        .bind("vendor_id")
+        .bind("brand")
         .execute(&mut conn)
         .await?;
 
@@ -92,9 +108,9 @@ pub async fn init_db() {
         std::fs::create_dir("./db").unwrap();
     }
     // if db file not exists, create it
-    if !std::path::Path::new("./db/mon.sqlite3").exists() {
+    if !std::path::Path::new("./db/monitor.sqlite3").exists() {
         // create db file
-        std::fs::File::create("./db/mon.sqlite3").unwrap();
+        std::fs::File::create("./db/monitor.sqlite3").unwrap();
     }
 
     let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
@@ -103,6 +119,7 @@ pub async fn init_db() {
         .connect()
         .await
         .unwrap();
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS configs (
         device_id TEXT PRIMARY KEY,
@@ -118,10 +135,35 @@ pub async fn init_db() {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS statuses (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        cpu_usage REAL NOT NULL,
+        cpu_status_id INTEGER,
         mem_usage REAL NOT NULL,
-        storage_usage REAL NOT NULL,
-        last_check INTEGER NOT NULL
+        last_check INTEGER NOT NULL,
+        FOREIGN KEY (cpu_status_id) REFERENCES cpu_statuses(id) ON DELETE CASCADE
+    )",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS cpu_statuses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        vendor_id TEXT NOT NULL,
+        brand TEXT NOT NULL
+    )",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS disk_statuses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        monitor_status_id INTEGER,
+        name TEXT NOT NULL,
+        total INTEGER NOT NULL,
+        available INTEGER NOT NULL,
+        FOREIGN KEY (monitor_status_id) REFERENCES statuses(id) ON DELETE CASCADE
     )",
     )
     .execute(&mut conn)

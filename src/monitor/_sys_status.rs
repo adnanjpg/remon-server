@@ -1,4 +1,4 @@
-use crate::monitor::persistence::{insert_monitor_status, fetch_monitor_configs};
+use crate::monitor::persistence::{fetch_monitor_configs, insert_monitor_status};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -19,11 +19,24 @@ pub struct MonitorConfig {
     pub storage_threshold: f64,
 }
 
+#[derive(Debug, Serialize, Deserialize, sqlx::Type)]
+pub struct DiskStatus {
+    pub name: String,
+    pub total: u64,
+    pub available: u64,
+}
+
+pub struct CpuStatus {
+    pub vendor_id: String,
+    pub brand: String,
+
+}
+
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct MonitorStatus {
     pub cpu_usage: f64,
     pub mem_usage: f64,
-    pub storage_usage: f64,
+    pub storage_usage: Vec<DiskStatus>,
     pub last_check: i64,
 }
 
@@ -32,32 +45,46 @@ const CHECK_INTERVAL: u64 = 30;
 
 pub fn init_sys_status_check() {
     tokio::spawn(async move {
+
+        let mut system = sysinfo::System::new();
+
         loop {
             let start = std::time::Instant::now();
-            let mut system = sysinfo::System::new();
 
             // refresh all system info WARN: this takes too much time
             // let mut system = sysinfo::System::new_all();
             // system.refresh_all();
             system.refresh_specifics(
                 RefreshKind::new()
-                    .with_cpu(CpuRefreshKind::new().with_cpu_usage())
+                    .with_cpu(CpuRefreshKind::everything())
                     .with_memory()
                     .with_disks_list()
                     .with_disks(),
             );
 
+            let mut storage_usage: Vec<DiskStatus> = vec![];
+            for disk in system.disks() {
+                storage_usage.push(DiskStatus {
+                    name: disk.name().to_string_lossy().to_string(),
+                    total: disk.total_space(),
+                    available: disk.available_space(),
+                });
+            }
+
+            system.cpus().iter().for_each(|cpu| {
+                error!("cpu: {:?}", cpu);
+            });
+
             let status = MonitorStatus {
                 cpu_usage: system.global_cpu_info().cpu_usage() as f64 / 100.0,
                 mem_usage: system.used_memory() as f64 / system.total_memory() as f64,
-                storage_usage: system
-                    .disks()
-                    .iter()
-                    .map(|disk| disk.available_space() as f64 / disk.total_space() as f64)
-                    .sum::<f64>()
-                    / system.disks().len() as f64,
-                last_check: chrono::Utc::now().timestamp(),
+                storage_usage,
+                last_check: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64,
             };
+
             let end = std::time::Instant::now();
 
             debug!("time to refresh: {:?}", end - start);
@@ -76,7 +103,6 @@ pub fn init_sys_status_check() {
 }
 
 async fn check_thresholds(status: &MonitorStatus) {
-
     let configs = fetch_monitor_configs().await.unwrap_or_else(|e| {
         error!("failed to fetch monitor configs: {}", e);
         vec![]
@@ -93,13 +119,12 @@ async fn check_thresholds(status: &MonitorStatus) {
             // TODO(isaidsari): send notification
         }
     }
-
 }
 
 fn compare_status(config: &MonitorConfig, status: &MonitorStatus) -> (bool, bool, bool) {
     (
         status.cpu_usage > config.cpu_threshold,
         status.mem_usage > config.mem_threshold,
-        status.storage_usage > config.storage_threshold,
+        true,
     )
 }
