@@ -295,6 +295,34 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 .unwrap();
             Ok(response)
         }
+        (&Method::GET, "/get-hardware-info") => {
+            let status = monitor::HardwareInfo {
+                cpu_info: monitor::HardwareCpuInfo {
+                    vendor_id: "Intel".to_string(),
+                    brand: "Intel(R) Core(TM) i7-7700HQ CPU @ 2.80GHz".to_string(),
+                },
+
+                disks_info: vec![
+                    monitor::HardwareDiskInfo {
+                        name: "C:".to_string(),
+                    },
+                    monitor::HardwareDiskInfo {
+                        name: "D:".to_string(),
+                    },
+                ],
+                last_check: time::SystemTime::now()
+                    .duration_since(time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64,
+            };
+
+            let response = Response::builder()
+                .status(hyper::StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_string(&status).unwrap()))
+                .unwrap();
+            Ok(response)
+        }
         (&Method::GET, "/get-status") => {
             /*let auth_header = req.headers().get("Authorization");
 

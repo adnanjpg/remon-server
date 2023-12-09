@@ -53,6 +53,23 @@ pub struct MonitorStatus {
     pub last_check: i64,
 }
 
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct HardwareCpuInfo {
+    pub vendor_id: String,
+    pub brand: String,
+}
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct HardwareDiskInfo {
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct HardwareInfo {
+    pub cpu_info: HardwareCpuInfo,
+    pub disks_info: Vec<HardwareDiskInfo>,
+    pub last_check: i64,
+}
+
 pub async fn init() {
     persistence::init_db().await;
 
