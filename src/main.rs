@@ -350,7 +350,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                         cores_usage: vec![
                             monitor::CpuCoreInfo {
                                 freq: 1.8,
-                                usage: 0.9,
+                                usage: 0.3,
                             },
                             monitor::CpuCoreInfo {
                                 freq: 2.5,
@@ -367,6 +367,66 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                             monitor::CpuCoreInfo {
                                 freq: 2.1,
                                 usage: 0.4,
+                            },
+                        ],
+                    },
+                    monitor::CpuFrameStatus {
+                        cores_usage: vec![
+                            monitor::CpuCoreInfo {
+                                freq: 2.8,
+                                usage: 0.1,
+                            },
+                            monitor::CpuCoreInfo {
+                                freq: 2.1,
+                                usage: 0.1,
+                            },
+                        ],
+                    },
+                    monitor::CpuFrameStatus {
+                        cores_usage: vec![
+                            monitor::CpuCoreInfo {
+                                freq: 2.8,
+                                usage: 0.99,
+                            },
+                            monitor::CpuCoreInfo {
+                                freq: 2.1,
+                                usage: 0.99,
+                            },
+                        ],
+                    },
+                    monitor::CpuFrameStatus {
+                        cores_usage: vec![
+                            monitor::CpuCoreInfo {
+                                freq: 2.8,
+                                usage: 0.7,
+                            },
+                            monitor::CpuCoreInfo {
+                                freq: 2.1,
+                                usage: 0.6,
+                            },
+                        ],
+                    },
+                    monitor::CpuFrameStatus {
+                        cores_usage: vec![
+                            monitor::CpuCoreInfo {
+                                freq: 2.8,
+                                usage: 0.22,
+                            },
+                            monitor::CpuCoreInfo {
+                                freq: 2.1,
+                                usage: 0.25,
+                            },
+                        ],
+                    },
+                    monitor::CpuFrameStatus {
+                        cores_usage: vec![
+                            monitor::CpuCoreInfo {
+                                freq: 2.8,
+                                usage: 0.9,
+                            },
+                            monitor::CpuCoreInfo {
+                                freq: 2.1,
+                                usage: 0.99,
                             },
                         ],
                     },
