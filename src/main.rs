@@ -390,7 +390,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
             let end_time = query_params[1].split("=").collect::<Vec<&str>>()[1]
                 .parse::<i64>()
                 .unwrap();
-            let req = monitor::GetCpuStatusRequest {
+            let req = monitor::GetMemStatusRequest {
                 start_time: start_time,
                 end_time: end_time,
             };

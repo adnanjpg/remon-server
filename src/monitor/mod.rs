@@ -60,7 +60,6 @@ pub struct GetCpuStatusRequest {
     pub start_time: i64,
     pub end_time: i64,
 }
-
 #[derive(Debug, Serialize, Deserialize, sqlx::Type)]
 pub struct CpuCoreInfo {
     pub freq: f64,
@@ -76,6 +75,13 @@ pub struct CpuStatusData {
     pub frames: Vec<CpuFrameStatus>,
 }
 
+// get-mem-status
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GetMemStatusRequest {
+    pub start_time: i64,
+    pub end_time: i64,
+}
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct MemFrameStatus {
     pub total: u64,
