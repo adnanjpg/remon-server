@@ -93,6 +93,33 @@ pub struct MemStatusData {
     pub frames: Vec<MemFrameStatus>,
 }
 
+// get-disk-status
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GetDiskStatusRequest {
+    pub start_time: i64,
+    pub end_time: i64,
+}
+#[derive(Debug, Serialize, Deserialize, sqlx::Type)]
+pub struct SingleDiskInfo {
+    pub total: f64,
+    pub available: f64,
+}
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct DiskFrameStatus {
+    // usage for each disk
+    pub disks_usage: Vec<SingleDiskInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct DiskStatusData {
+    // usage for each frame, the size
+    // of the frame is defined in the config
+    // where the user picks the frequency
+    // of the monitoring
+    pub frames: Vec<DiskFrameStatus>,
+}
+
 // get-hardware-info
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HardwareCpuInfo {
