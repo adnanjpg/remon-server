@@ -380,6 +380,51 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 .unwrap();
             Ok(response)
         }
+        (&Method::GET, "/get-mem-status") => {
+            // read query params and convert to GetCpuStatusRequest
+            let query_str = req.uri().query().unwrap();
+            let query_params: Vec<&str> = query_str.split("&").collect();
+            let start_time = query_params[0].split("=").collect::<Vec<&str>>()[1]
+                .parse::<i64>()
+                .unwrap();
+            let end_time = query_params[1].split("=").collect::<Vec<&str>>()[1]
+                .parse::<i64>()
+                .unwrap();
+            let req = monitor::GetCpuStatusRequest {
+                start_time: start_time,
+                end_time: end_time,
+            };
+
+            debug!("start_time: {}", req.start_time);
+            debug!("end_time: {}", req.end_time);
+
+            // TODO(isaidsari): read data frequency from config
+            // TODO(isaidsari): convert from static data to real data
+
+            let status = monitor::MemStatusData {
+                frames: vec![
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 50,
+                    },
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 60,
+                    },
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 70,
+                    },
+                ],
+            };
+
+            let response = Response::builder()
+                .status(hyper::StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_string(&status).unwrap()))
+                .unwrap();
+            Ok(response)
+        }
         (&Method::GET, "/get-status") => {
             /*let auth_header = req.headers().get("Authorization");
 

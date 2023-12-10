@@ -76,6 +76,17 @@ pub struct CpuStatusData {
     pub frames: Vec<CpuFrameStatus>,
 }
 
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct MemFrameStatus {
+    pub total: u64,
+    pub available: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct MemStatusData {
+    pub frames: Vec<MemFrameStatus>,
+}
+
 // get-hardware-info
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HardwareCpuInfo {
