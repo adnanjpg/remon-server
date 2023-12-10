@@ -475,6 +475,30 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                         total: 100,
                         available: 70,
                     },
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 30,
+                    },
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 10,
+                    },
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 90,
+                    },
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 10,
+                    },
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 40,
+                    },
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 60,
+                    },
                 ],
             };
 
@@ -512,11 +536,11 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                         disks_usage: vec![
                             monitor::SingleDiskInfo {
                                 total: 100.0,
-                                available: 50.0,
+                                available: 10.0,
                             },
                             monitor::SingleDiskInfo {
                                 total: 100.0,
-                                available: 60.0,
+                                available: 10.0,
                             },
                         ],
                     },
@@ -536,11 +560,35 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                         disks_usage: vec![
                             monitor::SingleDiskInfo {
                                 total: 100.0,
-                                available: 20.0,
+                                available: 80.0,
                             },
                             monitor::SingleDiskInfo {
                                 total: 100.0,
                                 available: 90.0,
+                            },
+                        ],
+                    },
+                    monitor::DiskFrameStatus {
+                        disks_usage: vec![
+                            monitor::SingleDiskInfo {
+                                total: 100.0,
+                                available: 10.0,
+                            },
+                            monitor::SingleDiskInfo {
+                                total: 100.0,
+                                available: 20.0,
+                            },
+                        ],
+                    },
+                    monitor::DiskFrameStatus {
+                        disks_usage: vec![
+                            monitor::SingleDiskInfo {
+                                total: 100.0,
+                                available: 100.0,
+                            },
+                            monitor::SingleDiskInfo {
+                                total: 100.0,
+                                available: 99.0,
                             },
                         ],
                     },
