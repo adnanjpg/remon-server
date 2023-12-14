@@ -1,33 +1,34 @@
-use crate::monitor::{CpuStatus, MemStatus, MonitorConfig, MonitorStatus};
+use crate::monitor::MonitorConfig;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
-use sqlx::{ConnectOptions, Row};
+use sqlx::{ConnectOptions, SqliteConnection};
 use std::str::FromStr;
 
-const SQLITE_DB_PATH: &str = "sqlite:./db/monitor.sqlite3";
+use super::{HardwareCpuInfo, HardwareDiskInfo, HardwareInfo};
 
-pub async fn fetch_monitor_config(device_id: &str) -> Result<MonitorConfig, sqlx::Error> {
-    let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
+const SQLITE_DBS_FOLDER_PATH: &str = "./db";
+const SQLITE_DB_PATH: &str = "./db/monitor.sqlite3";
+const SQLITE_DB_CONN_STR: &str = "sqlite:./db/monitor.sqlite3";
+
+const MONITOR_CONFIGS_TABLE_NAME: &str = "configs";
+
+const HARDWARE_CPU_INFOS_TABLE_NAME: &str = "cpu_infos";
+const HARDWARE_DISK_INFOS_TABLE_NAME: &str = "disk_infos";
+
+async fn get_sql_connection(db_path: &str) -> Result<SqliteConnection, sqlx::Error> {
+    let conn = SqliteConnectOptions::from_str(db_path)
         .unwrap()
         .journal_mode(SqliteJournalMode::Wal)
         .connect()
         .await?;
 
-    let config = sqlx::query_as::<_, MonitorConfig>("SELECT * FROM configs WHERE device_id = ?")
-        .bind(device_id)
-        .fetch_one(&mut conn)
-        .await?;
-
-    Ok(config)
+    Ok(conn)
 }
 
 pub async fn fetch_monitor_configs() -> Result<Vec<MonitorConfig>, sqlx::Error> {
-    let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
-        .unwrap()
-        .journal_mode(SqliteJournalMode::Wal)
-        .connect()
-        .await?;
+    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
 
-    let configs = sqlx::query_as::<_, MonitorConfig>("SELECT * FROM configs")
+    let statement = format!("SELECT * FROM {}", MONITOR_CONFIGS_TABLE_NAME);
+    let configs = sqlx::query_as::<_, MonitorConfig>(&statement)
         .fetch_all(&mut conn)
         .await?;
 
@@ -38,13 +39,10 @@ pub async fn insert_monitor_config(
     config: &MonitorConfig,
     device_id: &str,
 ) -> Result<(), sqlx::Error> {
-    let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
-        .unwrap()
-        .journal_mode(SqliteJournalMode::Wal)
-        .connect()
-        .await?;
+    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
 
-    sqlx::query("INSERT OR REPLACE INTO configs (device_id, cpu_threshold, mem_threshold, storage_threshold) VALUES (?, ?, ?, ?)")
+    let statement = format!("INSERT OR REPLACE INTO {} (device_id, cpu_threshold, mem_threshold, storage_threshold) VALUES (?, ?, ?, ?)",MONITOR_CONFIGS_TABLE_NAME);
+    sqlx::query(&statement)
         .bind(&device_id)
         .bind(config.cpu_threshold)
         .bind(config.mem_threshold)
@@ -55,123 +53,186 @@ pub async fn insert_monitor_config(
     Ok(())
 }
 
-pub async fn fetch_monitor_status() -> Result<MonitorStatus, sqlx::Error> {
-    let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
-        .unwrap()
-        .journal_mode(SqliteJournalMode::Wal)
-        .connect()
-        .await?;
+// hardware info
+async fn insert_hardware_cpu_info(info: &HardwareCpuInfo) -> Result<(), sqlx::Error> {
+    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
 
-    let qu = sqlx::query(
-        "SELECT statuses.mem_usage, statuses.last_check, cpu_statuses.vendor_id, cpu_statuses.brand, disk_statuses.name, disk_statuses.total, disk_statuses.available FROM statuses
-        INNER JOIN cpu_statuses ON statuses.cpu_status_id = cpu_statuses.id
-        INNER JOIN disk_statuses ON statuses.id = disk_statuses.monitor_status_id
-        ORDER BY statuses.last_check DESC
-        LIMIT 1",
-    ).fetch_one(&mut conn).await?;
-
-    let id: f64 = qu.get("statuses.mem_usage");
-
-    print!("{}", id);
-
-    Ok(MonitorStatus {
-        cpu_usage: CpuStatus {
-            vendor_id: String::from("vendor_id"),
-            brand: String::from("brand"),
-            cpu_usage: vec![],
-        },
-        mem_usage: MemStatus {
-            total: 1,
-            available: 1,
-        },
-        storage_usage: vec![],
-        last_check: 1,
-    })
-}
-
-pub async fn insert_monitor_status(status: &MonitorStatus) -> Result<(), sqlx::Error> {
-    let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
-        .unwrap()
-        .journal_mode(SqliteJournalMode::Wal)
-        .connect()
-        .await?;
-
-    // insert dummy
-    sqlx::query("INSERT INTO cpu_statuses (vendor_id, brand) VALUES (?, ?)")
-        .bind("vendor_id")
-        .bind("brand")
+    let statement = format!(
+        "INSERT INTO {} (cpu_id, core_count, vendor_id, brand) VALUES (?, ?, ?, ?)",
+        HARDWARE_CPU_INFOS_TABLE_NAME
+    );
+    sqlx::query(&statement)
+        .bind(&info.cpu_id)
+        .bind(&info.core_count)
+        .bind(&info.vendor_id)
+        .bind(&info.brand)
         .execute(&mut conn)
         .await?;
 
     Ok(())
 }
 
-pub async fn init_db() {
-    // check if db folder exists
-    if !std::path::Path::new("./db").exists() {
-        // create db folder
-        std::fs::create_dir("./db").unwrap();
-    }
-    // if db file not exists, create it
-    if !std::path::Path::new("./db/monitor.sqlite3").exists() {
-        // create db file
-        std::fs::File::create("./db/monitor.sqlite3").unwrap();
+async fn insert_hardware_disk_info(info: &HardwareDiskInfo) -> Result<(), sqlx::Error> {
+    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+
+    let statement = format!(
+        "INSERT INTO {} (disk_id, name) VALUES (?, ?)",
+        HARDWARE_DISK_INFOS_TABLE_NAME
+    );
+    sqlx::query(&statement)
+        .bind(&info.disk_id)
+        .bind(&info.name)
+        .execute(&mut conn)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn insert_hardware_info(status: &HardwareInfo) -> Result<(), sqlx::Error> {
+    for cpu_info in status.cpu_info.iter() {
+        insert_hardware_cpu_info(cpu_info).await?;
     }
 
-    let mut conn = SqliteConnectOptions::from_str(SQLITE_DB_PATH)
-        .unwrap()
-        .journal_mode(SqliteJournalMode::Wal)
-        .connect()
-        .await
-        .unwrap();
+    for disk_info in status.disks_info.iter() {
+        insert_hardware_disk_info(disk_info).await?;
+    }
 
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS configs (
+    Ok(())
+}
+
+async fn fetch_latest_hardware_cpus_info() -> Result<Vec<HardwareCpuInfo>, sqlx::Error> {
+    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+
+    // get all with distinct core count or distinct vendor_id or distinct brand
+    let statement = format!(
+        "
+SELECT *
+FROM {} t1
+WHERE EXISTS (
+    SELECT 1
+    FROM {} t2
+    WHERE t1.core_count <> t2.core_count
+    OR t1.vendor_id <> t2.vendor_id
+    OR t1.brand <> t2.brand
+)
+ORDER BY t1.core_count, t1.vendor_id, t1.brand
+        ",
+        HARDWARE_CPU_INFOS_TABLE_NAME, HARDWARE_CPU_INFOS_TABLE_NAME
+    );
+    let info = sqlx::query_as::<_, HardwareCpuInfo>(&statement)
+        .fetch_all(&mut conn)
+        .await?;
+
+    Ok(info)
+}
+
+async fn fetch_latest_hardware_disks_info() -> Result<Vec<HardwareDiskInfo>, sqlx::Error> {
+    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+
+    // get all with distinct name
+    let statement = format!(
+        "
+SELECT *
+FROM {} t1
+WHERE EXISTS (
+    SELECT 1
+    FROM {} t2
+    WHERE t1.name <> t2.name
+)
+ORDER BY t1.name
+",
+        HARDWARE_DISK_INFOS_TABLE_NAME, HARDWARE_DISK_INFOS_TABLE_NAME,
+    );
+
+    let info = sqlx::query_as::<_, HardwareDiskInfo>(&statement)
+        .fetch_all(&mut conn)
+        .await?;
+
+    Ok(info)
+}
+
+pub async fn fetch_latest_hardware_info() -> Result<HardwareInfo, sqlx::Error> {
+    let cpu_info = fetch_latest_hardware_cpus_info().await?;
+    let disks_info = fetch_latest_hardware_disks_info().await?;
+
+    Ok(HardwareInfo {
+        cpu_info,
+        disks_info,
+    })
+}
+
+// cpu status
+// async fn insert_cpu_info_frame
+
+// init db
+async fn create_configs_table(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    let statement = format!(
+        "CREATE TABLE IF NOT EXISTS {} (
         device_id TEXT PRIMARY KEY,
         cpu_threshold REAL NOT NULL,
         mem_threshold REAL NOT NULL,
         storage_threshold REAL NOT NULL
     )",
-    )
-    .execute(&mut conn)
-    .await
-    .unwrap();
+        MONITOR_CONFIGS_TABLE_NAME
+    );
 
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS statuses (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        cpu_status_id INTEGER,
-        mem_usage REAL NOT NULL,
-        last_check INTEGER NOT NULL,
-        FOREIGN KEY (cpu_status_id) REFERENCES cpu_statuses(id) ON DELETE CASCADE
-    )",
-    )
-    .execute(&mut conn)
-    .await
-    .unwrap();
+    sqlx::query(&statement).execute(conn).await?;
 
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS cpu_statuses (
+    Ok(())
+}
+
+async fn create_hardware_cpu_infos_table(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    let statement = format!(
+        "CREATE TABLE IF NOT EXISTS {} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cpu_id TEXT NOT NULL,
+        core_count INTEGER NOT NULL,
         vendor_id TEXT NOT NULL,
-        brand TEXT NOT NULL
+        brand TEXT NOT NULL,
+        last_check INTEGER NOT NULL
     )",
-    )
-    .execute(&mut conn)
-    .await
-    .unwrap();
+        HARDWARE_CPU_INFOS_TABLE_NAME
+    );
 
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS disk_statuses (
+    sqlx::query(&statement).execute(conn).await?;
+
+    Ok(())
+}
+
+async fn create_hardware_disk_infos_table(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    let statement = format!(
+        "CREATE TABLE IF NOT EXISTS {} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        monitor_status_id INTEGER,
+        disk_id TEXT NOT NULL,
         name TEXT NOT NULL,
-        total INTEGER NOT NULL,
-        available INTEGER NOT NULL,
-        FOREIGN KEY (monitor_status_id) REFERENCES statuses(id) ON DELETE CASCADE
+        last_check INTEGER NOT NULL
     )",
-    )
-    .execute(&mut conn)
-    .await
-    .unwrap();
+        HARDWARE_DISK_INFOS_TABLE_NAME
+    );
+
+    sqlx::query(&statement).execute(conn).await?;
+
+    Ok(())
+}
+
+pub async fn init_db() -> Result<(), sqlx::Error> {
+    // check if db folder exists
+    if !std::path::Path::new(SQLITE_DBS_FOLDER_PATH).exists() {
+        // create db folder
+        std::fs::create_dir(SQLITE_DBS_FOLDER_PATH).unwrap();
+    }
+    // if db file not exists, create it
+    if !std::path::Path::new(SQLITE_DB_PATH).exists() {
+        // create db file
+        std::fs::File::create(SQLITE_DB_PATH).unwrap();
+    }
+
+    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+
+    create_configs_table(&mut conn).await?;
+
+    create_hardware_cpu_infos_table(&mut conn).await?;
+    create_hardware_disk_infos_table(&mut conn).await?;
+
+    Ok(())
 }

@@ -18,40 +18,6 @@ pub struct MonitorConfig {
     pub storage_threshold: f64,
 }
 
-#[derive(Debug, Serialize, Deserialize, sqlx::Type)]
-pub struct DiskStatus {
-    pub name: String,
-    pub total: u64,
-    pub available: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize, sqlx::Type)]
-pub struct CoreInfo {
-    pub cpu_freq: f64,
-    pub cpu_usage: f64,
-}
-
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
-pub struct CpuStatus {
-    pub vendor_id: String,
-    pub brand: String,
-    pub cpu_usage: Vec<CoreInfo>,
-}
-
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
-pub struct MemStatus {
-    pub total: u64,
-    pub available: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
-pub struct MonitorStatus {
-    pub cpu_usage: CpuStatus,
-    pub mem_usage: MemStatus,
-    pub storage_usage: Vec<DiskStatus>,
-    pub last_check: i64,
-}
-
 // get-cpu-status
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -59,8 +25,10 @@ pub struct GetCpuStatusRequest {
     pub start_time: i64,
     pub end_time: i64,
 }
-#[derive(Debug, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct CpuCoreInfo {
+    // the id of the cpu chip, consists from key info like vendor_id, brand, etc.
+    pub cpu_id: String,
     pub freq: f64,
     pub usage: f64,
 }
@@ -99,8 +67,10 @@ pub struct GetDiskStatusRequest {
     pub start_time: i64,
     pub end_time: i64,
 }
-#[derive(Debug, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct SingleDiskInfo {
+    // the id of the disk, consists from key info like name, fs, etc.
+    pub disk_id: String,
     pub total: f64,
     pub available: f64,
 }
@@ -122,27 +92,41 @@ pub struct DiskStatusData {
 // get-hardware-info
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HardwareCpuInfo {
+    // the id of the cpu chip, consists from key info like vendor_id, brand, etc.
+    pub cpu_id: String,
+    pub core_count: i32,
     pub vendor_id: String,
     pub brand: String,
+    pub last_check: i64,
 }
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HardwareDiskInfo {
+    // the id of the disk, consists from key info like name, fs, etc.
+    pub disk_id: String,
     pub name: String,
+    pub last_check: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HardwareInfo {
-    pub cpu_info: HardwareCpuInfo,
+    pub cpu_info: Vec<HardwareCpuInfo>,
     pub disks_info: Vec<HardwareDiskInfo>,
-    pub last_check: i64,
 }
 
-pub async fn init() {
-    persistence::init_db().await;
+pub async fn init() -> Result<(), ()> {
+    match persistence::init_db().await {
+        Ok(val) => val,
+        Err(e) => {
+            debug!("Database initialization failed: {:?}", e);
+            return Err(());
+        }
+    };
 
     let monitor = system_monitor::SystemMonitor::new();
     monitor.start_monitoring().await;
     debug!("System monitor started");
+
+    Ok(())
 }
 
 const LE_DOT: &str = " • ";
