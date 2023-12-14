@@ -20,6 +20,8 @@ use local_ip_address::local_ip;
 use std::convert::TryInto;
 use std::time;
 
+use crate::monitor::persistence;
+
 // TODO(adnanjpg): get port from env var
 const DEFAULT_PORT: u16 = 8080;
 
@@ -259,7 +261,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 }
             };
 
-            match monitor::insert_monitor_config(&update_info, &dev_id).await {
+            match persistence::insert_monitor_config(&update_info, &dev_id).await {
                 Ok(_) => {
                     let response = Response::builder()
                         .status(hyper::StatusCode::OK)

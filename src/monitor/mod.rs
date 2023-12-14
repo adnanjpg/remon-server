@@ -4,7 +4,6 @@ use sysinfo::{CpuExt, System, SystemExt};
 
 pub mod persistence;
 pub mod system_monitor;
-pub use persistence::{fetch_monitor_status, insert_monitor_config};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServerDescription {

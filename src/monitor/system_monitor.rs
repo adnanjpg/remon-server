@@ -1,5 +1,5 @@
 use crate::monitor::persistence::{fetch_monitor_configs, insert_monitor_status};
-use crate::monitor::{CpuStatus, CoreInfo, DiskStatus, MonitorConfig, MonitorStatus, MemStatus};
+use crate::monitor::{CoreInfo, CpuStatus, DiskStatus, MemStatus, MonitorConfig, MonitorStatus};
 use log::{debug, error, info, warn};
 use std::{
     sync::{Arc, Mutex},
@@ -67,7 +67,7 @@ impl SystemMonitor {
                     });
                 }
 
-                let mut mem_usage: MemStatus = MemStatus {
+                let mem_usage: MemStatus = MemStatus {
                     total: system.total_memory(),
                     available: system.free_memory(),
                 };
@@ -126,9 +126,5 @@ async fn check_thresholds(status: &MonitorStatus) {
 }
 
 fn compare_status(config: &MonitorConfig, status: &MonitorStatus) -> (bool, bool, bool) {
-    (
-        true,
-        true,
-        true,
-    )
+    (true, true, true)
 }

@@ -1,7 +1,6 @@
 use crate::monitor::{CpuStatus, MemStatus, MonitorConfig, MonitorStatus};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use sqlx::{ConnectOptions, Row};
-
 use std::str::FromStr;
 
 const SQLITE_DB_PATH: &str = "sqlite:./db/monitor.sqlite3";
