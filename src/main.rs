@@ -10,12 +10,15 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 
 use env_logger;
-use log::{debug, error};
+use log::{debug, error, info};
 
 mod auth;
 mod monitor;
 
 use local_ip_address::local_ip;
+
+use std::convert::TryInto;
+use std::time;
 
 // TODO(adnanjpg): get port from env var
 const DEFAULT_PORT: u16 = 8080;
@@ -72,6 +75,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 .header("Content-Type", "text/plain")
                 .body(Body::from("I'm a teapot!"))
                 .unwrap();
+
             Ok(response)
         }
         (&Method::GET, "/healthcheck") => {
@@ -291,6 +295,408 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                 .unwrap();
             Ok(response)
         }
+        (&Method::GET, "/get-hardware-info") => {
+            let status = monitor::HardwareInfo {
+                cpu_info: monitor::HardwareCpuInfo {
+                    vendor_id: "Intel".to_string(),
+                    brand: "Intel(R) Core(TM) i7-7700HQ CPU @ 2.80GHz".to_string(),
+                },
+
+                disks_info: vec![
+                    monitor::HardwareDiskInfo {
+                        name: "C:".to_string(),
+                    },
+                    monitor::HardwareDiskInfo {
+                        name: "D:".to_string(),
+                    },
+                ],
+                last_check: time::SystemTime::now()
+                    .duration_since(time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64,
+            };
+
+            let response = Response::builder()
+                .status(hyper::StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_string(&status).unwrap()))
+                .unwrap();
+            Ok(response)
+        }
+        (&Method::GET, "/get-cpu-status") => {
+            // read query params and convert to GetCpuStatusRequest
+            let query_str = req.uri().query().unwrap();
+            let query_params: Vec<&str> = query_str.split("&").collect();
+            let start_time = query_params[0].split("=").collect::<Vec<&str>>()[1]
+                .parse::<i64>()
+                .unwrap();
+            let end_time = query_params[1].split("=").collect::<Vec<&str>>()[1]
+                .parse::<i64>()
+                .unwrap();
+            let req = monitor::GetCpuStatusRequest {
+                start_time: start_time,
+                end_time: end_time,
+            };
+
+            debug!("start_time: {}", req.start_time);
+            debug!("end_time: {}", req.end_time);
+
+            // TODO(isaidsari): read data frequency from config
+            // TODO(isaidsari): convert from static data to real data
+
+            let status = monitor::CpuStatusData {
+                frames: vec![
+                    monitor::CpuFrameStatus {
+                        cores_usage: vec![
+                            monitor::CpuCoreInfo {
+                                freq: 1.8,
+                                usage: 0.3,
+                            },
+                            monitor::CpuCoreInfo {
+                                freq: 2.5,
+                                usage: 0.1,
+                            },
+                        ],
+                    },
+                    monitor::CpuFrameStatus {
+                        cores_usage: vec![
+                            monitor::CpuCoreInfo {
+                                freq: 2.8,
+                                usage: 0.5,
+                            },
+                            monitor::CpuCoreInfo {
+                                freq: 2.1,
+                                usage: 0.4,
+                            },
+                        ],
+                    },
+                    monitor::CpuFrameStatus {
+                        cores_usage: vec![
+                            monitor::CpuCoreInfo {
+                                freq: 2.8,
+                                usage: 0.1,
+                            },
+                            monitor::CpuCoreInfo {
+                                freq: 2.1,
+                                usage: 0.1,
+                            },
+                        ],
+                    },
+                    monitor::CpuFrameStatus {
+                        cores_usage: vec![
+                            monitor::CpuCoreInfo {
+                                freq: 2.8,
+                                usage: 0.99,
+                            },
+                            monitor::CpuCoreInfo {
+                                freq: 2.1,
+                                usage: 0.99,
+                            },
+                        ],
+                    },
+                    monitor::CpuFrameStatus {
+                        cores_usage: vec![
+                            monitor::CpuCoreInfo {
+                                freq: 2.8,
+                                usage: 0.7,
+                            },
+                            monitor::CpuCoreInfo {
+                                freq: 2.1,
+                                usage: 0.6,
+                            },
+                        ],
+                    },
+                    monitor::CpuFrameStatus {
+                        cores_usage: vec![
+                            monitor::CpuCoreInfo {
+                                freq: 2.8,
+                                usage: 0.22,
+                            },
+                            monitor::CpuCoreInfo {
+                                freq: 2.1,
+                                usage: 0.25,
+                            },
+                        ],
+                    },
+                    monitor::CpuFrameStatus {
+                        cores_usage: vec![
+                            monitor::CpuCoreInfo {
+                                freq: 2.8,
+                                usage: 0.9,
+                            },
+                            monitor::CpuCoreInfo {
+                                freq: 2.1,
+                                usage: 0.99,
+                            },
+                        ],
+                    },
+                ],
+            };
+
+            let response = Response::builder()
+                .status(hyper::StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_string(&status).unwrap()))
+                .unwrap();
+            Ok(response)
+        }
+        (&Method::GET, "/get-mem-status") => {
+            // read query params and convert to GetCpuStatusRequest
+            let query_str = req.uri().query().unwrap();
+            let query_params: Vec<&str> = query_str.split("&").collect();
+            let start_time = query_params[0].split("=").collect::<Vec<&str>>()[1]
+                .parse::<i64>()
+                .unwrap();
+            let end_time = query_params[1].split("=").collect::<Vec<&str>>()[1]
+                .parse::<i64>()
+                .unwrap();
+            let req = monitor::GetMemStatusRequest {
+                start_time: start_time,
+                end_time: end_time,
+            };
+
+            debug!("start_time: {}", req.start_time);
+            debug!("end_time: {}", req.end_time);
+
+            // TODO(isaidsari): read data frequency from config
+            // TODO(isaidsari): convert from static data to real data
+
+            let status = monitor::MemStatusData {
+                frames: vec![
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 50,
+                    },
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 60,
+                    },
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 70,
+                    },
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 30,
+                    },
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 10,
+                    },
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 90,
+                    },
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 10,
+                    },
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 40,
+                    },
+                    monitor::MemFrameStatus {
+                        total: 100,
+                        available: 60,
+                    },
+                ],
+            };
+
+            let response = Response::builder()
+                .status(hyper::StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_string(&status).unwrap()))
+                .unwrap();
+            Ok(response)
+        }
+        (&Method::GET, "/get-disk-status") => {
+            // read query params and convert to GetCpuStatusRequest
+            let query_str = req.uri().query().unwrap();
+            let query_params: Vec<&str> = query_str.split("&").collect();
+            let start_time = query_params[0].split("=").collect::<Vec<&str>>()[1]
+                .parse::<i64>()
+                .unwrap();
+            let end_time = query_params[1].split("=").collect::<Vec<&str>>()[1]
+                .parse::<i64>()
+                .unwrap();
+            let req = monitor::GetDiskStatusRequest {
+                start_time: start_time,
+                end_time: end_time,
+            };
+
+            debug!("start_time: {}", req.start_time);
+            debug!("end_time: {}", req.end_time);
+
+            // TODO(isaidsari): read data frequency from config
+            // TODO(isaidsari): convert from static data to real data
+
+            let status = monitor::DiskStatusData {
+                frames: vec![
+                    monitor::DiskFrameStatus {
+                        disks_usage: vec![
+                            monitor::SingleDiskInfo {
+                                total: 100.0,
+                                available: 10.0,
+                            },
+                            monitor::SingleDiskInfo {
+                                total: 100.0,
+                                available: 10.0,
+                            },
+                        ],
+                    },
+                    monitor::DiskFrameStatus {
+                        disks_usage: vec![
+                            monitor::SingleDiskInfo {
+                                total: 100.0,
+                                available: 30.0,
+                            },
+                            monitor::SingleDiskInfo {
+                                total: 100.0,
+                                available: 80.0,
+                            },
+                        ],
+                    },
+                    monitor::DiskFrameStatus {
+                        disks_usage: vec![
+                            monitor::SingleDiskInfo {
+                                total: 100.0,
+                                available: 80.0,
+                            },
+                            monitor::SingleDiskInfo {
+                                total: 100.0,
+                                available: 90.0,
+                            },
+                        ],
+                    },
+                    monitor::DiskFrameStatus {
+                        disks_usage: vec![
+                            monitor::SingleDiskInfo {
+                                total: 100.0,
+                                available: 10.0,
+                            },
+                            monitor::SingleDiskInfo {
+                                total: 100.0,
+                                available: 20.0,
+                            },
+                        ],
+                    },
+                    monitor::DiskFrameStatus {
+                        disks_usage: vec![
+                            monitor::SingleDiskInfo {
+                                total: 100.0,
+                                available: 100.0,
+                            },
+                            monitor::SingleDiskInfo {
+                                total: 100.0,
+                                available: 99.0,
+                            },
+                        ],
+                    },
+                ],
+            };
+
+            let response = Response::builder()
+                .status(hyper::StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_string(&status).unwrap()))
+                .unwrap();
+            Ok(response)
+        }
+        (&Method::GET, "/get-status") => {
+            /*let auth_header = req.headers().get("Authorization");
+
+            let auth_header = match auth_header {
+                Some(h) => h.to_str().unwrap(),
+                None => {
+                    let response = Response::builder()
+                        .status(hyper::StatusCode::FORBIDDEN)
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(
+                            serde_json::to_string(&ResponseBody::error(
+                                "Missing auth token.".to_string(),
+                            ))
+                            .unwrap(),
+                        ))
+                        .unwrap();
+                    return Ok(response);
+                }
+            };
+
+            if !auth::token::validate_token(auth_header).await.is_ok() {
+                let response = Response::builder()
+                    .status(hyper::StatusCode::UNAUTHORIZED)
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_string(&ResponseBody::error(
+                            "Invalid auth token.".to_string(),
+                        ))
+                        .unwrap(),
+                    ))
+                    .unwrap();
+                return Ok(response);
+            }
+                        let status = match monitor::fetch_monitor_status().await {
+                            Ok(status) => status,
+                            Err(_) => {
+                                let response = Response::builder()
+                                    .status(hyper::StatusCode::INTERNAL_SERVER_ERROR)
+                                    .header("Content-Type", "application/json")
+                                    .body(Body::from(
+                                        serde_json::to_string(&ResponseBody::error(
+                                            "Failed to update monitor config.".to_string(),
+                                        ))
+                                        .unwrap(),
+                                    ))
+                                    .unwrap();
+                                return Ok(response);
+                            }
+                        };
+            */
+
+            let status = monitor::MonitorStatus {
+                cpu_usage: monitor::CpuStatus {
+                    vendor_id: "Intel".to_string(),
+                    brand: "Intel(R) Core(TM) i7-7700HQ CPU @ 2.80GHz".to_string(),
+                    cpu_usage: vec![
+                        monitor::CoreInfo {
+                            cpu_freq: 2.8,
+                            cpu_usage: 0.5,
+                        },
+                        monitor::CoreInfo {
+                            cpu_freq: 2.5,
+                            cpu_usage: 0.3,
+                        },
+                    ],
+                },
+                mem_usage: monitor::MemStatus {
+                    total: 100,
+                    available: 50,
+                },
+                storage_usage: vec![
+                    monitor::DiskStatus {
+                        name: "C:".to_string(),
+                        total: 100,
+                        available: 50,
+                    },
+                    monitor::DiskStatus {
+                        name: "D:".to_string(),
+                        total: 100,
+                        available: 50,
+                    },
+                ],
+                last_check: time::SystemTime::now()
+                    .duration_since(time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64,
+            };
+
+            let response = Response::builder()
+                .status(hyper::StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_string(&status).unwrap()))
+                .unwrap();
+            Ok(response)
+        }
         (&Method::POST, "/send-test-notification") => {
             // Read the request body into a byte buffer
             let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap();
@@ -394,8 +800,6 @@ fn init_logger() {
 
 #[tokio::main]
 async fn main() {
-    monitor::init_db().await;
-
     init_logger();
 
     let socket_addr = match get_socket_addr() {
@@ -406,13 +810,30 @@ async fn main() {
         }
     };
 
-    debug!("Starting server at {}", socket_addr);
+    monitor::init().await;
 
-    let server = Server::bind(&socket_addr).serve(make_service_fn(|_conn| async {
-        Ok::<_, Infallible>(service_fn(req_handler))
-    }));
+    info!("Starting server at {}", socket_addr);
 
-    if let Err(e) = server.await {
-        eprintln!("server error: {}", e);
+    if cfg!(debug_assertions) {
+        let server_local = Server::bind(&SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT))).serve(
+            make_service_fn(|_conn| async { Ok::<_, Infallible>(service_fn(req_handler)) }),
+        );
+
+        let server = Server::bind(&socket_addr).serve(make_service_fn(|_conn| async {
+            Ok::<_, Infallible>(service_fn(req_handler))
+        }));
+
+        tokio::select! {
+            _ = server_local => {},
+            _ = server => {},
+        }
+    } else {
+        let server = Server::bind(&socket_addr).serve(make_service_fn(|_conn| async {
+            Ok::<_, Infallible>(service_fn(req_handler))
+        }));
+
+        if let Err(e) = server.await {
+            error!("server error: {}", e);
+        }
     }
 }
