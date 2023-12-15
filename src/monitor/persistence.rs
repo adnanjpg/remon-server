@@ -70,7 +70,7 @@ async fn insert_hardware_cpu_info(info: &HardwareCpuInfo) -> Result<(), sqlx::Er
     let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
 
     let statement = format!(
-        "INSERT INTO {} (cpu_id, core_count, vendor_id, brand) VALUES (?, ?, ?, ?)",
+        "INSERT INTO {} (cpu_id, core_count, vendor_id, brand, last_check) VALUES (?, ?, ?, ?, ?)",
         HARDWARE_CPU_INFOS_TABLE_NAME
     );
     sqlx::query(&statement)
@@ -78,6 +78,7 @@ async fn insert_hardware_cpu_info(info: &HardwareCpuInfo) -> Result<(), sqlx::Er
         .bind(&info.core_count)
         .bind(&info.vendor_id)
         .bind(&info.brand)
+        .bind(&info.last_check)
         .execute(&mut conn)
         .await?;
 
@@ -105,9 +106,9 @@ pub async fn insert_hardware_info(status: &HardwareInfo) -> Result<(), sqlx::Err
         insert_hardware_cpu_info(cpu_info).await?;
     }
 
-    for disk_info in status.disks_info.iter() {
-        insert_hardware_disk_info(disk_info).await?;
-    }
+    // for disk_info in status.disks_info.iter() {
+    //     insert_hardware_disk_info(disk_info).await?;
+    // }
 
     Ok(())
 }
