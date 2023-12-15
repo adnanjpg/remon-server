@@ -12,4 +12,4 @@ Cargo.lock.orig
 .remon-mobile-fcm-creds.json
 # DB files
 *.sqlite3
-*.sqlite3-journal
+*.sqlite3-*
