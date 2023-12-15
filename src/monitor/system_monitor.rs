@@ -19,7 +19,7 @@ use super::{CpuStatusData, DiskStatusData, MemStatusData};
 
 // TODO(isaidsari): make it configurable
 pub fn get_check_interval() -> Duration {
-    Duration::from_secs(1)
+    Duration::from_millis(50)
 }
 
 pub struct SystemMonitor {
@@ -131,7 +131,7 @@ impl SystemMonitor {
                         id: -1,
                         frame_id: -1,
                         disk_id: disk_id.to_string(),
-                        total: disk.total_space() as f64,
+                        // sqlx doesn't support u64
                         available: disk.available_space() as f64,
                     });
 
@@ -197,8 +197,9 @@ impl SystemMonitor {
                     mems_usage: vec![SingleMemInfo {
                         id: -1,
                         frame_id: -1,
+                        // constant, as there's only one mem
                         mem_id: "1".to_string(),
-                        total: system.total_memory() as f64,
+                        // sqlx doesn't support u64
                         available: system.free_memory() as f64,
                     }],
                 };

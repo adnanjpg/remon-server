@@ -61,7 +61,6 @@ pub struct SingleMemInfo {
     pub frame_id: i64,
     // the id of the mem, currently we only have a single mem so this is going to be a constant
     pub mem_id: String,
-    pub total: f64,
     pub available: f64,
 }
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
@@ -90,7 +89,6 @@ pub struct SingleDiskInfo {
     pub frame_id: i64,
     // the id of the disk, consists from key info like name, fs, etc.
     pub disk_id: String,
-    pub total: f64,
     pub available: f64,
 }
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]

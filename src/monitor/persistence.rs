@@ -329,13 +329,12 @@ async fn insert_disk_status_frame_single(status: &SingleDiskInfo) -> Result<(), 
     let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
 
     let statement = format!(
-        "INSERT INTO {} (frame_id, disk_id, total, available) VALUES (?, ?, ?, ?)",
+        "INSERT INTO {} (frame_id, disk_id, available) VALUES (?, ?, ?)",
         DISK_STATUS_FRAME_SINGLE_TABLE_NAME
     );
     sqlx::query(&statement)
         .bind(&status.frame_id)
         .bind(&status.disk_id)
-        .bind(&status.total)
         .bind(&status.available)
         .execute(&mut conn)
         .await?;
@@ -377,13 +376,12 @@ async fn insert_mem_status_frame_single(status: &SingleMemInfo) -> Result<(), sq
     let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
 
     let statement = format!(
-        "INSERT INTO {} (frame_id, mem_id, total, available) VALUES (?, ?, ?, ?)",
+        "INSERT INTO {} (frame_id, mem_id, available) VALUES (?, ?, ?)",
         MEM_STATUS_FRAME_SINGLE_TABLE_NAME
     );
     sqlx::query(&statement)
         .bind(&status.frame_id)
         .bind(&status.mem_id)
-        .bind(&status.total)
         .bind(&status.available)
         .execute(&mut conn)
         .await?;
@@ -502,10 +500,9 @@ async fn create_disk_status_frame_singles_table(
     let statement = format!(
         "CREATE TABLE IF NOT EXISTS {} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        disk_id TEXT NOT NULL,
-        total REAL NOT NULL,
-        available REAL NOT NULL,
         frame_id INTEGER NOT NULL,
+        available INTEGER NOT NULL,
+        disk_id TEXT NOT NULL,
         FOREIGN KEY (frame_id)
             REFERENCES {} (id)
     )",
@@ -538,8 +535,7 @@ async fn create_mem_status_frame_singles_table(
         "CREATE TABLE IF NOT EXISTS {} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         mem_id TEXT NOT NULL,
-        total REAL NOT NULL,
-        available REAL NOT NULL,
+        available INTEGER NOT NULL,
         frame_id INTEGER NOT NULL,
         FOREIGN KEY (frame_id)
             REFERENCES {} (id)
