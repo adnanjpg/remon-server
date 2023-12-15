@@ -69,18 +69,50 @@ pub async fn insert_monitor_config(
 async fn insert_hardware_cpu_info(info: &HardwareCpuInfo) -> Result<(), sqlx::Error> {
     let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
 
-    let statement = format!(
-        "INSERT INTO {} (cpu_id, core_count, vendor_id, brand, last_check) VALUES (?, ?, ?, ?, ?)",
+    // check if a record with the same cpu_id already exists
+    let exists_record_check = format!(
+        "SELECT id FROM {} WHERE cpu_id = ?",
         HARDWARE_CPU_INFOS_TABLE_NAME
     );
-    sqlx::query(&statement)
+    let exists_check_res = sqlx::query_as::<_, FetchId>(&exists_record_check)
         .bind(&info.cpu_id)
-        .bind(&info.core_count)
-        .bind(&info.vendor_id)
-        .bind(&info.brand)
-        .bind(&info.last_check)
-        .execute(&mut conn)
+        .fetch_optional(&mut conn)
         .await?;
+
+    // if exists, update it
+    match exists_check_res {
+        Some(value) => {
+            let statement = format!(
+                "UPDATE {} 
+        SET last_check = ?
+        WHERE id = ?",
+                HARDWARE_CPU_INFOS_TABLE_NAME
+            );
+
+            sqlx::query(&statement)
+                .bind(&info.last_check)
+                .bind(&value.id)
+                .execute(&mut conn)
+                .await?;
+        }
+        None => {
+            let statement = format!(
+                "INSERT INTO {} 
+        (cpu_id, core_count, vendor_id, brand, last_check) 
+        VALUES (?, ?, ?, ?, ?)",
+                HARDWARE_CPU_INFOS_TABLE_NAME
+            );
+
+            sqlx::query(&statement)
+                .bind(&info.cpu_id)
+                .bind(&info.core_count)
+                .bind(&info.vendor_id)
+                .bind(&info.brand)
+                .bind(&info.last_check)
+                .execute(&mut conn)
+                .await?;
+        }
+    };
 
     Ok(())
 }
@@ -88,15 +120,51 @@ async fn insert_hardware_cpu_info(info: &HardwareCpuInfo) -> Result<(), sqlx::Er
 async fn insert_hardware_disk_info(info: &HardwareDiskInfo) -> Result<(), sqlx::Error> {
     let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
 
-    let statement = format!(
-        "INSERT INTO {} (disk_id, name) VALUES (?, ?)",
+    // check if a record with the same cpu_id already exists
+    let exists_record_check = format!(
+        "SELECT id FROM {} WHERE disk_id = ?",
         HARDWARE_DISK_INFOS_TABLE_NAME
     );
-    sqlx::query(&statement)
+
+    let exists_check_res = sqlx::query_as::<_, FetchId>(&exists_record_check)
         .bind(&info.disk_id)
-        .bind(&info.name)
-        .execute(&mut conn)
+        .fetch_optional(&mut conn)
         .await?;
+
+    // if exists, update it
+    match exists_check_res {
+        Some(value) => {
+            let statement = format!(
+                "UPDATE {} 
+        SET last_check = ?
+        WHERE id = ?",
+                HARDWARE_DISK_INFOS_TABLE_NAME
+            );
+
+            sqlx::query(&statement)
+                .bind(&info.last_check)
+                .bind(&value.id)
+                .execute(&mut conn)
+                .await?;
+        }
+        None => {
+            let statement = format!(
+                "INSERT INTO {} (disk_id, name, fs_type, kind, is_removable, mount_point, total_space, last_check) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                HARDWARE_DISK_INFOS_TABLE_NAME
+            );
+            sqlx::query(&statement)
+                .bind(&info.disk_id)
+                .bind(&info.name)
+                .bind(&info.fs_type)
+                .bind(&info.kind)
+                .bind(&info.is_removable)
+                .bind(&info.mount_point)
+                .bind(&info.total_space)
+                .bind(&info.last_check)
+                .execute(&mut conn)
+                .await?;
+        }
+    };
 
     Ok(())
 }
@@ -106,9 +174,9 @@ pub async fn insert_hardware_info(status: &HardwareInfo) -> Result<(), sqlx::Err
         insert_hardware_cpu_info(cpu_info).await?;
     }
 
-    // for disk_info in status.disks_info.iter() {
-    //     insert_hardware_disk_info(disk_info).await?;
-    // }
+    for disk_info in status.disks_info.iter() {
+        insert_hardware_disk_info(disk_info).await?;
+    }
 
     Ok(())
 }
@@ -150,7 +218,7 @@ FROM {} t1
 WHERE EXISTS (
     SELECT 1
     FROM {} t2
-    WHERE t1.name <> t2.name
+    WHERE t1.disk_id <> t2.disk_id
 )
 ORDER BY t1.name
 ",
@@ -364,6 +432,11 @@ async fn create_hardware_disk_infos_table(conn: &mut SqliteConnection) -> Result
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         disk_id TEXT NOT NULL,
         name TEXT NOT NULL,
+        fs_type TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        is_removable INTEGER NOT NULL,
+        mount_point TEXT NOT NULL,
+        total_space INTEGER NOT NULL,
         last_check INTEGER NOT NULL
     )",
         HARDWARE_DISK_INFOS_TABLE_NAME

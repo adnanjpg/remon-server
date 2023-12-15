@@ -358,11 +358,21 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
 
                 disks_info: vec![
                     monitor::HardwareDiskInfo {
+                        fs_type: "".to_string(),
+                        kind: "".to_string(),
+                        is_removable: false,
+                        mount_point: "".to_string(),
+                        total_space: 0.0,
                         disk_id: "".to_string(),
                         name: "C:".to_string(),
                         last_check: chrono::Utc::now().timestamp(),
                     },
                     monitor::HardwareDiskInfo {
+                        fs_type: "".to_string(),
+                        kind: "".to_string(),
+                        is_removable: false,
+                        mount_point: "".to_string(),
+                        total_space: 0.0,
                         disk_id: "".to_string(),
                         name: "D:".to_string(),
                         last_check: chrono::Utc::now().timestamp(),

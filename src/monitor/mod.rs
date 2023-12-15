@@ -125,6 +125,11 @@ pub struct HardwareDiskInfo {
     // the id of the disk, consists from key info like name, fs, etc.
     pub disk_id: String,
     pub name: String,
+    pub fs_type: String,
+    pub kind: String,
+    pub is_removable: bool,
+    pub mount_point: String,
+    pub total_space: f64,
     pub last_check: i64,
 }
 

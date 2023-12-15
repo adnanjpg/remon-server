@@ -19,7 +19,7 @@ use super::{CpuStatusData, DiskStatusData, MemStatusData};
 
 // TODO(isaidsari): make it configurable
 pub fn get_check_interval() -> Duration {
-    Duration::from_secs(30)
+    Duration::from_secs(1)
 }
 
 pub struct SystemMonitor {
@@ -65,6 +65,8 @@ impl DiskId for sysinfo::Disk {
             self.mount_point().to_string_lossy(),
             self.total_space(),
         );
+
+        debug!("the str: {}", the_str);
 
         let mut hasher = blake3::Hasher::new();
 
@@ -134,6 +136,12 @@ impl SystemMonitor {
                     });
 
                     storage_info.push(HardwareDiskInfo {
+                        fs_type: disk.file_system().iter().map(|c| *c as char).collect(),
+                        is_removable: disk.is_removable(),
+                        kind: format!("{:?}", disk.kind()),
+                        mount_point: disk.mount_point().to_string_lossy().to_string(),
+                        // sqlx doesn't support u64
+                        total_space: disk.total_space() as f64,
                         disk_id: disk_id.to_string(),
                         name: disk.name().to_string_lossy().to_string(),
                         last_check: get_last_check(),
@@ -204,6 +212,7 @@ impl SystemMonitor {
 
                 debug!("ms amount it took to refresh: {:?}", elapsed_time);
 
+                // TODO(adnanjpg): make this one run only once on startup, not every time
                 if let Err(e) = insert_hardware_info(&hardware_info).await {
                     error!("failed to insert hardware info: {}", e);
                 };
