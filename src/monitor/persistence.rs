@@ -398,7 +398,7 @@ async fn create_cpu_status_frame_cores_table(
         usage REAL NOT NULL,
         frame_id INTEGER NOT NULL,
         FOREIGN KEY (frame_id)
-            REFERENCES {} (frame_id) 
+            REFERENCES {} (id)
     )",
         CPU_STATUS_FRAME_CORE_TABLE_NAME, CPU_STATUS_FRAME_TABLE_NAME
     );
@@ -433,7 +433,7 @@ async fn create_disk_status_frame_singles_table(
         available REAL NOT NULL,
         frame_id INTEGER NOT NULL,
         FOREIGN KEY (frame_id)
-            REFERENCES {} (frame_id) 
+            REFERENCES {} (id)
     )",
         DISK_STATUS_FRAME_SINGLE_TABLE_NAME, DISK_STATUS_FRAME_TABLE_NAME
     );
@@ -468,7 +468,7 @@ async fn create_mem_status_frame_singles_table(
         available REAL NOT NULL,
         frame_id INTEGER NOT NULL,
         FOREIGN KEY (frame_id)
-            REFERENCES {} (frame_id) 
+            REFERENCES {} (id)
     )",
         MEM_STATUS_FRAME_SINGLE_TABLE_NAME, MEM_STATUS_FRAME_TABLE_NAME
     );
