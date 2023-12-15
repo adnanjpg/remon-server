@@ -25,8 +25,10 @@ pub struct GetCpuStatusRequest {
     pub start_time: i64,
     pub end_time: i64,
 }
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
 pub struct CpuCoreInfo {
+    pub id: i64,
+    pub frame_id: i64,
     // the id of the cpu chip, consists from key info like vendor_id, brand, etc.
     pub cpu_id: String,
     pub freq: f64,
@@ -34,6 +36,8 @@ pub struct CpuCoreInfo {
 }
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct CpuFrameStatus {
+    pub id: i64,
+    pub last_check: i64,
     pub cores_usage: Vec<CpuCoreInfo>,
 }
 
@@ -51,6 +55,8 @@ pub struct GetMemStatusRequest {
 }
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct MemFrameStatus {
+    pub id: i64,
+    pub last_check: i64,
     pub total: u64,
     pub available: u64,
 }
@@ -69,6 +75,8 @@ pub struct GetDiskStatusRequest {
 }
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct SingleDiskInfo {
+    pub id: i64,
+    pub frame_id: i64,
     // the id of the disk, consists from key info like name, fs, etc.
     pub disk_id: String,
     pub total: f64,
@@ -76,6 +84,8 @@ pub struct SingleDiskInfo {
 }
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct DiskFrameStatus {
+    pub id: i64,
+    pub last_check: i64,
     // usage for each disk
     pub disks_usage: Vec<SingleDiskInfo>,
 }

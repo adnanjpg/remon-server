@@ -1,4 +1,6 @@
-use crate::monitor::persistence::{fetch_monitor_configs, insert_hardware_info};
+use crate::monitor::persistence::{
+    fetch_monitor_configs, insert_cpu_status_frame, insert_hardware_info,
+};
 use crate::monitor::{
     CpuCoreInfo, CpuFrameStatus, DiskFrameStatus, HardwareCpuInfo, HardwareDiskInfo, HardwareInfo,
     MemFrameStatus, MonitorConfig, SingleDiskInfo,
@@ -111,14 +113,20 @@ impl SystemMonitor {
                 );
 
                 // storage
+                let all_disks = system.disks();
+                let disks_last_check = chrono::Utc::now().timestamp();
                 let mut storage_usage: DiskFrameStatus = DiskFrameStatus {
+                    id: -1,
+                    last_check: disks_last_check,
                     disks_usage: vec![],
                 };
                 let mut storage_info: Vec<HardwareDiskInfo> = vec![];
-                for disk in system.disks() {
+                for disk in all_disks {
                     let disk_id = &disk.get_disk_id();
 
                     storage_usage.disks_usage.push(SingleDiskInfo {
+                        id: -1,
+                        frame_id: -1,
                         disk_id: disk_id.to_string(),
                         total: disk.total_space() as f64,
                         available: disk.available_space() as f64,
@@ -132,15 +140,20 @@ impl SystemMonitor {
                 }
 
                 // cpu
+                let all_cpus = system.cpus();
+                let cpu_last_check = chrono::Utc::now().timestamp();
                 let mut cpu_usage: CpuFrameStatus = CpuFrameStatus {
+                    id: -1,
+                    last_check: cpu_last_check,
                     cores_usage: vec![],
                 };
                 let mut cpu_info: Vec<HardwareCpuInfo> = vec![];
-                let all_cpus = system.cpus();
                 for cpu in all_cpus {
                     let cpu_id = &cpu.get_cpu_id();
 
                     cpu_usage.cores_usage.push(CpuCoreInfo {
+                        id: -1,
+                        frame_id: -1,
                         cpu_id: cpu_id.to_string(),
                         freq: cpu.frequency() as f64,
                         usage: cpu.cpu_usage() as f64,
@@ -168,7 +181,10 @@ impl SystemMonitor {
                 }
 
                 // mem
+                let mem_last_check = chrono::Utc::now().timestamp();
                 let mem_usage: MemFrameStatus = MemFrameStatus {
+                    id: -1,
+                    last_check: mem_last_check,
                     total: system.total_memory(),
                     available: system.free_memory(),
                 };
@@ -185,6 +201,10 @@ impl SystemMonitor {
                 if let Err(e) = insert_hardware_info(&hardware_info).await {
                     error!("failed to insert hardware info: {}", e);
                 };
+
+                if let Err(e) = insert_cpu_status_frame(&cpu_usage).await {
+                    error!("failed to insert cpu status: {}", e);
+                }
 
                 check_thresholds(
                     &CpuStatusData {

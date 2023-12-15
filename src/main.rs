@@ -401,13 +401,19 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
             let status = monitor::CpuStatusData {
                 frames: vec![
                     monitor::CpuFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         cores_usage: vec![
                             monitor::CpuCoreInfo {
+                                id: -1,
+                                frame_id: -1,
                                 cpu_id: "".to_string(),
                                 freq: 1.8,
                                 usage: 0.3,
                             },
                             monitor::CpuCoreInfo {
+                                id: -1,
+                                frame_id: -1,
                                 cpu_id: "".to_string(),
                                 freq: 2.5,
                                 usage: 0.1,
@@ -415,13 +421,19 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                         ],
                     },
                     monitor::CpuFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         cores_usage: vec![
                             monitor::CpuCoreInfo {
+                                id: -1,
+                                frame_id: -1,
                                 cpu_id: "".to_string(),
                                 freq: 2.8,
                                 usage: 0.5,
                             },
                             monitor::CpuCoreInfo {
+                                id: -1,
+                                frame_id: -1,
                                 cpu_id: "".to_string(),
                                 freq: 2.1,
                                 usage: 0.4,
@@ -429,13 +441,19 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                         ],
                     },
                     monitor::CpuFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         cores_usage: vec![
                             monitor::CpuCoreInfo {
+                                id: -1,
+                                frame_id: -1,
                                 cpu_id: "".to_string(),
                                 freq: 2.8,
                                 usage: 0.1,
                             },
                             monitor::CpuCoreInfo {
+                                id: -1,
+                                frame_id: -1,
                                 cpu_id: "".to_string(),
                                 freq: 2.1,
                                 usage: 0.1,
@@ -443,13 +461,19 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                         ],
                     },
                     monitor::CpuFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         cores_usage: vec![
                             monitor::CpuCoreInfo {
+                                id: -1,
+                                frame_id: -1,
                                 cpu_id: "".to_string(),
                                 freq: 2.8,
                                 usage: 0.99,
                             },
                             monitor::CpuCoreInfo {
+                                id: -1,
+                                frame_id: -1,
                                 cpu_id: "".to_string(),
                                 freq: 2.1,
                                 usage: 0.99,
@@ -457,13 +481,19 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                         ],
                     },
                     monitor::CpuFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         cores_usage: vec![
                             monitor::CpuCoreInfo {
+                                id: -1,
+                                frame_id: -1,
                                 cpu_id: "".to_string(),
                                 freq: 2.8,
                                 usage: 0.7,
                             },
                             monitor::CpuCoreInfo {
+                                id: -1,
+                                frame_id: -1,
                                 cpu_id: "".to_string(),
                                 freq: 2.1,
                                 usage: 0.6,
@@ -471,13 +501,19 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                         ],
                     },
                     monitor::CpuFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         cores_usage: vec![
                             monitor::CpuCoreInfo {
+                                id: -1,
+                                frame_id: -1,
                                 cpu_id: "".to_string(),
                                 freq: 2.8,
                                 usage: 0.22,
                             },
                             monitor::CpuCoreInfo {
+                                id: -1,
+                                frame_id: -1,
                                 cpu_id: "".to_string(),
                                 freq: 2.1,
                                 usage: 0.25,
@@ -485,13 +521,19 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                         ],
                     },
                     monitor::CpuFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         cores_usage: vec![
                             monitor::CpuCoreInfo {
+                                id: -1,
+                                frame_id: -1,
                                 cpu_id: "".to_string(),
                                 freq: 2.8,
                                 usage: 0.9,
                             },
                             monitor::CpuCoreInfo {
+                                id: -1,
+                                frame_id: -1,
                                 cpu_id: "".to_string(),
                                 freq: 2.1,
                                 usage: 0.99,
@@ -532,38 +574,56 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
             let status = monitor::MemStatusData {
                 frames: vec![
                     monitor::MemFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         total: 100,
                         available: 50,
                     },
                     monitor::MemFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         total: 100,
                         available: 60,
                     },
                     monitor::MemFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         total: 100,
                         available: 70,
                     },
                     monitor::MemFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         total: 100,
                         available: 30,
                     },
                     monitor::MemFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         total: 100,
                         available: 10,
                     },
                     monitor::MemFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         total: 100,
                         available: 90,
                     },
                     monitor::MemFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         total: 100,
                         available: 10,
                     },
                     monitor::MemFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         total: 100,
                         available: 40,
                     },
                     monitor::MemFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         total: 100,
                         available: 60,
                     },
@@ -601,13 +661,19 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
             let status = monitor::DiskStatusData {
                 frames: vec![
                     monitor::DiskFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         disks_usage: vec![
                             monitor::SingleDiskInfo {
+                                id: -1,
+                                frame_id: -1,
                                 disk_id: "".to_string(),
                                 total: 100.0,
                                 available: 10.0,
                             },
                             monitor::SingleDiskInfo {
+                                id: -1,
+                                frame_id: -1,
                                 disk_id: "".to_string(),
                                 total: 100.0,
                                 available: 10.0,
@@ -615,13 +681,19 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                         ],
                     },
                     monitor::DiskFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         disks_usage: vec![
                             monitor::SingleDiskInfo {
+                                id: -1,
+                                frame_id: -1,
                                 disk_id: "".to_string(),
                                 total: 100.0,
                                 available: 30.0,
                             },
                             monitor::SingleDiskInfo {
+                                id: -1,
+                                frame_id: -1,
                                 disk_id: "".to_string(),
                                 total: 100.0,
                                 available: 80.0,
@@ -629,13 +701,19 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                         ],
                     },
                     monitor::DiskFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         disks_usage: vec![
                             monitor::SingleDiskInfo {
+                                id: -1,
+                                frame_id: -1,
                                 disk_id: "".to_string(),
                                 total: 100.0,
                                 available: 80.0,
                             },
                             monitor::SingleDiskInfo {
+                                id: -1,
+                                frame_id: -1,
                                 disk_id: "".to_string(),
                                 total: 100.0,
                                 available: 90.0,
@@ -643,13 +721,19 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                         ],
                     },
                     monitor::DiskFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         disks_usage: vec![
                             monitor::SingleDiskInfo {
+                                id: -1,
+                                frame_id: -1,
                                 disk_id: "".to_string(),
                                 total: 100.0,
                                 available: 10.0,
                             },
                             monitor::SingleDiskInfo {
+                                id: -1,
+                                frame_id: -1,
                                 disk_id: "".to_string(),
                                 total: 100.0,
                                 available: 20.0,
@@ -657,13 +741,19 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
                         ],
                     },
                     monitor::DiskFrameStatus {
+                        id: 1,
+                        last_check: chrono::Utc::now().timestamp(),
                         disks_usage: vec![
                             monitor::SingleDiskInfo {
+                                id: -1,
+                                frame_id: -1,
                                 disk_id: "".to_string(),
                                 total: 100.0,
                                 available: 100.0,
                             },
                             monitor::SingleDiskInfo {
+                                id: -1,
+                                frame_id: -1,
                                 disk_id: "".to_string(),
                                 total: 100.0,
                                 available: 99.0,

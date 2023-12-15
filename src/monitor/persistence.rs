@@ -3,7 +3,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use sqlx::{ConnectOptions, SqliteConnection};
 use std::str::FromStr;
 
-use super::{HardwareCpuInfo, HardwareDiskInfo, HardwareInfo};
+use super::{CpuCoreInfo, CpuFrameStatus, HardwareCpuInfo, HardwareDiskInfo, HardwareInfo};
 
 const SQLITE_DBS_FOLDER_PATH: &str = "./db";
 const SQLITE_DB_PATH: &str = "./db/monitor.sqlite3";
@@ -13,6 +13,9 @@ const MONITOR_CONFIGS_TABLE_NAME: &str = "configs";
 
 const HARDWARE_CPU_INFOS_TABLE_NAME: &str = "cpu_infos";
 const HARDWARE_DISK_INFOS_TABLE_NAME: &str = "disk_infos";
+
+const CPU_STATUS_FRAME_TABLE_NAME: &str = "cpu_status_frame";
+const CPU_STATUS_FRAME_CORE_TABLE_NAME: &str = "cpu_status_frame_core";
 
 async fn get_sql_connection(db_path: &str) -> Result<SqliteConnection, sqlx::Error> {
     let conn = SqliteConnectOptions::from_str(db_path)
@@ -161,8 +164,58 @@ pub async fn fetch_latest_hardware_info() -> Result<HardwareInfo, sqlx::Error> {
     })
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct FetchId {
+    pub id: i64,
+}
+
 // cpu status
-// async fn insert_cpu_info_frame
+pub async fn insert_cpu_status_frame(status: &CpuFrameStatus) -> Result<(), sqlx::Error> {
+    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+
+    let statement = format!(
+        "INSERT INTO {} 
+        (last_check) 
+        VALUES (?)
+        RETURNING id
+        ",
+        CPU_STATUS_FRAME_TABLE_NAME
+    );
+
+    let query_res = sqlx::query_as::<_, FetchId>(&statement)
+        .bind(&status.last_check)
+        .fetch_one(&mut conn)
+        .await?;
+
+    let frame_id = query_res.id;
+
+    let mut owned_cores_usage = status.cores_usage.to_owned();
+    for core in owned_cores_usage.iter_mut() {
+        core.frame_id = frame_id;
+        insert_cpu_status_frame_core(&core).await?;
+    }
+
+    Ok(())
+}
+
+// a single core info of a frame
+async fn insert_cpu_status_frame_core(status: &CpuCoreInfo) -> Result<(), sqlx::Error> {
+    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+
+    let statement = format!(
+        "INSERT INTO {} (frame_id, cpu_id, freq, usage) VALUES (?, ?, ?, ?)",
+        CPU_STATUS_FRAME_CORE_TABLE_NAME
+    );
+    sqlx::query(&statement)
+        .bind(&status.frame_id)
+        .bind(&status.cpu_id)
+        .bind(&status.freq)
+        .bind(&status.usage)
+        .execute(&mut conn)
+        .await?;
+
+    Ok(())
+}
 
 // init db
 async fn create_configs_table(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
@@ -215,6 +268,40 @@ async fn create_hardware_disk_infos_table(conn: &mut SqliteConnection) -> Result
     Ok(())
 }
 
+async fn create_cpu_status_frames_table(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    let statement = format!(
+        "CREATE TABLE IF NOT EXISTS {} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        last_check INTEGER NOT NULL,
+    )",
+        CPU_STATUS_FRAME_TABLE_NAME
+    );
+
+    sqlx::query(&statement).execute(conn).await?;
+
+    Ok(())
+}
+async fn create_cpu_status_frame_cores_table(
+    conn: &mut SqliteConnection,
+) -> Result<(), sqlx::Error> {
+    let statement = format!(
+        "CREATE TABLE IF NOT EXISTS {} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cpu_id TEXT NOT NULL,
+        freq REAL NOT NULL,
+        usage REAL NOT NULL,
+        frame_id INTEGER NOT NULL,
+        FOREIGN KEY (frame_id)
+            REFERENCES {} (frame_id) 
+    )",
+        CPU_STATUS_FRAME_CORE_TABLE_NAME, CPU_STATUS_FRAME_TABLE_NAME
+    );
+
+    sqlx::query(&statement).execute(conn).await?;
+
+    Ok(())
+}
+
 pub async fn init_db() -> Result<(), sqlx::Error> {
     // check if db folder exists
     if !std::path::Path::new(SQLITE_DBS_FOLDER_PATH).exists() {
@@ -233,6 +320,9 @@ pub async fn init_db() -> Result<(), sqlx::Error> {
 
     create_hardware_cpu_infos_table(&mut conn).await?;
     create_hardware_disk_infos_table(&mut conn).await?;
+
+    create_cpu_status_frames_table(&mut conn).await?;
+    create_cpu_status_frame_cores_table(&mut conn).await?;
 
     Ok(())
 }
