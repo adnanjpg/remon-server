@@ -1,5 +1,5 @@
 use crate::monitor::persistence::{
-    fetch_monitor_configs, insert_cpu_status_frame, insert_hardware_info,
+    fetch_monitor_configs, insert_cpu_status_frame, insert_disk_status_frame, insert_hardware_info,
 };
 use crate::monitor::{
     CpuCoreInfo, CpuFrameStatus, DiskFrameStatus, HardwareCpuInfo, HardwareDiskInfo, HardwareInfo,
@@ -204,6 +204,9 @@ impl SystemMonitor {
 
                 if let Err(e) = insert_cpu_status_frame(&cpu_usage).await {
                     error!("failed to insert cpu status: {}", e);
+                }
+                if let Err(e) = insert_disk_status_frame(&storage_usage).await {
+                    error!("failed to insert disk status: {}", e);
                 }
 
                 check_thresholds(

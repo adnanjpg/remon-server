@@ -73,7 +73,7 @@ pub struct GetDiskStatusRequest {
     pub start_time: i64,
     pub end_time: i64,
 }
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
 pub struct SingleDiskInfo {
     pub id: i64,
     pub frame_id: i64,

@@ -3,7 +3,10 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use sqlx::{ConnectOptions, SqliteConnection};
 use std::str::FromStr;
 
-use super::{CpuCoreInfo, CpuFrameStatus, HardwareCpuInfo, HardwareDiskInfo, HardwareInfo};
+use super::{
+    CpuCoreInfo, CpuFrameStatus, DiskFrameStatus, HardwareCpuInfo, HardwareDiskInfo, HardwareInfo,
+    SingleDiskInfo,
+};
 
 const SQLITE_DBS_FOLDER_PATH: &str = "./db";
 const SQLITE_DB_PATH: &str = "./db/monitor.sqlite3";
@@ -16,6 +19,9 @@ const HARDWARE_DISK_INFOS_TABLE_NAME: &str = "disk_infos";
 
 const CPU_STATUS_FRAME_TABLE_NAME: &str = "cpu_status_frame";
 const CPU_STATUS_FRAME_CORE_TABLE_NAME: &str = "cpu_status_frame_core";
+
+const DISK_STATUS_FRAME_TABLE_NAME: &str = "disk_status_frame";
+const DISK_STATUS_FRAME_SINGLE_TABLE_NAME: &str = "disk_status_frame_single";
 
 async fn get_sql_connection(db_path: &str) -> Result<SqliteConnection, sqlx::Error> {
     let conn = SqliteConnectOptions::from_str(db_path)
@@ -217,6 +223,54 @@ async fn insert_cpu_status_frame_core(status: &CpuCoreInfo) -> Result<(), sqlx::
     Ok(())
 }
 
+// disk status
+pub async fn insert_disk_status_frame(status: &DiskFrameStatus) -> Result<(), sqlx::Error> {
+    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+
+    let statement = format!(
+        "INSERT INTO {} 
+        (last_check) 
+        VALUES (?)
+        RETURNING id
+        ",
+        DISK_STATUS_FRAME_TABLE_NAME
+    );
+
+    let query_res = sqlx::query_as::<_, FetchId>(&statement)
+        .bind(&status.last_check)
+        .fetch_one(&mut conn)
+        .await?;
+
+    let frame_id = query_res.id;
+
+    let mut owned_cores_usage = status.disks_usage.to_owned();
+    for core in owned_cores_usage.iter_mut() {
+        core.frame_id = frame_id;
+        insert_disk_status_frame_single(&core).await?;
+    }
+
+    Ok(())
+}
+
+// a single core info of a frame
+async fn insert_disk_status_frame_single(status: &SingleDiskInfo) -> Result<(), sqlx::Error> {
+    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+
+    let statement = format!(
+        "INSERT INTO {} (frame_id, disk_id, total, available) VALUES (?, ?, ?, ?)",
+        DISK_STATUS_FRAME_SINGLE_TABLE_NAME
+    );
+    sqlx::query(&statement)
+        .bind(&status.frame_id)
+        .bind(&status.disk_id)
+        .bind(&status.total)
+        .bind(&status.available)
+        .execute(&mut conn)
+        .await?;
+
+    Ok(())
+}
+
 // init db
 async fn create_configs_table(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     let statement = format!(
@@ -268,6 +322,7 @@ async fn create_hardware_disk_infos_table(conn: &mut SqliteConnection) -> Result
     Ok(())
 }
 
+// cpu status
 async fn create_cpu_status_frames_table(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     let statement = format!(
         "CREATE TABLE IF NOT EXISTS {} (
@@ -302,6 +357,41 @@ async fn create_cpu_status_frame_cores_table(
     Ok(())
 }
 
+// disk status
+async fn create_disk_status_frames_table(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    let statement = format!(
+        "CREATE TABLE IF NOT EXISTS {} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        last_check INTEGER NOT NULL,
+    )",
+        DISK_STATUS_FRAME_TABLE_NAME
+    );
+
+    sqlx::query(&statement).execute(conn).await?;
+
+    Ok(())
+}
+async fn create_disk_status_frame_singles_table(
+    conn: &mut SqliteConnection,
+) -> Result<(), sqlx::Error> {
+    let statement = format!(
+        "CREATE TABLE IF NOT EXISTS {} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        disk_id TEXT NOT NULL,
+        total REAL NOT NULL,
+        available REAL NOT NULL,
+        frame_id INTEGER NOT NULL,
+        FOREIGN KEY (frame_id)
+            REFERENCES {} (frame_id) 
+    )",
+        DISK_STATUS_FRAME_SINGLE_TABLE_NAME, DISK_STATUS_FRAME_TABLE_NAME
+    );
+
+    sqlx::query(&statement).execute(conn).await?;
+
+    Ok(())
+}
+
 pub async fn init_db() -> Result<(), sqlx::Error> {
     // check if db folder exists
     if !std::path::Path::new(SQLITE_DBS_FOLDER_PATH).exists() {
@@ -323,6 +413,9 @@ pub async fn init_db() -> Result<(), sqlx::Error> {
 
     create_cpu_status_frames_table(&mut conn).await?;
     create_cpu_status_frame_cores_table(&mut conn).await?;
+
+    create_disk_status_frames_table(&mut conn).await?;
+    create_disk_status_frame_singles_table(&mut conn).await?;
 
     Ok(())
 }
