@@ -378,7 +378,7 @@ async fn create_cpu_status_frames_table(conn: &mut SqliteConnection) -> Result<(
     let statement = format!(
         "CREATE TABLE IF NOT EXISTS {} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        last_check INTEGER NOT NULL,
+        last_check INTEGER NOT NULL
     )",
         CPU_STATUS_FRAME_TABLE_NAME
     );
@@ -413,7 +413,7 @@ async fn create_disk_status_frames_table(conn: &mut SqliteConnection) -> Result<
     let statement = format!(
         "CREATE TABLE IF NOT EXISTS {} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        last_check INTEGER NOT NULL,
+        last_check INTEGER NOT NULL
     )",
         DISK_STATUS_FRAME_TABLE_NAME
     );
@@ -448,7 +448,7 @@ async fn create_mem_status_frames_table(conn: &mut SqliteConnection) -> Result<(
     let statement = format!(
         "CREATE TABLE IF NOT EXISTS {} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        last_check INTEGER NOT NULL,
+        last_check INTEGER NOT NULL
     )",
         MEM_STATUS_FRAME_TABLE_NAME
     );
