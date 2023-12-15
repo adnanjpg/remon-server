@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 use super::{
     CpuCoreInfo, CpuFrameStatus, DiskFrameStatus, HardwareCpuInfo, HardwareDiskInfo, HardwareInfo,
-    SingleDiskInfo,
+    MemFrameStatus, SingleDiskInfo, SingleMemInfo,
 };
 
 const SQLITE_DBS_FOLDER_PATH: &str = "./db";
@@ -22,6 +22,9 @@ const CPU_STATUS_FRAME_CORE_TABLE_NAME: &str = "cpu_status_frame_core";
 
 const DISK_STATUS_FRAME_TABLE_NAME: &str = "disk_status_frame";
 const DISK_STATUS_FRAME_SINGLE_TABLE_NAME: &str = "disk_status_frame_single";
+
+const MEM_STATUS_FRAME_TABLE_NAME: &str = "mem_status_frame";
+const MEM_STATUS_FRAME_SINGLE_TABLE_NAME: &str = "mem_status_frame_single";
 
 async fn get_sql_connection(db_path: &str) -> Result<SqliteConnection, sqlx::Error> {
     let conn = SqliteConnectOptions::from_str(db_path)
@@ -271,6 +274,54 @@ async fn insert_disk_status_frame_single(status: &SingleDiskInfo) -> Result<(), 
     Ok(())
 }
 
+// mem status
+pub async fn insert_mem_status_frame(status: &MemFrameStatus) -> Result<(), sqlx::Error> {
+    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+
+    let statement = format!(
+        "INSERT INTO {} 
+        (last_check) 
+        VALUES (?)
+        RETURNING id
+        ",
+        MEM_STATUS_FRAME_TABLE_NAME
+    );
+
+    let query_res = sqlx::query_as::<_, FetchId>(&statement)
+        .bind(&status.last_check)
+        .fetch_one(&mut conn)
+        .await?;
+
+    let frame_id = query_res.id;
+
+    let mut owned_singles_usage = status.mems_usage.to_owned();
+    for single in owned_singles_usage.iter_mut() {
+        single.frame_id = frame_id;
+        insert_mem_status_frame_single(&single).await?;
+    }
+
+    Ok(())
+}
+
+// a single core info of a frame
+async fn insert_mem_status_frame_single(status: &SingleMemInfo) -> Result<(), sqlx::Error> {
+    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+
+    let statement = format!(
+        "INSERT INTO {} (frame_id, mem_id, total, available) VALUES (?, ?, ?, ?)",
+        MEM_STATUS_FRAME_SINGLE_TABLE_NAME
+    );
+    sqlx::query(&statement)
+        .bind(&status.frame_id)
+        .bind(&status.mem_id)
+        .bind(&status.total)
+        .bind(&status.available)
+        .execute(&mut conn)
+        .await?;
+
+    Ok(())
+}
+
 // init db
 async fn create_configs_table(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     let statement = format!(
@@ -392,6 +443,41 @@ async fn create_disk_status_frame_singles_table(
     Ok(())
 }
 
+// mem status
+async fn create_mem_status_frames_table(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    let statement = format!(
+        "CREATE TABLE IF NOT EXISTS {} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        last_check INTEGER NOT NULL,
+    )",
+        MEM_STATUS_FRAME_TABLE_NAME
+    );
+
+    sqlx::query(&statement).execute(conn).await?;
+
+    Ok(())
+}
+async fn create_mem_status_frame_singles_table(
+    conn: &mut SqliteConnection,
+) -> Result<(), sqlx::Error> {
+    let statement = format!(
+        "CREATE TABLE IF NOT EXISTS {} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        mem_id TEXT NOT NULL,
+        total REAL NOT NULL,
+        available REAL NOT NULL,
+        frame_id INTEGER NOT NULL,
+        FOREIGN KEY (frame_id)
+            REFERENCES {} (frame_id) 
+    )",
+        MEM_STATUS_FRAME_SINGLE_TABLE_NAME, MEM_STATUS_FRAME_TABLE_NAME
+    );
+
+    sqlx::query(&statement).execute(conn).await?;
+
+    Ok(())
+}
+
 pub async fn init_db() -> Result<(), sqlx::Error> {
     // check if db folder exists
     if !std::path::Path::new(SQLITE_DBS_FOLDER_PATH).exists() {
@@ -416,6 +502,9 @@ pub async fn init_db() -> Result<(), sqlx::Error> {
 
     create_disk_status_frames_table(&mut conn).await?;
     create_disk_status_frame_singles_table(&mut conn).await?;
+
+    create_mem_status_frames_table(&mut conn).await?;
+    create_mem_status_frame_singles_table(&mut conn).await?;
 
     Ok(())
 }

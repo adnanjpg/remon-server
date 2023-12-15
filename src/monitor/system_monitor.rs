@@ -3,7 +3,7 @@ use crate::monitor::persistence::{
 };
 use crate::monitor::{
     CpuCoreInfo, CpuFrameStatus, DiskFrameStatus, HardwareCpuInfo, HardwareDiskInfo, HardwareInfo,
-    MemFrameStatus, MonitorConfig, SingleDiskInfo,
+    MemFrameStatus, MonitorConfig, SingleDiskInfo, SingleMemInfo,
 };
 use log::{debug, error, warn};
 use std::vec;
@@ -185,8 +185,13 @@ impl SystemMonitor {
                 let mem_usage: MemFrameStatus = MemFrameStatus {
                     id: -1,
                     last_check: mem_last_check,
-                    total: system.total_memory(),
-                    available: system.free_memory(),
+                    mems_usage: vec![SingleMemInfo {
+                        id: -1,
+                        frame_id: -1,
+                        mem_id: "1".to_string(),
+                        total: system.total_memory() as f64,
+                        available: system.free_memory() as f64,
+                    }],
                 };
 
                 let hardware_info = HardwareInfo {

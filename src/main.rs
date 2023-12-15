@@ -571,64 +571,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
             // TODO(isaidsari): read data frequency from config
             // TODO(isaidsari): convert from static data to real data
 
-            let status = monitor::MemStatusData {
-                frames: vec![
-                    monitor::MemFrameStatus {
-                        id: 1,
-                        last_check: chrono::Utc::now().timestamp(),
-                        total: 100,
-                        available: 50,
-                    },
-                    monitor::MemFrameStatus {
-                        id: 1,
-                        last_check: chrono::Utc::now().timestamp(),
-                        total: 100,
-                        available: 60,
-                    },
-                    monitor::MemFrameStatus {
-                        id: 1,
-                        last_check: chrono::Utc::now().timestamp(),
-                        total: 100,
-                        available: 70,
-                    },
-                    monitor::MemFrameStatus {
-                        id: 1,
-                        last_check: chrono::Utc::now().timestamp(),
-                        total: 100,
-                        available: 30,
-                    },
-                    monitor::MemFrameStatus {
-                        id: 1,
-                        last_check: chrono::Utc::now().timestamp(),
-                        total: 100,
-                        available: 10,
-                    },
-                    monitor::MemFrameStatus {
-                        id: 1,
-                        last_check: chrono::Utc::now().timestamp(),
-                        total: 100,
-                        available: 90,
-                    },
-                    monitor::MemFrameStatus {
-                        id: 1,
-                        last_check: chrono::Utc::now().timestamp(),
-                        total: 100,
-                        available: 10,
-                    },
-                    monitor::MemFrameStatus {
-                        id: 1,
-                        last_check: chrono::Utc::now().timestamp(),
-                        total: 100,
-                        available: 40,
-                    },
-                    monitor::MemFrameStatus {
-                        id: 1,
-                        last_check: chrono::Utc::now().timestamp(),
-                        total: 100,
-                        available: 60,
-                    },
-                ],
-            };
+            let status = monitor::MemStatusData { frames: vec![] };
 
             let response = Response::builder()
                 .status(hyper::StatusCode::OK)
