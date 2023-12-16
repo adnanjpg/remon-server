@@ -1,11 +1,17 @@
 use hyper::{Body, Request, Response};
 use log::debug;
+use serde_derive::Serialize;
 use std::convert::Infallible;
 
 use crate::{
     api::{authenticate, ResponseBody},
-    monitor::{self, persistence::get_cpu_status_between_dates},
+    monitor::{self, persistence::get_cpu_status_between_dates, CpuFrameStatus},
 };
+
+#[derive(Serialize)]
+struct GetCpuStatusResponse {
+    frames: Vec<CpuFrameStatus>,
+}
 
 pub async fn get_cpu_status(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     match authenticate(&req) {
@@ -37,7 +43,7 @@ pub async fn get_cpu_status(req: Request<Body>) -> Result<Response<Body>, Infall
 
     // TODO(isaidsari): read data frequency from config
 
-    let mem_statuses = match get_cpu_status_between_dates(start_time, end_time).await {
+    let frames = match get_cpu_status_between_dates(start_time, end_time).await {
         Ok(val) => val,
         Err(err) => {
             let bod = serde_json::to_string(&ResponseBody::Error(err.to_string())).unwrap();
@@ -52,12 +58,14 @@ pub async fn get_cpu_status(req: Request<Body>) -> Result<Response<Body>, Infall
         }
     };
 
-    let statuses = serde_json::to_string(&mem_statuses).unwrap();
+    let res_model = GetCpuStatusResponse { frames };
+
+    let res_json = serde_json::to_string(&res_model).unwrap();
 
     let response = Response::builder()
         .status(hyper::StatusCode::OK)
         .header("Content-Type", "application/json")
-        .body(Body::from(statuses))
+        .body(Body::from(res_json))
         .unwrap();
 
     Ok(response)

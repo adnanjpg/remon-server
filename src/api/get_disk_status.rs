@@ -1,11 +1,17 @@
 use hyper::{Body, Request, Response};
 use log::debug;
+use serde_derive::Serialize;
 use std::convert::Infallible;
 
 use crate::{
     api::{authenticate, ResponseBody},
-    monitor::{self, persistence::get_disk_status_between_dates},
+    monitor::{self, persistence::get_disk_status_between_dates, DiskFrameStatus},
 };
+
+#[derive(Serialize)]
+struct GetDiskStatusResponse {
+    frames: Vec<DiskFrameStatus>,
+}
 
 pub async fn get_disk_status(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     match authenticate(&req) {
@@ -15,7 +21,7 @@ pub async fn get_disk_status(req: Request<Body>) -> Result<Response<Body>, Infal
         }
     };
 
-    // read query params and convert to GetCpuStatusRequest
+    // read query params and convert to GetDiskStatusRequest
     let query_str = req.uri().query().unwrap();
     let query_params: Vec<&str> = query_str.split("&").collect();
     let start_time = query_params[0].split("=").collect::<Vec<&str>>()[1]
@@ -37,7 +43,7 @@ pub async fn get_disk_status(req: Request<Body>) -> Result<Response<Body>, Infal
 
     // TODO(isaidsari): read data frequency from config
 
-    let mem_statuses = match get_disk_status_between_dates(start_time, end_time).await {
+    let frames = match get_disk_status_between_dates(start_time, end_time).await {
         Ok(val) => val,
         Err(err) => {
             let bod = serde_json::to_string(&ResponseBody::Error(err.to_string())).unwrap();
@@ -52,12 +58,14 @@ pub async fn get_disk_status(req: Request<Body>) -> Result<Response<Body>, Infal
         }
     };
 
-    let statuses = serde_json::to_string(&mem_statuses).unwrap();
+    let res_model = GetDiskStatusResponse { frames };
+
+    let res_json = serde_json::to_string(&res_model).unwrap();
 
     let response = Response::builder()
         .status(hyper::StatusCode::OK)
         .header("Content-Type", "application/json")
-        .body(Body::from(statuses))
+        .body(Body::from(res_json))
         .unwrap();
 
     Ok(response)
