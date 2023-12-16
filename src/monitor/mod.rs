@@ -132,9 +132,17 @@ pub struct HardwareDiskInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct HardwareMemInfo {
+    pub mem_id: String,
+    pub total_space: i64,
+    pub last_check: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HardwareInfo {
     pub cpu_info: Vec<HardwareCpuInfo>,
     pub disks_info: Vec<HardwareDiskInfo>,
+    pub mem_info: Vec<HardwareMemInfo>,
 }
 
 pub async fn init() -> Result<(), ()> {

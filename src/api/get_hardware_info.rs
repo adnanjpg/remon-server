@@ -13,7 +13,8 @@ pub async fn get_hardware_info(req: Request<Body>) -> Result<Response<Body>, Inf
         }
     };
 
-    let info = match fetch_latest_hardware_info().await {
+    let fetch_latest_hardware_info = fetch_latest_hardware_info().await;
+    let info = match fetch_latest_hardware_info {
         Ok(val) => val,
         Err(err) => {
             let bod = serde_json::to_string(&ResponseBody::Error(err.to_string())).unwrap();

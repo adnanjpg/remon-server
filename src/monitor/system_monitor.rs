@@ -4,7 +4,7 @@ use crate::monitor::persistence::{
 };
 use crate::monitor::{
     CpuCoreInfo, CpuFrameStatus, DiskFrameStatus, HardwareCpuInfo, HardwareDiskInfo, HardwareInfo,
-    MemFrameStatus, MonitorConfig, SingleDiskInfo, SingleMemInfo,
+    HardwareMemInfo, MemFrameStatus, MonitorConfig, SingleDiskInfo, SingleMemInfo,
 };
 use log::{debug, error, warn};
 use std::vec;
@@ -123,7 +123,7 @@ impl SystemMonitor {
                     last_check: disks_last_check,
                     disks_usage: vec![],
                 };
-                let mut storage_info: Vec<HardwareDiskInfo> = vec![];
+                let mut disks_info: Vec<HardwareDiskInfo> = vec![];
                 for disk in all_disks {
                     let disk_id = &disk.get_disk_id();
 
@@ -135,7 +135,7 @@ impl SystemMonitor {
                         available: disk.available_space() as i64,
                     });
 
-                    storage_info.push(HardwareDiskInfo {
+                    disks_info.push(HardwareDiskInfo {
                         fs_type: disk.file_system().iter().map(|c| *c as char).collect(),
                         is_removable: disk.is_removable(),
                         kind: format!("{:?}", disk.kind()),
@@ -191,6 +191,12 @@ impl SystemMonitor {
 
                 // mem
                 let mem_last_check = chrono::Utc::now().timestamp();
+                let mem_info: Vec<HardwareMemInfo> = vec![HardwareMemInfo {
+                    mem_id: "1".to_string(),
+                    last_check: mem_last_check,
+                    total_space: system.total_memory() as i64,
+                }];
+
                 let mem_usage: MemFrameStatus = MemFrameStatus {
                     id: -1,
                     last_check: mem_last_check,
@@ -206,7 +212,8 @@ impl SystemMonitor {
 
                 let hardware_info = HardwareInfo {
                     cpu_info,
-                    disks_info: storage_info,
+                    disks_info,
+                    mem_info,
                 };
 
                 let elapsed_time = start_time.elapsed();

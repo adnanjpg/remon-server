@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 use super::{
     CpuCoreInfo, CpuFrameStatus, DiskFrameStatus, HardwareCpuInfo, HardwareDiskInfo, HardwareInfo,
-    MemFrameStatus, SingleDiskInfo, SingleMemInfo,
+    HardwareMemInfo, MemFrameStatus, SingleDiskInfo, SingleMemInfo,
 };
 
 const SQLITE_DBS_FOLDER_PATH: &str = "./db";
@@ -16,6 +16,7 @@ const MONITOR_CONFIGS_TABLE_NAME: &str = "configs";
 
 const HARDWARE_CPU_INFOS_TABLE_NAME: &str = "cpu_infos";
 const HARDWARE_DISK_INFOS_TABLE_NAME: &str = "disk_infos";
+const HARDWARE_MEM_INFOS_TABLE_NAME: &str = "mem_infos";
 
 const CPU_STATUS_FRAME_TABLE_NAME: &str = "cpu_status_frame";
 const CPU_STATUS_FRAME_CORE_TABLE_NAME: &str = "cpu_status_frame_core";
@@ -169,6 +170,53 @@ async fn insert_hardware_disk_info(info: &HardwareDiskInfo) -> Result<(), sqlx::
     Ok(())
 }
 
+async fn insert_hardware_mem_info(info: &HardwareMemInfo) -> Result<(), sqlx::Error> {
+    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+
+    // check if a record with the same cpu_id already exists
+    let exists_record_check = format!(
+        "SELECT id FROM {} WHERE mem_id = ?",
+        HARDWARE_MEM_INFOS_TABLE_NAME
+    );
+
+    let exists_check_res = sqlx::query_as::<_, FetchId>(&exists_record_check)
+        .bind(&info.mem_id)
+        .fetch_optional(&mut conn)
+        .await?;
+
+    // if exists, update it
+    match exists_check_res {
+        Some(value) => {
+            let statement = format!(
+                "UPDATE {} 
+        SET last_check = ?
+        WHERE id = ?",
+                HARDWARE_MEM_INFOS_TABLE_NAME
+            );
+
+            sqlx::query(&statement)
+                .bind(&info.last_check)
+                .bind(&value.id)
+                .execute(&mut conn)
+                .await?;
+        }
+        None => {
+            let statement = format!(
+                "INSERT INTO {} (mem_id, total_space, last_check) VALUES (?, ?, ?)",
+                HARDWARE_MEM_INFOS_TABLE_NAME
+            );
+            sqlx::query(&statement)
+                .bind(&info.mem_id)
+                .bind(&info.total_space)
+                .bind(&info.last_check)
+                .execute(&mut conn)
+                .await?;
+        }
+    };
+
+    Ok(())
+}
+
 pub async fn insert_hardware_info(status: &HardwareInfo) -> Result<(), sqlx::Error> {
     for cpu_info in status.cpu_info.iter() {
         insert_hardware_cpu_info(cpu_info).await?;
@@ -176,6 +224,10 @@ pub async fn insert_hardware_info(status: &HardwareInfo) -> Result<(), sqlx::Err
 
     for disk_info in status.disks_info.iter() {
         insert_hardware_disk_info(disk_info).await?;
+    }
+
+    for mem_info in status.mem_info.iter() {
+        insert_hardware_mem_info(mem_info).await?;
     }
 
     Ok(())
@@ -217,13 +269,34 @@ async fn fetch_latest_hardware_disks_info() -> Result<Vec<HardwareDiskInfo>, sql
     Ok(info)
 }
 
+async fn fetch_latest_hardware_mems_info() -> Result<Vec<HardwareMemInfo>, sqlx::Error> {
+    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+
+    // get all with distinct mem_id
+    let statement = format!(
+        "
+    SELECT *
+    FROM {}
+",
+        HARDWARE_MEM_INFOS_TABLE_NAME
+    );
+
+    let info = sqlx::query_as::<_, HardwareMemInfo>(&statement)
+        .fetch_all(&mut conn)
+        .await?;
+
+    Ok(info)
+}
+
 pub async fn fetch_latest_hardware_info() -> Result<HardwareInfo, sqlx::Error> {
     let cpu_info = fetch_latest_hardware_cpus_info().await?;
     let disks_info = fetch_latest_hardware_disks_info().await?;
+    let mem_info = fetch_latest_hardware_mems_info().await?;
 
     Ok(HardwareInfo {
         cpu_info,
         disks_info,
+        mem_info,
     })
 }
 
@@ -583,6 +656,22 @@ async fn create_hardware_disk_infos_table(conn: &mut SqliteConnection) -> Result
     Ok(())
 }
 
+async fn create_hardware_mem_infos_table(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    let statement = format!(
+        "CREATE TABLE IF NOT EXISTS {} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        mem_id TEXT NOT NULL,
+        total_space INTEGER NOT NULL,
+        last_check INTEGER NOT NULL
+    )",
+        HARDWARE_MEM_INFOS_TABLE_NAME
+    );
+
+    sqlx::query(&statement).execute(conn).await?;
+
+    Ok(())
+}
+
 // cpu status
 async fn create_cpu_status_frames_table(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     let statement = format!(
@@ -704,6 +793,7 @@ pub async fn init_db() -> Result<(), sqlx::Error> {
 
     create_hardware_cpu_infos_table(&mut conn).await?;
     create_hardware_disk_infos_table(&mut conn).await?;
+    create_hardware_mem_infos_table(&mut conn).await?;
 
     create_cpu_status_frames_table(&mut conn).await?;
     create_cpu_status_frame_cores_table(&mut conn).await?;
