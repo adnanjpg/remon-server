@@ -809,7 +809,7 @@ fn init_logger() {
             .init();
     } else {
         env_logger::builder()
-            .filter_level(log::LevelFilter::Error)
+            .filter_level(log::LevelFilter::Info)
             .init();
     }
 }
@@ -834,25 +834,31 @@ async fn main() {
         }
     }
 
-    info!("Starting server at {}", socket_addr);
+    let server = Server::bind(&socket_addr).serve(make_service_fn(|_conn| async {
+        Ok::<_, Infallible>(service_fn(req_handler))
+    }));
+    let mut socket_addrs = vec![socket_addr];
 
     if cfg!(debug_assertions) {
-        let server_local = Server::bind(&SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT))).serve(
-            make_service_fn(|_conn| async { Ok::<_, Infallible>(service_fn(req_handler)) }),
-        );
-
-        let server = Server::bind(&socket_addr).serve(make_service_fn(|_conn| async {
+        let debug_socket_addr = SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT));
+        let server_local = Server::bind(&debug_socket_addr).serve(make_service_fn(|_conn| async {
             Ok::<_, Infallible>(service_fn(req_handler))
         }));
+
+        socket_addrs.push(debug_socket_addr);
+
+        for addr in socket_addrs {
+            info!("Listening on http://{}", addr);
+        }
 
         tokio::select! {
             _ = server_local => {},
             _ = server => {},
         }
     } else {
-        let server = Server::bind(&socket_addr).serve(make_service_fn(|_conn| async {
-            Ok::<_, Infallible>(service_fn(req_handler))
-        }));
+        for addr in socket_addrs {
+            info!("Listening on http://{}", addr);
+        }
 
         if let Err(e) = server.await {
             error!("server error: {}", e);
