@@ -19,7 +19,7 @@ use super::{CpuStatusData, DiskStatusData, MemStatusData};
 
 // TODO(isaidsari): make it configurable
 pub fn get_check_interval() -> Duration {
-    Duration::from_millis(50)
+    Duration::from_millis(1000)
 }
 
 pub struct SystemMonitor {
