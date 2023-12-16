@@ -36,7 +36,6 @@ pub async fn get_mem_status(req: Request<Body>) -> Result<Response<Body>, Infall
     debug!("end_time: {}", end_time);
 
     // TODO(isaidsari): read data frequency from config
-    // TODO(isaidsari): convert from static data to real data
 
     let mem_statuses = match get_mem_status_between_dates(start_time, end_time).await {
         Ok(val) => val,
@@ -60,5 +59,6 @@ pub async fn get_mem_status(req: Request<Body>) -> Result<Response<Body>, Infall
         .header("Content-Type", "application/json")
         .body(Body::from(statuses))
         .unwrap();
+
     Ok(response)
 }
