@@ -3,7 +3,7 @@ use std::convert::Infallible;
 
 use crate::notification_service;
 
-use super::response_body::ResponseBody;
+use super::ResponseBody;
 
 pub async fn send_test_notification(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     // Read the request body into a byte buffer

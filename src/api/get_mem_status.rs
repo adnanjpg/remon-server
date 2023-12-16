@@ -3,11 +3,18 @@ use log::debug;
 use std::convert::Infallible;
 
 use crate::{
-    api::response_body::ResponseBody,
+    api::{authenticate, ResponseBody},
     monitor::{self, persistence::get_mem_status_between_dates},
 };
 
 pub async fn get_mem_status(req: Request<Body>) -> Result<Response<Body>, Infallible> {
+    match authenticate(&req) {
+        Ok(val) => val,
+        Err(err) => {
+            return Ok(err);
+        }
+    };
+
     // read query params and convert to GetCpuStatusRequest
     let query_str = req.uri().query().unwrap();
     let query_params: Vec<&str> = query_str.split("&").collect();
@@ -18,8 +25,8 @@ pub async fn get_mem_status(req: Request<Body>) -> Result<Response<Body>, Infall
         .parse::<i64>()
         .unwrap();
     let req = monitor::GetMemStatusRequest {
-        start_time: start_time,
-        end_time: end_time,
+        start_time,
+        end_time,
     };
 
     let start_time = req.start_time;

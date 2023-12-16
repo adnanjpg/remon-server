@@ -1,7 +1,7 @@
 use hyper::{Body, Request, Response};
 use std::convert::Infallible;
 
-use super::response_body::ResponseBody;
+use super::ResponseBody;
 
 pub fn _404(_req: Request<Body>) -> Result<Response<Body>, Infallible> {
     let response = Response::builder()

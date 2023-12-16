@@ -4,22 +4,11 @@ use std::convert::Infallible;
 use crate::monitor::{self};
 
 pub async fn get_hardware_info(_req: Request<Body>) -> Result<Response<Body>, Infallible> {
-    /*let auth_header = req.headers().get("Authorization");
-
-    let auth_header = match auth_header {
-        Some(h) => h.to_str().unwrap(),
-        None => {
-            let response = Response::builder()
-                .status(hyper::StatusCode::FORBIDDEN)
-                .header("Content-Type", "application/json")
-                .body(Body::from(
-                    serde_json::to_string(&ResponseBody::error(
-                        "Missing auth token.".to_string(),
-                    ))
-                    .unwrap(),
-                ))
-                .unwrap();
-            return Ok(response);
+    /*
+    let auth_header = match authenticate(&req) {
+        Ok(val) => val,
+        Err(err) => {
+            return Ok(err);
         }
     };
 

@@ -3,7 +3,7 @@ use std::convert::Infallible;
 
 use crate::auth;
 
-use super::response_body::ResponseBody;
+use super::ResponseBody;
 
 pub async fn get_otp_qr(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     // Read the request body into a byte buffer
