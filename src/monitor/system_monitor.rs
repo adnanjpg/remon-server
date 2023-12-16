@@ -200,7 +200,7 @@ impl SystemMonitor {
                         // constant, as there's only one mem
                         mem_id: "1".to_string(),
                         // sqlx doesn't support u64
-                        available: system.free_memory() as f64,
+                        available: system.free_memory() as i64,
                     }],
                 };
 

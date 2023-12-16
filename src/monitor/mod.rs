@@ -61,7 +61,7 @@ pub struct SingleMemInfo {
     pub frame_id: i64,
     // the id of the mem, currently we only have a single mem so this is going to be a constant
     pub mem_id: String,
-    pub available: f64,
+    pub available: i64,
 }
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct MemFrameStatus {
