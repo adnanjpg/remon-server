@@ -62,7 +62,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
         }
         (&Method::GET, "/get-cpu-status") => api::get_cpu_status::get_cpu_status(req),
         (&Method::GET, "/get-mem-status") => api::get_mem_status::get_mem_status(req).await,
-        (&Method::GET, "/get-disk-status") => api::get_disk_status::get_disk_status(req),
+        (&Method::GET, "/get-disk-status") => api::get_disk_status::get_disk_status(req).await,
         (&Method::POST, "/send-test-notification") => {
             api::send_test_notification::send_test_notification(req).await
         }
