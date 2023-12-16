@@ -242,6 +242,57 @@ pub async fn fetch_latest_hardware_info() -> Result<HardwareInfo, sqlx::Error> {
     })
 }
 
+pub async fn get_mem_status_between_dates(
+    start_date: i64,
+    end_date: i64,
+) -> Result<Vec<MemFrameStatus>, sqlx::Error> {
+    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+
+    let frames_statement = format!(
+        "SELECT id, last_check FROM {} WHERE last_check BETWEEN ? AND ?",
+        MEM_STATUS_FRAME_TABLE_NAME
+    );
+    let frames_query = sqlx::query_as::<_, (i64, i64)>(&frames_statement)
+        .bind(&start_date)
+        .bind(&end_date)
+        .fetch_all(&mut conn)
+        .await?;
+
+    let frame_ids = frames_query
+        .iter()
+        .map(|frame| frame.0.to_string())
+        .collect::<Vec<String>>()
+        .join(",");
+    let singles_statement = format!(
+        "SELECT * FROM {} WHERE frame_id IN ({})",
+        MEM_STATUS_FRAME_SINGLE_TABLE_NAME, frame_ids
+    );
+
+    let singles_query = sqlx::query_as::<_, SingleMemInfo>(&singles_statement)
+        .fetch_all(&mut conn)
+        .await?;
+
+    let frames: Vec<MemFrameStatus> = frames_query
+        .iter()
+        .map(|frame| {
+            let id = frame.0;
+            let last_check = frame.1;
+
+            MemFrameStatus {
+                id,
+                last_check,
+                mems_usage: singles_query
+                    .iter()
+                    .filter(|f| f.frame_id == id)
+                    .map(|s| s.clone())
+                    .collect(),
+            }
+        })
+        .collect();
+
+    Ok(frames)
+}
+
 #[derive(Debug, sqlx::FromRow)]
 struct FetchId {
     pub id: i64,

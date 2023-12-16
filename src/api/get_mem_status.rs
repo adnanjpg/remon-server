@@ -2,9 +2,12 @@ use hyper::{Body, Request, Response};
 use log::debug;
 use std::convert::Infallible;
 
-use crate::monitor::{self};
+use crate::{
+    api::response_body::ResponseBody,
+    monitor::{self, persistence::get_mem_status_between_dates},
+};
 
-pub fn get_mem_status(req: Request<Body>) -> Result<Response<Body>, Infallible> {
+pub async fn get_mem_status(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     // read query params and convert to GetCpuStatusRequest
     let query_str = req.uri().query().unwrap();
     let query_params: Vec<&str> = query_str.split("&").collect();
@@ -19,18 +22,36 @@ pub fn get_mem_status(req: Request<Body>) -> Result<Response<Body>, Infallible> 
         end_time: end_time,
     };
 
-    debug!("start_time: {}", req.start_time);
-    debug!("end_time: {}", req.end_time);
+    let start_time = req.start_time;
+    let end_time = req.end_time;
+
+    debug!("start_time: {}", start_time);
+    debug!("end_time: {}", end_time);
 
     // TODO(isaidsari): read data frequency from config
     // TODO(isaidsari): convert from static data to real data
 
-    let status = monitor::MemStatusData { frames: vec![] };
+    let mem_statuses = match get_mem_status_between_dates(start_time, end_time).await {
+        Ok(val) => val,
+        Err(err) => {
+            let bod = serde_json::to_string(&ResponseBody::Error(err.to_string())).unwrap();
+
+            let response = Response::builder()
+                .status(hyper::StatusCode::INTERNAL_SERVER_ERROR)
+                .header("Content-Type", "application/json")
+                .body(Body::from(bod))
+                .unwrap();
+
+            return Ok(response);
+        }
+    };
+
+    let statuses = serde_json::to_string(&mem_statuses).unwrap();
 
     let response = Response::builder()
         .status(hyper::StatusCode::OK)
         .header("Content-Type", "application/json")
-        .body(Body::from(serde_json::to_string(&status).unwrap()))
+        .body(Body::from(statuses))
         .unwrap();
     Ok(response)
 }
