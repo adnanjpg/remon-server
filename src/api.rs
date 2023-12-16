@@ -1,0 +1,15 @@
+pub mod _404;
+pub mod get_cpu_status;
+pub mod get_desc;
+pub mod get_disk_status;
+pub mod get_hardware_info;
+pub mod get_mem_status;
+pub mod get_otp_qr;
+pub mod healthcheck;
+pub mod hello;
+pub mod login;
+pub mod response_body;
+pub mod send_test_notification;
+pub mod teapot;
+pub mod update_info;
+pub mod validate_token_test;
