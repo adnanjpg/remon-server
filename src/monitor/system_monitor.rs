@@ -164,8 +164,8 @@ impl SystemMonitor {
                         id: -1,
                         frame_id: -1,
                         cpu_id: cpu_id.to_string(),
-                        freq: cpu.frequency() as f64,
-                        usage: cpu.cpu_usage() as f64,
+                        freq: cpu.frequency() as i64,
+                        usage: cpu.cpu_usage() as i64,
                     });
 
                     let cpu_id_owned = cpu_id.to_owned();

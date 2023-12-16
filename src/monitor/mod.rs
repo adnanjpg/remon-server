@@ -31,8 +31,8 @@ pub struct CpuCoreInfo {
     pub frame_id: i64,
     // the id of the cpu chip, consists from key info like vendor_id, brand, etc.
     pub cpu_id: String,
-    pub freq: f64,
-    pub usage: f64,
+    pub freq: i64,
+    pub usage: i64,
 }
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct CpuFrameStatus {

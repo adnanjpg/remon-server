@@ -344,6 +344,57 @@ pub async fn get_disk_status_between_dates(
     Ok(frames)
 }
 
+pub async fn get_cpu_status_between_dates(
+    start_date: i64,
+    end_date: i64,
+) -> Result<Vec<CpuFrameStatus>, sqlx::Error> {
+    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+
+    let frames_statement = format!(
+        "SELECT id, last_check FROM {} WHERE last_check BETWEEN ? AND ?",
+        CPU_STATUS_FRAME_TABLE_NAME
+    );
+    let frames_query = sqlx::query_as::<_, (i64, i64)>(&frames_statement)
+        .bind(&start_date)
+        .bind(&end_date)
+        .fetch_all(&mut conn)
+        .await?;
+
+    let frame_ids = frames_query
+        .iter()
+        .map(|frame| frame.0.to_string())
+        .collect::<Vec<String>>()
+        .join(",");
+    let singles_statement = format!(
+        "SELECT * FROM {} WHERE frame_id IN ({})",
+        CPU_STATUS_FRAME_CORE_TABLE_NAME, frame_ids
+    );
+
+    let singles_query = sqlx::query_as::<_, CpuCoreInfo>(&singles_statement)
+        .fetch_all(&mut conn)
+        .await?;
+
+    let frames: Vec<CpuFrameStatus> = frames_query
+        .iter()
+        .map(|frame| {
+            let id = frame.0;
+            let last_check = frame.1;
+
+            CpuFrameStatus {
+                id,
+                last_check,
+                cores_usage: singles_query
+                    .iter()
+                    .filter(|f| f.frame_id == id)
+                    .map(|s| s.clone())
+                    .collect(),
+            }
+        })
+        .collect();
+
+    Ok(frames)
+}
+
 #[derive(Debug, sqlx::FromRow)]
 struct FetchId {
     pub id: i64,
@@ -568,8 +619,8 @@ async fn create_cpu_status_frame_cores_table(
         "CREATE TABLE IF NOT EXISTS {} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         cpu_id TEXT NOT NULL,
-        freq REAL NOT NULL,
-        usage REAL NOT NULL,
+        freq INTEGER NOT NULL,
+        usage INTEGER NOT NULL,
         frame_id INTEGER NOT NULL,
         FOREIGN KEY (frame_id)
             REFERENCES {} (id)

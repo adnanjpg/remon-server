@@ -2,9 +2,19 @@ use hyper::{Body, Request, Response};
 use log::debug;
 use std::convert::Infallible;
 
-use crate::monitor::{self};
+use crate::{
+    api::{authenticate, ResponseBody},
+    monitor::{self, persistence::get_cpu_status_between_dates},
+};
 
-pub fn get_cpu_status(req: Request<Body>) -> Result<Response<Body>, Infallible> {
+pub async fn get_cpu_status(req: Request<Body>) -> Result<Response<Body>, Infallible> {
+    match authenticate(&req) {
+        Ok(val) => val,
+        Err(err) => {
+            return Ok(err);
+        }
+    };
+
     // read query params and convert to GetCpuStatusRequest
     let query_str = req.uri().query().unwrap();
     let query_params: Vec<&str> = query_str.split("&").collect();
@@ -15,165 +25,40 @@ pub fn get_cpu_status(req: Request<Body>) -> Result<Response<Body>, Infallible> 
         .parse::<i64>()
         .unwrap();
     let req = monitor::GetCpuStatusRequest {
-        start_time: start_time,
-        end_time: end_time,
+        start_time,
+        end_time,
     };
 
-    debug!("start_time: {}", req.start_time);
-    debug!("end_time: {}", req.end_time);
+    let start_time = req.start_time;
+    let end_time = req.end_time;
+
+    debug!("start_time: {}", start_time);
+    debug!("end_time: {}", end_time);
 
     // TODO(isaidsari): read data frequency from config
-    // TODO(isaidsari): convert from static data to real data
 
-    let status = monitor::CpuStatusData {
-        frames: vec![
-            monitor::CpuFrameStatus {
-                id: 1,
-                last_check: chrono::Utc::now().timestamp(),
-                cores_usage: vec![
-                    monitor::CpuCoreInfo {
-                        id: -1,
-                        frame_id: -1,
-                        cpu_id: "".to_string(),
-                        freq: 1.8,
-                        usage: 0.3,
-                    },
-                    monitor::CpuCoreInfo {
-                        id: -1,
-                        frame_id: -1,
-                        cpu_id: "".to_string(),
-                        freq: 2.5,
-                        usage: 0.1,
-                    },
-                ],
-            },
-            monitor::CpuFrameStatus {
-                id: 1,
-                last_check: chrono::Utc::now().timestamp(),
-                cores_usage: vec![
-                    monitor::CpuCoreInfo {
-                        id: -1,
-                        frame_id: -1,
-                        cpu_id: "".to_string(),
-                        freq: 2.8,
-                        usage: 0.5,
-                    },
-                    monitor::CpuCoreInfo {
-                        id: -1,
-                        frame_id: -1,
-                        cpu_id: "".to_string(),
-                        freq: 2.1,
-                        usage: 0.4,
-                    },
-                ],
-            },
-            monitor::CpuFrameStatus {
-                id: 1,
-                last_check: chrono::Utc::now().timestamp(),
-                cores_usage: vec![
-                    monitor::CpuCoreInfo {
-                        id: -1,
-                        frame_id: -1,
-                        cpu_id: "".to_string(),
-                        freq: 2.8,
-                        usage: 0.1,
-                    },
-                    monitor::CpuCoreInfo {
-                        id: -1,
-                        frame_id: -1,
-                        cpu_id: "".to_string(),
-                        freq: 2.1,
-                        usage: 0.1,
-                    },
-                ],
-            },
-            monitor::CpuFrameStatus {
-                id: 1,
-                last_check: chrono::Utc::now().timestamp(),
-                cores_usage: vec![
-                    monitor::CpuCoreInfo {
-                        id: -1,
-                        frame_id: -1,
-                        cpu_id: "".to_string(),
-                        freq: 2.8,
-                        usage: 0.99,
-                    },
-                    monitor::CpuCoreInfo {
-                        id: -1,
-                        frame_id: -1,
-                        cpu_id: "".to_string(),
-                        freq: 2.1,
-                        usage: 0.99,
-                    },
-                ],
-            },
-            monitor::CpuFrameStatus {
-                id: 1,
-                last_check: chrono::Utc::now().timestamp(),
-                cores_usage: vec![
-                    monitor::CpuCoreInfo {
-                        id: -1,
-                        frame_id: -1,
-                        cpu_id: "".to_string(),
-                        freq: 2.8,
-                        usage: 0.7,
-                    },
-                    monitor::CpuCoreInfo {
-                        id: -1,
-                        frame_id: -1,
-                        cpu_id: "".to_string(),
-                        freq: 2.1,
-                        usage: 0.6,
-                    },
-                ],
-            },
-            monitor::CpuFrameStatus {
-                id: 1,
-                last_check: chrono::Utc::now().timestamp(),
-                cores_usage: vec![
-                    monitor::CpuCoreInfo {
-                        id: -1,
-                        frame_id: -1,
-                        cpu_id: "".to_string(),
-                        freq: 2.8,
-                        usage: 0.22,
-                    },
-                    monitor::CpuCoreInfo {
-                        id: -1,
-                        frame_id: -1,
-                        cpu_id: "".to_string(),
-                        freq: 2.1,
-                        usage: 0.25,
-                    },
-                ],
-            },
-            monitor::CpuFrameStatus {
-                id: 1,
-                last_check: chrono::Utc::now().timestamp(),
-                cores_usage: vec![
-                    monitor::CpuCoreInfo {
-                        id: -1,
-                        frame_id: -1,
-                        cpu_id: "".to_string(),
-                        freq: 2.8,
-                        usage: 0.9,
-                    },
-                    monitor::CpuCoreInfo {
-                        id: -1,
-                        frame_id: -1,
-                        cpu_id: "".to_string(),
-                        freq: 2.1,
-                        usage: 0.99,
-                    },
-                ],
-            },
-        ],
+    let mem_statuses = match get_cpu_status_between_dates(start_time, end_time).await {
+        Ok(val) => val,
+        Err(err) => {
+            let bod = serde_json::to_string(&ResponseBody::Error(err.to_string())).unwrap();
+
+            let response = Response::builder()
+                .status(hyper::StatusCode::INTERNAL_SERVER_ERROR)
+                .header("Content-Type", "application/json")
+                .body(Body::from(bod))
+                .unwrap();
+
+            return Ok(response);
+        }
     };
+
+    let statuses = serde_json::to_string(&mem_statuses).unwrap();
 
     let response = Response::builder()
         .status(hyper::StatusCode::OK)
         .header("Content-Type", "application/json")
-        .body(Body::from(serde_json::to_string(&status).unwrap()))
+        .body(Body::from(statuses))
         .unwrap();
+
     Ok(response)
 }
