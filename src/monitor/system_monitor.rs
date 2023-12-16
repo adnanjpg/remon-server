@@ -91,7 +91,7 @@ impl SystemMonitor {
 
     pub async fn start_monitoring(&self) {
         fn get_last_check() -> i64 {
-            chrono::Utc::now().timestamp()
+            chrono::Utc::now().timestamp_millis()
         }
 
         let should_exit_clone = Arc::clone(&self.should_exit);
@@ -117,7 +117,7 @@ impl SystemMonitor {
 
                 // storage
                 let all_disks = system.disks();
-                let disks_last_check = chrono::Utc::now().timestamp();
+                let disks_last_check = chrono::Utc::now().timestamp_millis();
                 let mut storage_usage: DiskFrameStatus = DiskFrameStatus {
                     id: -1,
                     last_check: disks_last_check,
@@ -151,7 +151,7 @@ impl SystemMonitor {
 
                 // cpu
                 let all_cpus = system.cpus();
-                let cpu_last_check = chrono::Utc::now().timestamp();
+                let cpu_last_check = chrono::Utc::now().timestamp_millis();
                 let mut cpu_usage: CpuFrameStatus = CpuFrameStatus {
                     id: -1,
                     last_check: cpu_last_check,
@@ -192,7 +192,7 @@ impl SystemMonitor {
                 }
 
                 // mem
-                let mem_last_check = chrono::Utc::now().timestamp();
+                let mem_last_check = chrono::Utc::now().timestamp_millis();
                 let mem_info: Vec<HardwareMemInfo> = vec![HardwareMemInfo {
                     id: -1,
                     mem_id: "1".to_string(),
