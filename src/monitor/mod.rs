@@ -89,7 +89,7 @@ pub struct SingleDiskInfo {
     pub frame_id: i64,
     // the id of the disk, consists from key info like name, fs, etc.
     pub disk_id: String,
-    pub available: f64,
+    pub available: i64,
 }
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct DiskFrameStatus {

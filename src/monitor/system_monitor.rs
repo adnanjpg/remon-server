@@ -132,7 +132,7 @@ impl SystemMonitor {
                         frame_id: -1,
                         disk_id: disk_id.to_string(),
                         // sqlx doesn't support u64
-                        available: disk.available_space() as f64,
+                        available: disk.available_space() as i64,
                     });
 
                     storage_info.push(HardwareDiskInfo {
