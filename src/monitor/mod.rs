@@ -111,6 +111,7 @@ pub struct DiskStatusData {
 // get-hardware-info
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HardwareCpuInfo {
+    pub id: i64,
     // the id of the cpu chip, consists from key info like vendor_id, brand, etc.
     pub cpu_id: String,
     pub core_count: i32,
@@ -120,6 +121,7 @@ pub struct HardwareCpuInfo {
 }
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HardwareDiskInfo {
+    pub id: i64,
     // the id of the disk, consists from key info like name, fs, etc.
     pub disk_id: String,
     pub name: String,
@@ -133,6 +135,7 @@ pub struct HardwareDiskInfo {
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HardwareMemInfo {
+    pub id: i64,
     pub mem_id: String,
     pub total_space: i64,
     pub last_check: i64,

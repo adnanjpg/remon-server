@@ -136,6 +136,7 @@ impl SystemMonitor {
                     });
 
                     disks_info.push(HardwareDiskInfo {
+                        id: -1,
                         fs_type: disk.file_system().iter().map(|c| *c as char).collect(),
                         is_removable: disk.is_removable(),
                         kind: format!("{:?}", disk.kind()),
@@ -178,6 +179,7 @@ impl SystemMonitor {
                             .count();
 
                         let new_info = HardwareCpuInfo {
+                            id: -1,
                             cpu_id: cpu_id_owned,
                             core_count: core_count as i32,
                             brand: cpu.brand().to_string(),
@@ -192,6 +194,7 @@ impl SystemMonitor {
                 // mem
                 let mem_last_check = chrono::Utc::now().timestamp();
                 let mem_info: Vec<HardwareMemInfo> = vec![HardwareMemInfo {
+                    id: -1,
                     mem_id: "1".to_string(),
                     last_check: mem_last_check,
                     total_space: system.total_memory() as i64,
