@@ -19,7 +19,7 @@ use super::{CpuStatusData, DiskStatusData, MemStatusData};
 
 // TODO(isaidsari): make it configurable
 pub fn get_check_interval() -> Duration {
-    Duration::from_millis(1000)
+    Duration::from_millis(10000)
 }
 
 pub struct SystemMonitor {
@@ -141,7 +141,7 @@ impl SystemMonitor {
                         kind: format!("{:?}", disk.kind()),
                         mount_point: disk.mount_point().to_string_lossy().to_string(),
                         // sqlx doesn't support u64
-                        total_space: disk.total_space() as f64,
+                        total_space: disk.total_space() as i64,
                         disk_id: disk_id.to_string(),
                         name: disk.name().to_string_lossy().to_string(),
                         last_check: get_last_check(),

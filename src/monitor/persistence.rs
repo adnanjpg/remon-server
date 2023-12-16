@@ -184,21 +184,12 @@ pub async fn insert_hardware_info(status: &HardwareInfo) -> Result<(), sqlx::Err
 async fn fetch_latest_hardware_cpus_info() -> Result<Vec<HardwareCpuInfo>, sqlx::Error> {
     let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
 
-    // get all with distinct core count or distinct vendor_id or distinct brand
     let statement = format!(
         "
-SELECT *
-FROM {} t1
-WHERE EXISTS (
-    SELECT 1
-    FROM {} t2
-    WHERE t1.core_count <> t2.core_count
-    OR t1.vendor_id <> t2.vendor_id
-    OR t1.brand <> t2.brand
-)
-ORDER BY t1.core_count, t1.vendor_id, t1.brand
+        SELECT *
+        FROM {}
         ",
-        HARDWARE_CPU_INFOS_TABLE_NAME, HARDWARE_CPU_INFOS_TABLE_NAME
+        HARDWARE_CPU_INFOS_TABLE_NAME
     );
     let info = sqlx::query_as::<_, HardwareCpuInfo>(&statement)
         .fetch_all(&mut conn)
@@ -210,19 +201,13 @@ ORDER BY t1.core_count, t1.vendor_id, t1.brand
 async fn fetch_latest_hardware_disks_info() -> Result<Vec<HardwareDiskInfo>, sqlx::Error> {
     let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
 
-    // get all with distinct name
+    // get all with distinct disk_id
     let statement = format!(
         "
-SELECT *
-FROM {} t1
-WHERE EXISTS (
-    SELECT 1
-    FROM {} t2
-    WHERE t1.disk_id <> t2.disk_id
-)
-ORDER BY t1.name
+    SELECT *
+    FROM {}
 ",
-        HARDWARE_DISK_INFOS_TABLE_NAME, HARDWARE_DISK_INFOS_TABLE_NAME,
+        HARDWARE_DISK_INFOS_TABLE_NAME
     );
 
     let info = sqlx::query_as::<_, HardwareDiskInfo>(&statement)

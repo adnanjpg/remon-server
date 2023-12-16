@@ -127,7 +127,7 @@ pub struct HardwareDiskInfo {
     pub kind: String,
     pub is_removable: bool,
     pub mount_point: String,
-    pub total_space: f64,
+    pub total_space: i64,
     pub last_check: i64,
 }
 

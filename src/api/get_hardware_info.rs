@@ -1,85 +1,32 @@
 use hyper::{Body, Request, Response};
 use std::convert::Infallible;
 
-use crate::monitor::{self};
+use crate::monitor::persistence::fetch_latest_hardware_info;
+
+use super::ResponseBody;
 
 pub async fn get_hardware_info(_req: Request<Body>) -> Result<Response<Body>, Infallible> {
-    /*
-    let auth_header = match authenticate(&req) {
+    let info = match fetch_latest_hardware_info().await {
         Ok(val) => val,
         Err(err) => {
-            return Ok(err);
+            let bod = serde_json::to_string(&ResponseBody::Error(err.to_string())).unwrap();
+
+            let response = Response::builder()
+                .status(hyper::StatusCode::INTERNAL_SERVER_ERROR)
+                .header("Content-Type", "application/json")
+                .body(Body::from(bod))
+                .unwrap();
+
+            return Ok(response);
         }
     };
 
-    if !auth::token::validate_token(auth_header).await.is_ok() {
-        let response = Response::builder()
-            .status(hyper::StatusCode::UNAUTHORIZED)
-            .header("Content-Type", "application/json")
-            .body(Body::from(
-                serde_json::to_string(&ResponseBody::error(
-                    "Invalid auth token.".to_string(),
-                ))
-                .unwrap(),
-            ))
-            .unwrap();
-        return Ok(response);
-    }
-                let status = match monitor::fetch_monitor_status().await {
-                    Ok(status) => status,
-                    Err(_) => {
-                        let response = Response::builder()
-                            .status(hyper::StatusCode::INTERNAL_SERVER_ERROR)
-                            .header("Content-Type", "application/json")
-                            .body(Body::from(
-                                serde_json::to_string(&ResponseBody::error(
-                                    "Failed to update monitor config.".to_string(),
-                                ))
-                                .unwrap(),
-                            ))
-                            .unwrap();
-                        return Ok(response);
-                    }
-                };
-    */
-
-    let status = monitor::HardwareInfo {
-        cpu_info: vec![monitor::HardwareCpuInfo {
-            cpu_id: "".to_string(),
-            core_count: 3,
-            vendor_id: "Intel".to_string(),
-            brand: "Intel(R) Core(TM) i7-7700HQ CPU @ 2.80GHz".to_string(),
-            last_check: chrono::Utc::now().timestamp(),
-        }],
-
-        disks_info: vec![
-            monitor::HardwareDiskInfo {
-                fs_type: "".to_string(),
-                kind: "".to_string(),
-                is_removable: false,
-                mount_point: "".to_string(),
-                total_space: 0.0,
-                disk_id: "".to_string(),
-                name: "C:".to_string(),
-                last_check: chrono::Utc::now().timestamp(),
-            },
-            monitor::HardwareDiskInfo {
-                fs_type: "".to_string(),
-                kind: "".to_string(),
-                is_removable: false,
-                mount_point: "".to_string(),
-                total_space: 0.0,
-                disk_id: "".to_string(),
-                name: "D:".to_string(),
-                last_check: chrono::Utc::now().timestamp(),
-            },
-        ],
-    };
+    let body = serde_json::to_string(&info).unwrap();
 
     let response = Response::builder()
         .status(hyper::StatusCode::OK)
         .header("Content-Type", "application/json")
-        .body(Body::from(serde_json::to_string(&status).unwrap()))
+        .body(Body::from(body))
         .unwrap();
     Ok(response)
 }
