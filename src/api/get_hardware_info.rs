@@ -3,9 +3,16 @@ use std::convert::Infallible;
 
 use crate::monitor::persistence::fetch_latest_hardware_info;
 
-use super::ResponseBody;
+use super::{authenticate, ResponseBody};
 
-pub async fn get_hardware_info(_req: Request<Body>) -> Result<Response<Body>, Infallible> {
+pub async fn get_hardware_info(req: Request<Body>) -> Result<Response<Body>, Infallible> {
+    match authenticate(&req) {
+        Ok(val) => val,
+        Err(err) => {
+            return Ok(err);
+        }
+    };
+
     let info = match fetch_latest_hardware_info().await {
         Ok(val) => val,
         Err(err) => {
