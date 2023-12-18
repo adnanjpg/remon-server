@@ -4,7 +4,10 @@ use std::convert::Infallible;
 
 use crate::{
     auth,
-    monitor::{self, persistence, MonitorConfig},
+    monitor::{
+        models::{MonitorConfig, UpdateInfoRequest},
+        persistence,
+    },
 };
 
 use super::{authenticate, ResponseBody};
@@ -35,7 +38,7 @@ pub async fn update_info(req: Request<Body>) -> Result<Response<Body>, Infallibl
     let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap();
     let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
 
-    let update_info = match serde_json::from_str::<monitor::UpdateInfoRequest>(&body_str) {
+    let update_info = match serde_json::from_str::<UpdateInfoRequest>(&body_str) {
         Ok(req_json) => req_json,
         Err(_) => {
             let response = Response::builder()

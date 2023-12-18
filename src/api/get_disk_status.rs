@@ -5,7 +5,10 @@ use std::convert::Infallible;
 
 use crate::{
     api::{authenticate, ResponseBody},
-    monitor::{self, persistence::get_disk_status_between_dates, DiskFrameStatus},
+    monitor::{
+        models::{get_disk_status::DiskFrameStatus, get_mem_status::GetMemStatusRequest},
+        persistence::get_disk_status_between_dates,
+    },
 };
 
 #[derive(Serialize)]
@@ -30,7 +33,7 @@ pub async fn get_disk_status(req: Request<Body>) -> Result<Response<Body>, Infal
     let end_time = query_params[1].split("=").collect::<Vec<&str>>()[1]
         .parse::<i64>()
         .unwrap();
-    let req = monitor::GetMemStatusRequest {
+    let req = GetMemStatusRequest {
         start_time,
         end_time,
     };

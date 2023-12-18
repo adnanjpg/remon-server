@@ -1,10 +1,13 @@
+use crate::monitor::models::get_cpu_status::{CpuCoreInfo, CpuFrameStatus, CpuFrameStatusTrait};
+
+use crate::monitor::models::get_disk_status::{DiskFrameStatus, SingleDiskInfo};
+use crate::monitor::models::get_hardware_info::{
+    HardwareCpuInfo, HardwareDiskInfo, HardwareInfo, HardwareMemInfo,
+};
+use crate::monitor::models::get_mem_status::{MemFrameStatus, MemStatusData, SingleMemInfo};
 use crate::monitor::persistence::{
     fetch_monitor_configs, insert_cpu_status_frame, insert_disk_status_frame, insert_hardware_info,
     insert_mem_status_frame,
-};
-use crate::monitor::{
-    CpuCoreInfo, CpuFrameStatus, DiskFrameStatus, HardwareCpuInfo, HardwareDiskInfo, HardwareInfo,
-    HardwareMemInfo, MemFrameStatus, MonitorConfig, SingleDiskInfo, SingleMemInfo,
 };
 use log::{debug, error, warn};
 use std::vec;
@@ -15,7 +18,9 @@ use std::{
 use sysinfo::{CpuExt, CpuRefreshKind, DiskExt, RefreshKind, SystemExt};
 use tokio::time;
 
-use super::{CpuFrameStatusTrait, CpuStatusData, DiskStatusData, MemStatusData};
+use super::models::get_cpu_status::CpuStatusData;
+use super::models::get_disk_status::DiskStatusData;
+use super::models::MonitorConfig;
 
 // TODO(isaidsari): make it configurable
 pub fn get_check_interval() -> Duration {

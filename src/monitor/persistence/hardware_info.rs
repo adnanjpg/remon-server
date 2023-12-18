@@ -1,4 +1,4 @@
-use crate::monitor::HardwareInfo;
+use crate::monitor::models::get_hardware_info::HardwareInfo;
 
 use super::hardware_cpu_info::{fetch_latest_hardware_cpus_info, insert_hardware_cpu_info};
 use super::hardware_disk_info::{fetch_latest_hardware_disks_info, insert_hardware_disk_info};

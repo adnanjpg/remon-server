@@ -5,8 +5,12 @@ use std::convert::Infallible;
 
 use crate::{
     api::{authenticate, ResponseBody},
-    monitor::{self, persistence::get_cpu_status_between_dates, CpuFrameStatus},
+    monitor::{
+        models::get_cpu_status::GetCpuStatusRequest, persistence::get_cpu_status_between_dates,
+    },
 };
+
+use crate::monitor::models::get_cpu_status::CpuFrameStatus;
 
 #[derive(Serialize)]
 struct GetCpuStatusResponse {
@@ -30,7 +34,7 @@ pub async fn get_cpu_status(req: Request<Body>) -> Result<Response<Body>, Infall
     let end_time = query_params[1].split("=").collect::<Vec<&str>>()[1]
         .parse::<i64>()
         .unwrap();
-    let req = monitor::GetCpuStatusRequest {
+    let req = GetCpuStatusRequest {
         start_time,
         end_time,
     };

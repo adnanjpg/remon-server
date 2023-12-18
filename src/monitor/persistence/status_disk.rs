@@ -1,6 +1,6 @@
 use sqlx::SqliteConnection;
 
-use crate::monitor::{DiskFrameStatus, SingleDiskInfo};
+use crate::monitor::models::get_disk_status::{DiskFrameStatus, SingleDiskInfo};
 
 use super::{get_sql_connection, FetchId, SQLITE_DB_CONN_STR};
 

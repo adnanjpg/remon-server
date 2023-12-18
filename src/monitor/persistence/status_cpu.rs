@@ -1,6 +1,6 @@
 use sqlx::SqliteConnection;
 
-use crate::monitor::{CpuCoreInfo, CpuFrameStatus};
+use crate::monitor::models::get_cpu_status::{CpuCoreInfo, CpuFrameStatus};
 
 use super::{get_sql_connection, FetchId, SQLITE_DB_CONN_STR};
 

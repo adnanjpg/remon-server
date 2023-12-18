@@ -1,6 +1,6 @@
 use sqlx::SqliteConnection;
 
-use crate::monitor::{MemFrameStatus, SingleMemInfo};
+use crate::monitor::models::get_mem_status::{MemFrameStatus, SingleMemInfo};
 
 use super::{get_sql_connection, FetchId, SQLITE_DB_CONN_STR};
 

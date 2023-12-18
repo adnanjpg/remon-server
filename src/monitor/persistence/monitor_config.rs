@@ -1,6 +1,6 @@
 use sqlx::SqliteConnection;
 
-use crate::monitor::MonitorConfig;
+use crate::monitor::models::MonitorConfig;
 
 use super::{get_sql_connection, FetchId, SQLITE_DB_CONN_STR};
 
