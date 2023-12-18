@@ -15,7 +15,7 @@ use std::{
 use sysinfo::{CpuExt, CpuRefreshKind, DiskExt, RefreshKind, SystemExt};
 use tokio::time;
 
-use super::{CpuStatusData, DiskStatusData, MemStatusData};
+use super::{CpuFrameStatusTrait, CpuStatusData, DiskStatusData, MemStatusData};
 
 // TODO(isaidsari): make it configurable
 pub fn get_check_interval() -> Duration {
@@ -274,7 +274,7 @@ async fn check_thresholds(
     });
 
     for config in configs {
-        let (cpu, mem, disk) = compare_status(&config, cpu_status, mem_status, disk_status);
+        let (cpu, mem, disk) = statuses_exceeds(&config, cpu_status, mem_status, disk_status);
 
         if cpu || mem || disk {
             warn!(
@@ -286,24 +286,145 @@ async fn check_thresholds(
     }
 }
 
-fn compare_cpu_status(config: &MonitorConfig, status: &CpuStatusData) -> bool {
+fn cpu_status_exceeds(config: &MonitorConfig, status: &CpuStatusData) -> bool {
+    let means = status
+        .frames
+        .iter()
+        .map(|f| {
+            let val = f.cores_usage_mean();
+
+            if let Some(val) = val {
+                val
+            } else {
+                -1.0
+            }
+        })
+        .filter(|&val| val != -1.0);
+
+    for mean in means {
+        if mean >= config.cpu_threshold {
+            return true;
+        }
+
+        continue;
+    }
+
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cpu_status_exceeds_test() {
+        let data = CpuStatusData {
+            frames: vec![
+                // 20
+                CpuFrameStatus {
+                    id: -1,
+                    last_check: -1,
+                    cores_usage: vec![
+                        CpuCoreInfo {
+                            id: -1,
+                            cpu_id: "".to_string(),
+                            frame_id: -1,
+                            freq: -1,
+                            usage: 30,
+                        },
+                        CpuCoreInfo {
+                            id: -1,
+                            cpu_id: "".to_string(),
+                            frame_id: -1,
+                            freq: -1,
+                            usage: 20,
+                        },
+                        CpuCoreInfo {
+                            id: -1,
+                            cpu_id: "".to_string(),
+                            frame_id: -1,
+                            freq: -1,
+                            usage: 10,
+                        },
+                    ],
+                },
+                // 50
+                CpuFrameStatus {
+                    id: -1,
+                    last_check: -1,
+                    cores_usage: vec![
+                        CpuCoreInfo {
+                            id: -1,
+                            cpu_id: "".to_string(),
+                            frame_id: -1,
+                            freq: -1,
+                            usage: 40,
+                        },
+                        CpuCoreInfo {
+                            id: -1,
+                            cpu_id: "".to_string(),
+                            frame_id: -1,
+                            freq: -1,
+                            usage: 45,
+                        },
+                        CpuCoreInfo {
+                            id: -1,
+                            cpu_id: "".to_string(),
+                            frame_id: -1,
+                            freq: -1,
+                            usage: 65,
+                        },
+                    ],
+                },
+            ],
+        };
+
+        assert_eq!(
+            cpu_status_exceeds(
+                &MonitorConfig {
+                    id: -1,
+                    device_id: "".to_string(),
+                    updated_at: -1,
+                    disk_threshold: 0.0,
+                    mem_threshold: 0.0,
+                    cpu_threshold: 60.0
+                },
+                &data
+            ),
+            false
+        );
+        assert_eq!(
+            cpu_status_exceeds(
+                &MonitorConfig {
+                    id: -1,
+                    device_id: "".to_string(),
+                    updated_at: -1,
+                    disk_threshold: 0.0,
+                    mem_threshold: 0.0,
+                    cpu_threshold: 30.0
+                },
+                &data
+            ),
+            true
+        );
+    }
+}
+
+fn mem_status_exceeds(config: &MonitorConfig, status: &MemStatusData) -> bool {
     true
 }
-fn compare_mem_status(config: &MonitorConfig, status: &MemStatusData) -> bool {
+fn disk_status_exceeds(config: &MonitorConfig, status: &DiskStatusData) -> bool {
     true
 }
-fn compare_disk_status(config: &MonitorConfig, status: &DiskStatusData) -> bool {
-    true
-}
-fn compare_status(
+fn statuses_exceeds(
     config: &MonitorConfig,
     cpu_status: &CpuStatusData,
     mem_status: &MemStatusData,
     disk_status: &DiskStatusData,
 ) -> (bool, bool, bool) {
     (
-        compare_cpu_status(config, cpu_status),
-        compare_mem_status(config, mem_status),
-        compare_disk_status(config, disk_status),
+        cpu_status_exceeds(config, cpu_status),
+        mem_status_exceeds(config, mem_status),
+        disk_status_exceeds(config, disk_status),
     )
 }
