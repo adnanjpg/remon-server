@@ -115,10 +115,10 @@ impl SystemMonitor {
                         .with_disks(),
                 );
 
-                // storage
+                // disk
                 let all_disks = system.disks();
                 let disks_last_check = chrono::Utc::now().timestamp_millis();
-                let mut storage_usage: DiskFrameStatus = DiskFrameStatus {
+                let mut disk_usage: DiskFrameStatus = DiskFrameStatus {
                     id: -1,
                     last_check: disks_last_check,
                     disks_usage: vec![],
@@ -127,7 +127,7 @@ impl SystemMonitor {
                 for disk in all_disks {
                     let disk_id = &disk.get_disk_id();
 
-                    storage_usage.disks_usage.push(SingleDiskInfo {
+                    disk_usage.disks_usage.push(SingleDiskInfo {
                         id: -1,
                         frame_id: -1,
                         disk_id: disk_id.to_string(),
@@ -231,7 +231,7 @@ impl SystemMonitor {
                 if let Err(e) = insert_cpu_status_frame(&cpu_usage).await {
                     error!("failed to insert cpu status: {}", e);
                 }
-                if let Err(e) = insert_disk_status_frame(&storage_usage).await {
+                if let Err(e) = insert_disk_status_frame(&disk_usage).await {
                     error!("failed to insert disk status: {}", e);
                 }
                 if let Err(e) = insert_mem_status_frame(&mem_usage).await {
@@ -246,7 +246,7 @@ impl SystemMonitor {
                         frames: vec![mem_usage],
                     },
                     &DiskStatusData {
-                        frames: vec![storage_usage],
+                        frames: vec![disk_usage],
                     },
                 )
                 .await;
@@ -266,7 +266,7 @@ impl SystemMonitor {
 async fn check_thresholds(
     cpu_status: &CpuStatusData,
     mem_status: &MemStatusData,
-    storage_status: &DiskStatusData,
+    disk_status: &DiskStatusData,
 ) {
     let configs = fetch_monitor_configs().await.unwrap_or_else(|e| {
         error!("failed to fetch monitor configs: {}", e);
@@ -274,12 +274,12 @@ async fn check_thresholds(
     });
 
     for config in configs {
-        let (cpu, mem, storage) = compare_status(&config, cpu_status, mem_status, storage_status);
+        let (cpu, mem, disk) = compare_status(&config, cpu_status, mem_status, disk_status);
 
-        if cpu || mem || storage {
+        if cpu || mem || disk {
             warn!(
-                "thresholds exceeded for {:?} : cpu: {}, mem: {}, storage: {}",
-                config, cpu, mem, storage
+                "thresholds exceeded for {:?} : cpu: {}, mem: {}, disk: {}",
+                config, cpu, mem, disk
             );
             // TODO(isaidsari): send notification
         }
@@ -292,18 +292,18 @@ fn compare_cpu_status(config: &MonitorConfig, status: &CpuStatusData) -> bool {
 fn compare_mem_status(config: &MonitorConfig, status: &MemStatusData) -> bool {
     true
 }
-fn compare_storage_status(config: &MonitorConfig, status: &DiskStatusData) -> bool {
+fn compare_disk_status(config: &MonitorConfig, status: &DiskStatusData) -> bool {
     true
 }
 fn compare_status(
     config: &MonitorConfig,
     cpu_status: &CpuStatusData,
     mem_status: &MemStatusData,
-    storage_status: &DiskStatusData,
+    disk_status: &DiskStatusData,
 ) -> (bool, bool, bool) {
     (
         compare_cpu_status(config, cpu_status),
         compare_mem_status(config, mem_status),
-        compare_storage_status(config, storage_status),
+        compare_disk_status(config, disk_status),
     )
 }

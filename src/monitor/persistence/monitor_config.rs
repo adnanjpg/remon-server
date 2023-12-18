@@ -2,24 +2,66 @@ use sqlx::SqliteConnection;
 
 use crate::monitor::MonitorConfig;
 
-use super::{get_sql_connection, SQLITE_DB_CONN_STR};
+use super::{get_sql_connection, FetchId, SQLITE_DB_CONN_STR};
 
 const MONITOR_CONFIGS_TABLE_NAME: &str = "configs";
 
-pub async fn insert_monitor_config(
+pub async fn insert_or_update_monitor_config(
     config: &MonitorConfig,
     device_id: &str,
 ) -> Result<(), sqlx::Error> {
     let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
 
-    let statement = format!("INSERT OR REPLACE INTO {} (device_id, cpu_threshold, mem_threshold, storage_threshold) VALUES (?, ?, ?, ?)",MONITOR_CONFIGS_TABLE_NAME);
-    sqlx::query(&statement)
+    // check if a record with the same device_id already exists
+    let exists_record_check = format!(
+        "SELECT id FROM {} WHERE device_id = ?",
+        MONITOR_CONFIGS_TABLE_NAME
+    );
+    let exists_check_res = sqlx::query_as::<_, FetchId>(&exists_record_check)
         .bind(&device_id)
-        .bind(config.cpu_threshold)
-        .bind(config.mem_threshold)
-        .bind(config.storage_threshold)
-        .execute(&mut conn)
+        .fetch_optional(&mut conn)
         .await?;
+
+    match exists_check_res {
+        Some(value) => {
+            let statement = format!(
+                "UPDATE {}
+                SET 
+                cpu_threshold = ?, 
+                disk_threshold = ?,
+                mem_threshold = ?,
+                updated_at = ?
+                WHERE id = ?",
+                MONITOR_CONFIGS_TABLE_NAME
+            );
+
+            sqlx::query(&statement)
+                .bind(&config.cpu_threshold)
+                .bind(&config.disk_threshold)
+                .bind(&config.mem_threshold)
+                .bind(&config.updated_at)
+                .bind(value.id)
+                .execute(&mut conn)
+                .await?;
+        }
+        None => {
+            let statement = format!(
+                "INSERT INTO {} 
+            (device_id, cpu_threshold, mem_threshold, disk_threshold, updated_at) 
+            VALUES (?, ?, ?, ?, ?)
+            ",
+                MONITOR_CONFIGS_TABLE_NAME
+            );
+            sqlx::query(&statement)
+                .bind(&device_id)
+                .bind(&config.cpu_threshold)
+                .bind(&config.mem_threshold)
+                .bind(&config.disk_threshold)
+                .bind(&config.updated_at)
+                .execute(&mut conn)
+                .await?;
+        }
+    };
 
     Ok(())
 }
@@ -40,10 +82,12 @@ pub(super) async fn create_monitor_configs_table(
 ) -> Result<(), sqlx::Error> {
     let statement = format!(
         "CREATE TABLE IF NOT EXISTS {} (
-        device_id TEXT PRIMARY KEY,
+        id INTEGER PRIMARY KEY NOT NULL,
+        device_id TEXT NOT NULL,
         cpu_threshold REAL NOT NULL,
         mem_threshold REAL NOT NULL,
-        storage_threshold REAL NOT NULL
+        disk_threshold REAL NOT NULL,
+        updated_at INTEGER NOT NULL
     )",
         MONITOR_CONFIGS_TABLE_NAME
     );

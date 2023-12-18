@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 mod monitor_config;
 use self::monitor_config::create_monitor_configs_table;
-pub use self::monitor_config::{fetch_monitor_configs, insert_monitor_config};
+pub use self::monitor_config::{fetch_monitor_configs, insert_or_update_monitor_config};
 
 mod hardware_cpu_info;
 use self::hardware_cpu_info::create_hardware_cpu_infos_table;

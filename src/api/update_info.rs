@@ -1,9 +1,10 @@
 use hyper::{Body, Request, Response};
+use log::error;
 use std::convert::Infallible;
 
 use crate::{
     auth,
-    monitor::{self, persistence},
+    monitor::{self, persistence, MonitorConfig},
 };
 
 use super::{authenticate, ResponseBody};
@@ -34,7 +35,7 @@ pub async fn update_info(req: Request<Body>) -> Result<Response<Body>, Infallibl
     let body_bytes = hyper::body::to_bytes(req.into_body()).await.unwrap();
     let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
 
-    let update_info = match serde_json::from_str::<monitor::MonitorConfig>(&body_str) {
+    let update_info = match serde_json::from_str::<monitor::UpdateInfoRequest>(&body_str) {
         Ok(req_json) => req_json,
         Err(_) => {
             let response = Response::builder()
@@ -49,7 +50,16 @@ pub async fn update_info(req: Request<Body>) -> Result<Response<Body>, Infallibl
         }
     };
 
-    match persistence::insert_monitor_config(&update_info, &dev_id).await {
+    let mon_config = MonitorConfig {
+        id: -1,
+        device_id: "".to_string(),
+        cpu_threshold: update_info.cpu_threshold,
+        disk_threshold: update_info.disk_threshold,
+        mem_threshold: update_info.mem_threshold,
+        updated_at: chrono::Utc::now().timestamp_millis(),
+    };
+
+    match persistence::insert_or_update_monitor_config(&mon_config, &dev_id).await {
         Ok(_) => {
             let response = Response::builder()
                 .status(hyper::StatusCode::OK)
@@ -60,7 +70,9 @@ pub async fn update_info(req: Request<Body>) -> Result<Response<Body>, Infallibl
                 .unwrap();
             Ok(response)
         }
-        Err(_) => {
+        Err(err) => {
+            error!("{}", err);
+
             let response = Response::builder()
                 .status(hyper::StatusCode::INTERNAL_SERVER_ERROR)
                 .header("Content-Type", "application/json")

@@ -11,11 +11,21 @@ pub struct ServerDescription {
     pub description: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
-pub struct MonitorConfig {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UpdateInfoRequest {
     pub cpu_threshold: f64,
     pub mem_threshold: f64,
-    pub storage_threshold: f64,
+    pub disk_threshold: f64,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct MonitorConfig {
+    pub id: i64,
+    pub device_id: String,
+    pub cpu_threshold: f64,
+    pub mem_threshold: f64,
+    pub disk_threshold: f64,
+    pub updated_at: i64,
 }
 
 // get-cpu-status
