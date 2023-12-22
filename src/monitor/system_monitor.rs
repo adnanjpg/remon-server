@@ -1,4 +1,4 @@
-use log::{debug, error, warn};
+use log::{debug, error, warn, info};
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -278,6 +278,13 @@ impl SystemMonitor {
 
     pub fn stop_monitoring(&self) {
         *self.should_exit.lock().unwrap() = true;
+    }
+}
+
+impl Drop for SystemMonitor {
+    fn drop(&mut self) {
+        info!("SystemMonitor is shutting down.");
+        self.stop_monitoring();
     }
 }
 

@@ -1,5 +1,5 @@
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Method, Request, Response, Server};
+use hyper::{server, Body, Method, Request, Response, Server};
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -85,6 +85,13 @@ fn init_logger() {
     }
 }
 
+async fn shutdown_signal() {
+    // Wait for the CTRL+C signal for graceful shutdown
+    tokio::signal::ctrl_c()
+        .await
+        .expect("failed to install CTRL+C signal handler");
+}
+
 #[tokio::main]
 async fn main() {
     init_logger();
@@ -105,16 +112,21 @@ async fn main() {
         }
     }
 
-    let server = Server::bind(&socket_addr).serve(make_service_fn(|_conn| async {
-        Ok::<_, Infallible>(service_fn(req_handler))
-    }));
+    let server = Server::bind(&socket_addr)
+        .serve(make_service_fn(|_conn| async {
+            Ok::<_, Infallible>(service_fn(req_handler))
+        }))
+        .with_graceful_shutdown(shutdown_signal());
+
     let mut socket_addrs = vec![socket_addr];
 
     if cfg!(debug_assertions) {
         let debug_socket_addr = SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT));
-        let server_local = Server::bind(&debug_socket_addr).serve(make_service_fn(|_conn| async {
-            Ok::<_, Infallible>(service_fn(req_handler))
-        }));
+        let server_local = Server::bind(&debug_socket_addr)
+            .serve(make_service_fn(|_conn| async {
+                Ok::<_, Infallible>(service_fn(req_handler))
+            }))
+            .with_graceful_shutdown(shutdown_signal());
 
         socket_addrs.push(debug_socket_addr);
 
