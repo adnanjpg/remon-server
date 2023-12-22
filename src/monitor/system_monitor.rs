@@ -1,33 +1,39 @@
-use crate::monitor::models::get_cpu_status::{CpuCoreInfo, CpuFrameStatus, CpuFrameStatusTrait};
-
-use crate::monitor::models::get_disk_status::{DiskFrameStatus, SingleDiskInfo};
-use crate::monitor::models::get_hardware_info::{
-    HardwareCpuInfo, HardwareDiskInfo, HardwareInfo, HardwareMemInfo,
-};
-use crate::monitor::models::get_mem_status::{MemFrameStatus, MemStatusData, SingleMemInfo};
-use crate::monitor::persistence::{
-    fetch_monitor_configs, insert_cpu_status_frame, insert_disk_status_frame, insert_hardware_info,
-    insert_mem_status_frame,
-};
 use log::{debug, error, warn};
-use std::vec;
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
+    vec
 };
 use sysinfo::{CpuExt, CpuRefreshKind, DiskExt, RefreshKind, SystemExt};
 use tokio::time;
 
-use super::models::get_cpu_status::CpuStatusData;
-use super::models::get_disk_status::DiskStatusData;
-use super::models::MonitorConfig;
+use super::models::{
+    get_cpu_status::CpuStatusData,
+    get_disk_status::DiskStatusData,
+    MonitorConfig
+};
+
+use crate::monitor::{
+    models::{
+        get_cpu_status::{CpuCoreInfo, CpuFrameStatus, CpuFrameStatusTrait},
+        get_disk_status::{DiskFrameStatus, SingleDiskInfo},
+        get_hardware_info::{
+            HardwareCpuInfo, HardwareDiskInfo, HardwareInfo, HardwareMemInfo,
+        },
+        get_mem_status::{MemFrameStatus, MemStatusData, SingleMemInfo}
+    },
+    persistence::{
+        fetch_monitor_configs, insert_cpu_status_frame, insert_disk_status_frame, insert_hardware_info,
+        insert_mem_status_frame,
+    }
+};
 
 // TODO(isaidsari): make it configurable
 pub fn get_check_interval() -> Duration {
     Duration::from_millis(10000)
 }
 
-pub struct SystemMonitor {
+pub struct SystemMonitor<> {
     should_exit: Arc<Mutex<bool>>,
     check_interval: Duration,
 }
@@ -100,6 +106,8 @@ impl SystemMonitor {
         }
 
         let should_exit_clone = Arc::clone(&self.should_exit);
+        // rust doesn't allow us to move self into the closure, so we have to clone it
+        let check_interval = self.check_interval;
 
         tokio::spawn(async move {
             let mut system = sysinfo::System::new();
@@ -256,8 +264,13 @@ impl SystemMonitor {
                 )
                 .await;
 
-                // make it configurable
-                let duration = get_check_interval() - elapsed_time;
+                let duration = match check_interval.checked_sub(elapsed_time) {
+                    Some(duration) => duration,
+                    None => {
+                        error!("check interval is less than elapsed time");
+                        Duration::default()
+                    }
+                };
                 time::sleep(duration).await;
             }
         });
