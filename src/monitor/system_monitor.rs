@@ -281,13 +281,6 @@ impl SystemMonitor {
     }
 }
 
-impl Drop for SystemMonitor {
-    fn drop(&mut self) {
-        info!("SystemMonitor is shutting down.");
-        self.stop_monitoring();
-    }
-}
-
 async fn check_thresholds(
     cpu_status: &CpuStatusData,
     mem_status: &MemStatusData,
