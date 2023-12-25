@@ -89,9 +89,10 @@ fn init_logger(test_assertions: bool) {
     }
 }
 
+// https://stackoverflow.com/a/63442117/12555423
 #[cfg(test)]
 #[ctor::ctor]
-fn init() {
+fn init_tests() {
     init_logger(true);
 }
 
