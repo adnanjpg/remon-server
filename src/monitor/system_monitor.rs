@@ -10,6 +10,7 @@ use crate::monitor::persistence::{
     insert_mem_status_frame,
 };
 use log::{debug, error, warn};
+use std::collections::HashMap;
 use std::vec;
 use std::{
     sync::{Arc, Mutex},
@@ -19,7 +20,7 @@ use sysinfo::{CpuExt, CpuRefreshKind, DiskExt, RefreshKind, SystemExt};
 use tokio::time;
 
 use super::models::get_cpu_status::CpuStatusData;
-use super::models::get_disk_status::DiskStatusData;
+use super::models::get_disk_status::{DiskStatusData, DiskStatusDataTrait};
 use super::models::MonitorConfig;
 
 // TODO(isaidsari): make it configurable
@@ -220,8 +221,8 @@ impl SystemMonitor {
 
                 let hardware_info = HardwareInfo {
                     cpu_info,
-                    disks_info,
-                    mem_info,
+                    disks_info: disks_info.clone(),
+                    mem_info: mem_info.clone(),
                 };
 
                 let elapsed_time = start_time.elapsed();
@@ -243,18 +244,17 @@ impl SystemMonitor {
                     error!("failed to insert mem status: {}", e);
                 }
 
-                check_thresholds(
-                    &CpuStatusData {
-                        frames: vec![cpu_usage],
-                    },
-                    &MemStatusData {
-                        frames: vec![mem_usage],
-                    },
-                    &DiskStatusData {
-                        frames: vec![disk_usage],
-                    },
-                )
-                .await;
+                let cpu_status = &CpuStatusData {
+                    frames: vec![cpu_usage],
+                };
+                let mem_status = &MemStatusData {
+                    frames: vec![mem_usage],
+                };
+                let disk_status = &DiskStatusData {
+                    frames: vec![disk_usage],
+                };
+
+                check_thresholds(cpu_status, mem_status, &mem_info, disk_status, &disks_info).await;
 
                 // make it configurable
                 let duration = get_check_interval() - elapsed_time;
@@ -263,6 +263,8 @@ impl SystemMonitor {
         });
     }
 
+    // TODO(issaidsari): graceful shutdown
+    #[allow(dead_code)]
     pub fn stop_monitoring(&self) {
         *self.should_exit.lock().unwrap() = true;
     }
@@ -271,7 +273,9 @@ impl SystemMonitor {
 async fn check_thresholds(
     cpu_status: &CpuStatusData,
     mem_status: &MemStatusData,
+    mems_info: &Vec<HardwareMemInfo>,
     disk_status: &DiskStatusData,
+    disks_info: &Vec<HardwareDiskInfo>,
 ) {
     let configs = fetch_monitor_configs().await.unwrap_or_else(|e| {
         error!("failed to fetch monitor configs: {}", e);
@@ -279,7 +283,14 @@ async fn check_thresholds(
     });
 
     for config in configs {
-        let (cpu, mem, disk) = statuses_exceeds(&config, cpu_status, mem_status, disk_status);
+        let (cpu, mem, disk) = statuses_exceeds(
+            &config,
+            cpu_status,
+            mem_status,
+            mems_info,
+            disk_status,
+            disks_info,
+        );
 
         if cpu || mem || disk {
             warn!(
@@ -315,6 +326,51 @@ fn cpu_status_exceeds(config: &MonitorConfig, status: &CpuStatusData) -> bool {
     }
 
     false
+}
+
+fn mem_status_exceeds(
+    #[allow(unused_variables)] config: &MonitorConfig,
+    #[allow(unused_variables)] status: &MemStatusData,
+    #[allow(unused_variables)] mems_info: &Vec<HardwareMemInfo>,
+) -> bool {
+    true
+}
+
+fn disk_status_exceeds(
+    config: &MonitorConfig,
+    status: &DiskStatusData,
+    disks_info: &Vec<HardwareDiskInfo>,
+) -> bool {
+    let mut totals_map = HashMap::new() as super::models::get_disk_status::DiskTotalSpaceMap;
+    disks_info.iter().for_each(|f| {
+        totals_map.insert(f.disk_id.to_string(), f.total_space);
+    });
+
+    let means = status.disks_usage_means_percentages(&totals_map);
+
+    for mean in means {
+        if mean.1 as f64 >= config.disk_threshold {
+            return true;
+        }
+
+        continue;
+    }
+
+    false
+}
+fn statuses_exceeds(
+    config: &MonitorConfig,
+    cpu_status: &CpuStatusData,
+    mem_status: &MemStatusData,
+    mems_info: &Vec<HardwareMemInfo>,
+    disk_status: &DiskStatusData,
+    disks_info: &Vec<HardwareDiskInfo>,
+) -> (bool, bool, bool) {
+    (
+        cpu_status_exceeds(config, cpu_status),
+        mem_status_exceeds(config, mem_status, mems_info),
+        disk_status_exceeds(config, disk_status, disks_info),
+    )
 }
 
 #[cfg(test)]
@@ -413,23 +469,129 @@ mod tests {
             true
         );
     }
-}
 
-fn mem_status_exceeds(config: &MonitorConfig, status: &MemStatusData) -> bool {
-    true
-}
-fn disk_status_exceeds(config: &MonitorConfig, status: &DiskStatusData) -> bool {
-    true
-}
-fn statuses_exceeds(
-    config: &MonitorConfig,
-    cpu_status: &CpuStatusData,
-    mem_status: &MemStatusData,
-    disk_status: &DiskStatusData,
-) -> (bool, bool, bool) {
-    (
-        cpu_status_exceeds(config, cpu_status),
-        mem_status_exceeds(config, mem_status),
-        disk_status_exceeds(config, disk_status),
-    )
+    #[test]
+    fn disk_status_exceeds_test() {
+        let disk1id = "disk1id";
+        let disk2id = "disk2id";
+
+        let disks = vec![
+            HardwareDiskInfo {
+                id: -1,
+                last_check: -1,
+                name: "".to_string(),
+                fs_type: "".to_string(),
+                kind: "".to_string(),
+                mount_point: "".to_string(),
+                is_removable: true,
+                total_space: 280,
+                disk_id: disk1id.to_string(),
+            },
+            HardwareDiskInfo {
+                id: -1,
+                last_check: -1,
+                name: "".to_string(),
+                fs_type: "".to_string(),
+                kind: "".to_string(),
+                mount_point: "".to_string(),
+                is_removable: true,
+                total_space: 120,
+                disk_id: disk2id.to_string(),
+            },
+        ];
+
+        let data = DiskStatusData {
+            frames: vec![
+                DiskFrameStatus {
+                    id: -1,
+                    last_check: -1,
+                    disks_usage: vec![
+                        SingleDiskInfo {
+                            id: -1,
+                            frame_id: -1,
+                            disk_id: disk1id.to_string(),
+                            // usage: 200
+                            available: 80,
+                        },
+                        SingleDiskInfo {
+                            id: -1,
+                            frame_id: -1,
+                            disk_id: disk2id.to_string(),
+                            // usage: 10
+                            available: 110,
+                        },
+                    ],
+                },
+                DiskFrameStatus {
+                    id: -1,
+                    last_check: -1,
+                    disks_usage: vec![
+                        SingleDiskInfo {
+                            id: -1,
+                            frame_id: -1,
+                            disk_id: disk1id.to_string(),
+                            // usage: 60
+                            available: 220,
+                        },
+                        SingleDiskInfo {
+                            id: -1,
+                            frame_id: -1,
+                            disk_id: disk2id.to_string(),
+                            // usage: 90
+                            available: 30,
+                        },
+                    ],
+                },
+            ],
+        };
+
+        // disk1 usage: 200 + 60 / 2 = 260 / 2 = 130 = 46%
+        // disk2 usage: 90 + 10 / 2 = 100 / 2 = 50 = 41%
+
+        assert_eq!(
+            disk_status_exceeds(
+                &MonitorConfig {
+                    id: -1,
+                    device_id: "".to_string(),
+                    updated_at: -1,
+                    cpu_threshold: 0.0,
+                    mem_threshold: 0.0,
+                    disk_threshold: 46.1,
+                },
+                &data,
+                &disks,
+            ),
+            false
+        );
+        assert_eq!(
+            disk_status_exceeds(
+                &MonitorConfig {
+                    id: -1,
+                    device_id: "".to_string(),
+                    updated_at: -1,
+                    cpu_threshold: 0.0,
+                    mem_threshold: 0.0,
+                    disk_threshold: 45.0,
+                },
+                &data,
+                &disks,
+            ),
+            true
+        );
+        assert_eq!(
+            disk_status_exceeds(
+                &MonitorConfig {
+                    id: -1,
+                    device_id: "".to_string(),
+                    updated_at: -1,
+                    cpu_threshold: 0.0,
+                    mem_threshold: 0.0,
+                    disk_threshold: 33.0,
+                },
+                &data,
+                &disks,
+            ),
+            true
+        );
+    }
 }

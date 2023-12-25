@@ -73,10 +73,14 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     }
 }
 
-fn init_logger() {
+fn init_logger(test_assertions: bool) {
     if cfg!(debug_assertions) {
         env_logger::builder()
             .filter_level(log::LevelFilter::Debug)
+            .init();
+    } else if test_assertions {
+        env_logger::builder()
+            .filter_level(log::LevelFilter::Info)
             .init();
     } else {
         env_logger::builder()
@@ -85,9 +89,15 @@ fn init_logger() {
     }
 }
 
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    init_logger(true);
+}
+
 #[tokio::main]
 async fn main() {
-    init_logger();
+    init_logger(false);
 
     let socket_addr = match get_socket_addr() {
         Some(addr) => addr,
