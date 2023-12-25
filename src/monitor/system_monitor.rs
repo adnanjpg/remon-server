@@ -255,6 +255,7 @@ impl SystemMonitor {
                     frames: vec![disk_usage],
                 };
 
+                // TODO(adnanjpg): run on a different thread with a different interval
                 check_thresholds(cpu_status, mem_status, &mem_info, disk_status, &disks_info).await;
 
                 // make it configurable
