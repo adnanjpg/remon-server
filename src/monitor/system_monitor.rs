@@ -21,6 +21,7 @@ use tokio::time;
 
 use super::models::get_cpu_status::CpuStatusData;
 use super::models::get_disk_status::{DiskStatusData, DiskStatusDataTrait};
+use super::models::get_mem_status::MemStatusDataTrait;
 use super::models::MonitorConfig;
 
 // TODO(isaidsari): make it configurable
@@ -329,11 +330,26 @@ fn cpu_status_exceeds(config: &MonitorConfig, status: &CpuStatusData) -> bool {
 }
 
 fn mem_status_exceeds(
-    #[allow(unused_variables)] config: &MonitorConfig,
-    #[allow(unused_variables)] status: &MemStatusData,
-    #[allow(unused_variables)] mems_info: &Vec<HardwareMemInfo>,
+    config: &MonitorConfig,
+    status: &MemStatusData,
+    mems_info: &Vec<HardwareMemInfo>,
 ) -> bool {
-    true
+    let mut totals_map = HashMap::new() as super::models::get_mem_status::MemTotalSpaceMap;
+    mems_info.iter().for_each(|f| {
+        totals_map.insert(f.mem_id.to_string(), f.total_space);
+    });
+
+    let means = status.mems_usage_means_percentages(&totals_map);
+
+    for mean in means {
+        if mean.1 as f64 >= config.mem_threshold {
+            return true;
+        }
+
+        continue;
+    }
+
+    false
 }
 
 fn disk_status_exceeds(
@@ -590,6 +606,122 @@ mod tests {
                 },
                 &data,
                 &disks,
+            ),
+            true
+        );
+    }
+
+    #[test]
+    fn mem_status_exceeds_test() {
+        let mem1id = "mem1id";
+        let mem2id = "mem2id";
+
+        let mems = vec![
+            HardwareMemInfo {
+                id: -1,
+                last_check: -1,
+                total_space: 280,
+                mem_id: mem1id.to_string(),
+            },
+            HardwareMemInfo {
+                id: -1,
+                last_check: -1,
+
+                total_space: 120,
+                mem_id: mem2id.to_string(),
+            },
+        ];
+
+        let data = MemStatusData {
+            frames: vec![
+                MemFrameStatus {
+                    id: -1,
+                    last_check: -1,
+                    mems_usage: vec![
+                        SingleMemInfo {
+                            id: -1,
+                            frame_id: -1,
+                            mem_id: mem1id.to_string(),
+                            // usage: 200
+                            available: 80,
+                        },
+                        SingleMemInfo {
+                            id: -1,
+                            frame_id: -1,
+                            mem_id: mem2id.to_string(),
+                            // usage: 10
+                            available: 110,
+                        },
+                    ],
+                },
+                MemFrameStatus {
+                    id: -1,
+                    last_check: -1,
+                    mems_usage: vec![
+                        SingleMemInfo {
+                            id: -1,
+                            frame_id: -1,
+                            mem_id: mem1id.to_string(),
+                            // usage: 60
+                            available: 220,
+                        },
+                        SingleMemInfo {
+                            id: -1,
+                            frame_id: -1,
+                            mem_id: mem2id.to_string(),
+                            // usage: 90
+                            available: 30,
+                        },
+                    ],
+                },
+            ],
+        };
+
+        // mem1 usage: 200 + 60 / 2 = 260 / 2 = 130 = 46%
+        // mem2 usage: 90 + 10 / 2 = 100 / 2 = 50 = 41%
+
+        assert_eq!(
+            mem_status_exceeds(
+                &MonitorConfig {
+                    id: -1,
+                    device_id: "".to_string(),
+                    updated_at: -1,
+                    cpu_threshold: 0.0,
+                    disk_threshold: 0.0,
+                    mem_threshold: 46.1,
+                },
+                &data,
+                &mems,
+            ),
+            false
+        );
+        assert_eq!(
+            mem_status_exceeds(
+                &MonitorConfig {
+                    id: -1,
+                    device_id: "".to_string(),
+                    updated_at: -1,
+                    cpu_threshold: 0.0,
+                    disk_threshold: 0.0,
+                    mem_threshold: 45.0,
+                },
+                &data,
+                &mems,
+            ),
+            true
+        );
+        assert_eq!(
+            mem_status_exceeds(
+                &MonitorConfig {
+                    id: -1,
+                    device_id: "".to_string(),
+                    updated_at: -1,
+                    cpu_threshold: 0.0,
+                    disk_threshold: 0.0,
+                    mem_threshold: 33.0,
+                },
+                &data,
+                &mems,
             ),
             true
         );
