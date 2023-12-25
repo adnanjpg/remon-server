@@ -9,6 +9,7 @@ use crate::monitor::persistence::{
     fetch_monitor_configs, insert_cpu_status_frame, insert_disk_status_frame, insert_hardware_info,
     insert_mem_status_frame,
 };
+use crate::notification_service;
 use log::{debug, error, warn};
 use std::collections::HashMap;
 use std::vec;
@@ -462,10 +463,11 @@ mod tests {
                 &MonitorConfig {
                     id: -1,
                     device_id: "".to_string(),
+                    fcm_token: "".to_string(),
                     updated_at: -1,
                     disk_threshold: 0.0,
                     mem_threshold: 0.0,
-                    cpu_threshold: 60.0
+                    cpu_threshold: 60.0,
                 },
                 &data
             ),
@@ -476,6 +478,7 @@ mod tests {
                 &MonitorConfig {
                     id: -1,
                     device_id: "".to_string(),
+                    fcm_token: "".to_string(),
                     updated_at: -1,
                     disk_threshold: 0.0,
                     mem_threshold: 0.0,
@@ -570,6 +573,7 @@ mod tests {
                 &MonitorConfig {
                     id: -1,
                     device_id: "".to_string(),
+                    fcm_token: "".to_string(),
                     updated_at: -1,
                     cpu_threshold: 0.0,
                     mem_threshold: 0.0,
@@ -585,6 +589,7 @@ mod tests {
                 &MonitorConfig {
                     id: -1,
                     device_id: "".to_string(),
+                    fcm_token: "".to_string(),
                     updated_at: -1,
                     cpu_threshold: 0.0,
                     mem_threshold: 0.0,
@@ -600,6 +605,7 @@ mod tests {
                 &MonitorConfig {
                     id: -1,
                     device_id: "".to_string(),
+                    fcm_token: "".to_string(),
                     updated_at: -1,
                     cpu_threshold: 0.0,
                     mem_threshold: 0.0,
@@ -686,6 +692,7 @@ mod tests {
                 &MonitorConfig {
                     id: -1,
                     device_id: "".to_string(),
+                    fcm_token: "".to_string(),
                     updated_at: -1,
                     cpu_threshold: 0.0,
                     disk_threshold: 0.0,
@@ -701,6 +708,7 @@ mod tests {
                 &MonitorConfig {
                     id: -1,
                     device_id: "".to_string(),
+                    fcm_token: "".to_string(),
                     updated_at: -1,
                     cpu_threshold: 0.0,
                     disk_threshold: 0.0,
@@ -716,6 +724,7 @@ mod tests {
                 &MonitorConfig {
                     id: -1,
                     device_id: "".to_string(),
+                    fcm_token: "".to_string(),
                     updated_at: -1,
                     cpu_threshold: 0.0,
                     disk_threshold: 0.0,

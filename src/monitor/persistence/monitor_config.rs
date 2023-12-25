@@ -30,6 +30,7 @@ pub async fn insert_or_update_monitor_config(
                 cpu_threshold = ?, 
                 disk_threshold = ?,
                 mem_threshold = ?,
+                fcm_token = ?,
                 updated_at = ?
                 WHERE id = ?",
                 MONITOR_CONFIGS_TABLE_NAME
@@ -39,6 +40,7 @@ pub async fn insert_or_update_monitor_config(
                 .bind(&config.cpu_threshold)
                 .bind(&config.disk_threshold)
                 .bind(&config.mem_threshold)
+                .bind(&config.fcm_token)
                 .bind(&config.updated_at)
                 .bind(value.id)
                 .execute(&mut conn)
@@ -47,8 +49,8 @@ pub async fn insert_or_update_monitor_config(
         None => {
             let statement = format!(
                 "INSERT INTO {} 
-            (device_id, cpu_threshold, mem_threshold, disk_threshold, updated_at) 
-            VALUES (?, ?, ?, ?, ?)
+            (device_id, cpu_threshold, mem_threshold, disk_threshold, fcm_token, updated_at) 
+            VALUES (?, ?, ?, ?, ?, ?)
             ",
                 MONITOR_CONFIGS_TABLE_NAME
             );
@@ -57,6 +59,7 @@ pub async fn insert_or_update_monitor_config(
                 .bind(&config.cpu_threshold)
                 .bind(&config.mem_threshold)
                 .bind(&config.disk_threshold)
+                .bind(&config.fcm_token)
                 .bind(&config.updated_at)
                 .execute(&mut conn)
                 .await?;
@@ -87,6 +90,7 @@ pub(super) async fn create_monitor_configs_table(
         cpu_threshold REAL NOT NULL,
         mem_threshold REAL NOT NULL,
         disk_threshold REAL NOT NULL,
+        fcm_token TEXT NOT NULL,
         updated_at INTEGER NOT NULL
     )",
         MONITOR_CONFIGS_TABLE_NAME

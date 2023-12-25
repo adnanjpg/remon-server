@@ -17,6 +17,7 @@ pub struct UpdateInfoRequest {
     pub cpu_threshold: f64,
     pub mem_threshold: f64,
     pub disk_threshold: f64,
+    pub fcm_token: String,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -26,5 +27,6 @@ pub struct MonitorConfig {
     pub cpu_threshold: f64,
     pub mem_threshold: f64,
     pub disk_threshold: f64,
+    pub fcm_token: String,
     pub updated_at: i64,
 }
