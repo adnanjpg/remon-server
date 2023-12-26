@@ -10,7 +10,6 @@ pub mod get_otp_qr;
 pub mod healthcheck;
 pub mod hello;
 pub mod login;
-pub mod send_test_notification;
 pub mod teapot;
 pub mod update_info;
 pub mod validate_token_test;

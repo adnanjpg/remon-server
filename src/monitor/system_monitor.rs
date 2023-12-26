@@ -9,10 +9,9 @@ use crate::monitor::persistence::{
     fetch_monitor_configs, insert_cpu_status_frame, insert_disk_status_frame, insert_hardware_info,
     insert_mem_status_frame,
 };
-use crate::notification_service;
+use crate::notification_service::{self, NotificationMessage};
 use log::{debug, error, warn};
 use std::collections::HashMap;
-use std::process::exit;
 use std::vec;
 use std::{
     sync::{Arc, Mutex},
@@ -331,17 +330,60 @@ async fn check_thresholds(
 
             warn!("{}", warn_msg);
 
-            // send_notification_to_exceeding_device(&config).await;
+            // TODO(adnanjpg): dont spam the user or fcm
+            // send_notification_to_exceeding_device(&config, cpu, mem, disk).await;
         }
     }
 }
 
-async fn send_notification_to_exceeding_device(config: &MonitorConfig) -> bool {
+#[allow(dead_code)]
+async fn send_notification_to_exceeding_device(
+    config: &MonitorConfig,
+    cpu: Option<f64>,
+    mem: Option<f64>,
+    disk: Option<f64>,
+) -> bool {
+    let title = "IMPORTANT: Your config limits are exceeded";
+
+    let mut exceeding_msgs: Vec<String> = vec![];
+
+    match cpu {
+        Some(cpu) => {
+            exceeding_msgs.push(format!("cpu with {}%", cpu));
+        }
+        None => {}
+    }
+
+    match mem {
+        Some(mem) => {
+            exceeding_msgs.push(format!("mem with {}%", mem));
+        }
+        None => {}
+    }
+
+    match disk {
+        Some(disk) => {
+            exceeding_msgs.push(format!("disk with {}%", disk));
+        }
+        None => {}
+    }
+
+    let result = exceeding_msgs.join(", ");
+    // TODO(adnanjpg): include server ip
+    let body = format!("the thresholds exceeded for: {}", result);
+
+    let message = NotificationMessage {
+        title: title.to_string(),
+        body: body.to_string(),
+    };
     let fcm_token = config.fcm_token.to_string();
-    let not_res = notification_service::send_notification_to_multi(&vec![&fcm_token]).await;
+    let not_res = notification_service::send_notification_to_single(&fcm_token, &message).await;
 
     if let Err(not_res) = not_res {
-        error!("{}", not_res);
+        error!(
+            "Sending exceeding notification resulted with the following error: {}",
+            not_res
+        );
 
         return false;
     }
