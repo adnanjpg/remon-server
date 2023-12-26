@@ -12,6 +12,7 @@ use crate::monitor::persistence::{
 use crate::notification_service;
 use log::{debug, error, warn};
 use std::collections::HashMap;
+use std::process::exit;
 use std::vec;
 use std::{
     sync::{Arc, Mutex},
@@ -295,17 +296,60 @@ async fn check_thresholds(
             disks_info,
         );
 
-        if cpu || mem || disk {
-            warn!(
-                "thresholds exceeded for {:?} : cpu: {}, mem: {}, disk: {}",
-                config, cpu, mem, disk
+        let any_exceeds = cpu.is_some() || mem.is_some() || disk.is_some();
+
+        if any_exceeds {
+            let mut exceeding_msgs: Vec<String> = vec![];
+
+            match cpu {
+                Some(cpu) => {
+                    exceeding_msgs.push(format!("cpu with {}%", cpu));
+                }
+                None => {}
+            }
+
+            match mem {
+                Some(mem) => {
+                    exceeding_msgs.push(format!("mem with {}%", mem));
+                }
+                None => {}
+            }
+
+            match disk {
+                Some(disk) => {
+                    exceeding_msgs.push(format!("disk with {}%", disk));
+                }
+                None => {}
+            }
+
+            let result = exceeding_msgs.join(", ");
+
+            let warn_msg = format!(
+                "the config for device id {} thresholds exceeded for: {}",
+                config.device_id, result
             );
-            // TODO(isaidsari): send notification
+
+            warn!("{}", warn_msg);
+
+            // send_notification_to_exceeding_device(&config).await;
         }
     }
 }
 
-fn cpu_status_exceeds(config: &MonitorConfig, status: &CpuStatusData) -> bool {
+async fn send_notification_to_exceeding_device(config: &MonitorConfig) -> bool {
+    let fcm_token = config.fcm_token.to_string();
+    let not_res = notification_service::send_notification_to_multi(&vec![&fcm_token]).await;
+
+    if let Err(not_res) = not_res {
+        error!("{}", not_res);
+
+        return false;
+    }
+
+    return true;
+}
+
+fn cpu_status_exceeds(config: &MonitorConfig, status: &CpuStatusData) -> StatusExceedsReturn {
     let means = status
         .frames
         .iter()
@@ -322,20 +366,20 @@ fn cpu_status_exceeds(config: &MonitorConfig, status: &CpuStatusData) -> bool {
 
     for mean in means {
         if mean >= config.cpu_threshold {
-            return true;
+            return Some(mean);
         }
 
         continue;
     }
 
-    false
+    None
 }
 
 fn mem_status_exceeds(
     config: &MonitorConfig,
     status: &MemStatusData,
     mems_info: &Vec<HardwareMemInfo>,
-) -> bool {
+) -> StatusExceedsReturn {
     let mut totals_map = HashMap::new() as super::models::get_mem_status::MemTotalSpaceMap;
     mems_info.iter().for_each(|f| {
         totals_map.insert(f.mem_id.to_string(), f.total_space);
@@ -344,21 +388,22 @@ fn mem_status_exceeds(
     let means = status.mems_usage_means_percentages(&totals_map);
 
     for mean in means {
-        if mean.1 as f64 >= config.mem_threshold {
-            return true;
+        let vall = mean.1 as f64;
+        if vall >= config.mem_threshold {
+            return Some(vall);
         }
 
         continue;
     }
 
-    false
+    None
 }
 
 fn disk_status_exceeds(
     config: &MonitorConfig,
     status: &DiskStatusData,
     disks_info: &Vec<HardwareDiskInfo>,
-) -> bool {
+) -> StatusExceedsReturn {
     let mut totals_map = HashMap::new() as super::models::get_disk_status::DiskTotalSpaceMap;
     disks_info.iter().for_each(|f| {
         totals_map.insert(f.disk_id.to_string(), f.total_space);
@@ -367,15 +412,23 @@ fn disk_status_exceeds(
     let means = status.disks_usage_means_percentages(&totals_map);
 
     for mean in means {
-        if mean.1 as f64 >= config.disk_threshold {
-            return true;
+        let vall = mean.1 as f64;
+        if vall >= config.disk_threshold {
+            return Some(vall);
         }
 
         continue;
     }
 
-    false
+    None
 }
+
+type StatusExceedsReturn = Option<
+    // the mean usage percentage
+    // if it not exceeds, will return None
+    f64,
+>;
+
 fn statuses_exceeds(
     config: &MonitorConfig,
     cpu_status: &CpuStatusData,
@@ -383,7 +436,11 @@ fn statuses_exceeds(
     mems_info: &Vec<HardwareMemInfo>,
     disk_status: &DiskStatusData,
     disks_info: &Vec<HardwareDiskInfo>,
-) -> (bool, bool, bool) {
+) -> (
+    StatusExceedsReturn,
+    StatusExceedsReturn,
+    StatusExceedsReturn,
+) {
     (
         cpu_status_exceeds(config, cpu_status),
         mem_status_exceeds(config, mem_status, mems_info),
@@ -399,7 +456,7 @@ mod tests {
     fn cpu_status_exceeds_test() {
         let data = CpuStatusData {
             frames: vec![
-                // 20
+                // usage 20%
                 CpuFrameStatus {
                     id: -1,
                     last_check: -1,
@@ -427,7 +484,7 @@ mod tests {
                         },
                     ],
                 },
-                // 50
+                // usage 50%
                 CpuFrameStatus {
                     id: -1,
                     last_check: -1,
@@ -471,7 +528,7 @@ mod tests {
                 },
                 &data
             ),
-            false
+            None,
         );
         assert_eq!(
             cpu_status_exceeds(
@@ -486,7 +543,7 @@ mod tests {
                 },
                 &data
             ),
-            true
+            Some(50.0),
         );
     }
 
@@ -582,7 +639,7 @@ mod tests {
                 &data,
                 &disks,
             ),
-            false
+            None,
         );
         assert_eq!(
             disk_status_exceeds(
@@ -598,7 +655,7 @@ mod tests {
                 &data,
                 &disks,
             ),
-            true
+            Some(46.0),
         );
         assert_eq!(
             disk_status_exceeds(
@@ -614,7 +671,7 @@ mod tests {
                 &data,
                 &disks,
             ),
-            true
+            Some(46.0),
         );
     }
 
@@ -701,7 +758,7 @@ mod tests {
                 &data,
                 &mems,
             ),
-            false
+            None,
         );
         assert_eq!(
             mem_status_exceeds(
@@ -717,7 +774,7 @@ mod tests {
                 &data,
                 &mems,
             ),
-            true
+            Some(46.0),
         );
         assert_eq!(
             mem_status_exceeds(
@@ -733,7 +790,7 @@ mod tests {
                 &data,
                 &mems,
             ),
-            true
+            Some(46.0),
         );
     }
 }
