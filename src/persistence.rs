@@ -2,6 +2,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use sqlx::{ConnectOptions, SqliteConnection};
 use std::str::FromStr;
 
+pub mod notification_logs;
+
 const SQLITE_DBS_FOLDER_PATH: &str = "./db";
 const SQLITE_DB_PATH: &str = "./db/monitor.sqlite3";
 const SQLITE_DB_CONN_STR: &str = "sqlite:./db/monitor.sqlite3";
@@ -39,6 +41,8 @@ pub async fn init_db() -> Result<(), sqlx::Error> {
     let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
 
     crate::monitor::persistence::init_db(&mut conn).await?;
+
+    notification_logs::create_notification_logs_table(&mut conn).await?;
 
     Ok(())
 }
