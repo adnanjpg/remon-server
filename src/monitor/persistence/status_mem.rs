@@ -2,13 +2,13 @@ use sqlx::SqliteConnection;
 
 use crate::monitor::models::get_mem_status::{MemFrameStatus, SingleMemInfo};
 
-use super::{get_sql_connection, FetchId, SQLITE_DB_CONN_STR};
+use super::{get_default_sql_connection, FetchId};
 
 const MEM_STATUS_FRAME_TABLE_NAME: &str = "mem_status_frame";
 const MEM_STATUS_FRAME_SINGLE_TABLE_NAME: &str = "mem_status_frame_single";
 
 pub async fn insert_mem_status_frame(status: &MemFrameStatus) -> Result<(), sqlx::Error> {
-    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+    let mut conn = get_default_sql_connection().await?;
 
     let statement = format!(
         "INSERT INTO {} 
@@ -36,7 +36,7 @@ pub async fn insert_mem_status_frame(status: &MemFrameStatus) -> Result<(), sqlx
 }
 
 async fn insert_mem_status_frame_single(status: &SingleMemInfo) -> Result<(), sqlx::Error> {
-    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+    let mut conn = get_default_sql_connection().await?;
 
     let statement = format!(
         "INSERT INTO {} (frame_id, mem_id, available) VALUES (?, ?, ?)",
@@ -56,7 +56,7 @@ pub async fn get_mem_status_between_dates(
     start_date: i64,
     end_date: i64,
 ) -> Result<Vec<MemFrameStatus>, sqlx::Error> {
-    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+    let mut conn = get_default_sql_connection().await?;
 
     let frames_statement = format!(
         "SELECT id, last_check FROM {} WHERE last_check BETWEEN ? AND ?",

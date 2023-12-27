@@ -2,12 +2,12 @@ use sqlx::SqliteConnection;
 
 use crate::monitor::models::get_hardware_info::HardwareDiskInfo;
 
-use super::{get_sql_connection, FetchId, SQLITE_DB_CONN_STR};
+use super::{get_default_sql_connection, FetchId};
 
 const HARDWARE_DISK_INFOS_TABLE_NAME: &str = "disk_infos";
 
 pub(super) async fn insert_hardware_disk_info(info: &HardwareDiskInfo) -> Result<(), sqlx::Error> {
-    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+    let mut conn = get_default_sql_connection().await?;
 
     // check if a record with the same cpu_id already exists
     let exists_record_check = format!(
@@ -60,7 +60,7 @@ pub(super) async fn insert_hardware_disk_info(info: &HardwareDiskInfo) -> Result
 
 pub(super) async fn fetch_latest_hardware_disks_info() -> Result<Vec<HardwareDiskInfo>, sqlx::Error>
 {
-    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+    let mut conn = get_default_sql_connection().await?;
 
     // get all with distinct disk_id
     let statement = format!(

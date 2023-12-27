@@ -9,14 +9,6 @@ pub mod persistence;
 pub mod system_monitor;
 
 pub async fn init() -> Result<(), ()> {
-    match persistence::init_db().await {
-        Ok(val) => val,
-        Err(e) => {
-            debug!("Database initialization failed: {:?}", e);
-            return Err(());
-        }
-    };
-
     let monitor = system_monitor::SystemMonitor::new();
     monitor.start_monitoring().await;
     debug!("System monitor started");
