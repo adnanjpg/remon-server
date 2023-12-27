@@ -1,4 +1,5 @@
 use crate::monitor::models::get_cpu_status::{CpuCoreInfo, CpuFrameStatus};
+use log::{debug, error};
 
 use crate::monitor::models::get_disk_status::{DiskFrameStatus, SingleDiskInfo};
 use crate::monitor::models::get_hardware_info::{
@@ -9,7 +10,6 @@ use crate::monitor::persistence::{
     insert_cpu_status_frame, insert_disk_status_frame, insert_hardware_info,
     insert_mem_status_frame,
 };
-use log::{debug, error};
 use std::vec;
 use std::{
     sync::{Arc, Mutex},
@@ -18,8 +18,7 @@ use std::{
 use sysinfo::{CpuExt, CpuRefreshKind, DiskExt, RefreshKind, SystemExt};
 use tokio::time;
 
-use super::models::get_cpu_status::CpuStatusData;
-use super::models::get_disk_status::DiskStatusData;
+use super::models::{get_cpu_status::CpuStatusData, get_disk_status::DiskStatusData};
 
 use super::config_exceeds::check_thresholds;
 
@@ -101,6 +100,8 @@ impl SystemMonitor {
         }
 
         let should_exit_clone = Arc::clone(&self.should_exit);
+        // rust doesn't allow us to move self into the closure, so we have to clone it
+        let check_interval = self.check_interval;
 
         tokio::spawn(async move {
             let mut system = sysinfo::System::new();
@@ -257,8 +258,13 @@ impl SystemMonitor {
                 // TODO(adnanjpg): run on a different thread with a different interval
                 check_thresholds(cpu_status, mem_status, &mem_info, disk_status, &disks_info).await;
 
-                // make it configurable
-                let duration = get_check_interval() - elapsed_time;
+                let duration = match check_interval.checked_sub(elapsed_time) {
+                    Some(duration) => duration,
+                    None => {
+                        error!("check interval is less than elapsed time");
+                        Duration::default()
+                    }
+                };
                 time::sleep(duration).await;
             }
         });
