@@ -59,7 +59,6 @@ pub async fn update_info(req: Request<Body>) -> Result<Response<Body>, Infallibl
         cpu_threshold: update_info.cpu_threshold,
         disk_threshold: update_info.disk_threshold,
         mem_threshold: update_info.mem_threshold,
-        fcm_token: update_info.fcm_token,
         updated_at: chrono::Utc::now().timestamp_millis(),
     };
 

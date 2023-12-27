@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HardwareCpuInfo {
     pub id: i64,
     // the id of the cpu chip, consists from key info like vendor_id, brand, etc.
@@ -10,7 +10,7 @@ pub struct HardwareCpuInfo {
     pub brand: String,
     pub last_check: i64,
 }
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HardwareDiskInfo {
     pub id: i64,
     // the id of the disk, consists from key info like name, fs, etc.
@@ -24,7 +24,7 @@ pub struct HardwareDiskInfo {
     pub last_check: i64,
 }
 
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct HardwareMemInfo {
     pub id: i64,
     pub mem_id: String,

@@ -10,6 +10,7 @@ pub mod get_otp_qr;
 pub mod healthcheck;
 pub mod hello;
 pub mod login;
+pub mod send_test_notification;
 pub mod teapot;
 pub mod update_info;
 pub mod validate_token_test;
@@ -17,7 +18,6 @@ pub mod validate_token_test;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
 pub enum ResponseBody {
     Success(bool),
     Error(String),

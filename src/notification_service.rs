@@ -1,5 +1,4 @@
 use gauth::serv_account::ServiceAccount;
-use serde_derive::{Deserialize, Serialize};
 use serde_json::json;
 
 // reads the service key file name from the environment
@@ -76,17 +75,10 @@ async fn get_auth_token() -> Result<String, String> {
     Ok(tkn)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct NotificationMessage {
-    pub title: String,
-    pub body: String,
-}
-
 async fn send_notification_to(
     device_id: &str,
     auth_token: &str,
     project_id: &str,
-    message: &NotificationMessage,
 ) -> Result<bool, String> {
     // https://firebase.google.com/docs/reference/fcm/rest/v1/projects.messages/send
     let url = format!(
@@ -98,8 +90,8 @@ async fn send_notification_to(
         "message": {
             "token": device_id,
             "notification": {
-                "title": message.title,
-                "body": message.body,
+                "title": format!("test title {}", chrono::Utc::now().timestamp()),
+                "body": format!("test body {}", chrono::Utc::now().timestamp()),
             }
         }
     });
@@ -127,10 +119,7 @@ async fn send_notification_to(
     }
 }
 
-pub async fn send_notification_to_multi(
-    device_ids: &Vec<&str>,
-    message: &NotificationMessage,
-) -> Result<bool, String> {
+pub async fn send_notification_to_multi(device_ids: &Vec<&str>) -> Result<bool, String> {
     let project_id = match get_project_id() {
         Ok(project_id) => project_id,
         Err(err) => return Err(err),
@@ -144,7 +133,7 @@ pub async fn send_notification_to_multi(
     let mut results = Vec::new();
 
     for device_id in device_ids {
-        let res = send_notification_to(device_id, &tkn, &project_id, &message).await;
+        let res = send_notification_to(device_id, &tkn, &project_id).await;
 
         match res {
             Ok(res) => results.push(res),
@@ -155,9 +144,7 @@ pub async fn send_notification_to_multi(
     Ok(results.iter().all(|&x| x))
 }
 
-pub async fn send_notification_to_single(
-    device_id: &str,
-    message: &NotificationMessage,
-) -> Result<bool, String> {
-    send_notification_to_multi(&vec![device_id], &message).await
+#[allow(dead_code)]
+pub async fn send_notification_to_single(device_id: &str) -> Result<bool, String> {
+    send_notification_to_multi(&vec![device_id]).await
 }
