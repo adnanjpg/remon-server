@@ -1,39 +1,33 @@
-use log::{debug, error, warn, info};
+use crate::monitor::models::get_cpu_status::{CpuCoreInfo, CpuFrameStatus};
+use log::{debug, error};
+
+use crate::monitor::models::get_disk_status::{DiskFrameStatus, SingleDiskInfo};
+use crate::monitor::models::get_hardware_info::{
+    HardwareCpuInfo, HardwareDiskInfo, HardwareInfo, HardwareMemInfo,
+};
+use crate::monitor::models::get_mem_status::{MemFrameStatus, MemStatusData, SingleMemInfo};
+use crate::monitor::persistence::{
+    insert_cpu_status_frame, insert_disk_status_frame, insert_hardware_info,
+    insert_mem_status_frame,
+};
+use std::vec;
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
-    vec
 };
 use sysinfo::{CpuExt, CpuRefreshKind, DiskExt, RefreshKind, SystemExt};
 use tokio::time;
 
-use super::models::{
-    get_cpu_status::CpuStatusData,
-    get_disk_status::DiskStatusData,
-    MonitorConfig
-};
+use super::models::{get_cpu_status::CpuStatusData, get_disk_status::DiskStatusData};
 
-use crate::monitor::{
-    models::{
-        get_cpu_status::{CpuCoreInfo, CpuFrameStatus, CpuFrameStatusTrait},
-        get_disk_status::{DiskFrameStatus, SingleDiskInfo},
-        get_hardware_info::{
-            HardwareCpuInfo, HardwareDiskInfo, HardwareInfo, HardwareMemInfo,
-        },
-        get_mem_status::{MemFrameStatus, MemStatusData, SingleMemInfo}
-    },
-    persistence::{
-        fetch_monitor_configs, insert_cpu_status_frame, insert_disk_status_frame, insert_hardware_info,
-        insert_mem_status_frame,
-    }
-};
+use super::config_exceeds::check_thresholds;
 
 // TODO(isaidsari): make it configurable
 pub fn get_check_interval() -> Duration {
     Duration::from_millis(10000)
 }
 
-pub struct SystemMonitor<> {
+pub struct SystemMonitor {
     should_exit: Arc<Mutex<bool>>,
     check_interval: Duration,
 }
@@ -228,8 +222,8 @@ impl SystemMonitor {
 
                 let hardware_info = HardwareInfo {
                     cpu_info,
-                    disks_info,
-                    mem_info,
+                    disks_info: disks_info.clone(),
+                    mem_info: mem_info.clone(),
                 };
 
                 let elapsed_time = start_time.elapsed();
@@ -251,18 +245,18 @@ impl SystemMonitor {
                     error!("failed to insert mem status: {}", e);
                 }
 
-                check_thresholds(
-                    &CpuStatusData {
-                        frames: vec![cpu_usage],
-                    },
-                    &MemStatusData {
-                        frames: vec![mem_usage],
-                    },
-                    &DiskStatusData {
-                        frames: vec![disk_usage],
-                    },
-                )
-                .await;
+                let cpu_status = &CpuStatusData {
+                    frames: vec![cpu_usage],
+                };
+                let mem_status = &MemStatusData {
+                    frames: vec![mem_usage],
+                };
+                let disk_status = &DiskStatusData {
+                    frames: vec![disk_usage],
+                };
+
+                // TODO(adnanjpg): run on a different thread with a different interval
+                check_thresholds(cpu_status, mem_status, &mem_info, disk_status, &disks_info).await;
 
                 let duration = match check_interval.checked_sub(elapsed_time) {
                     Some(duration) => duration,
@@ -276,173 +270,9 @@ impl SystemMonitor {
         });
     }
 
+    // TODO(isaidsari): graceful shutdown
+    #[allow(dead_code)]
     pub fn stop_monitoring(&self) {
         *self.should_exit.lock().unwrap() = true;
     }
-}
-
-async fn check_thresholds(
-    cpu_status: &CpuStatusData,
-    mem_status: &MemStatusData,
-    disk_status: &DiskStatusData,
-) {
-    let configs = fetch_monitor_configs().await.unwrap_or_else(|e| {
-        error!("failed to fetch monitor configs: {}", e);
-        vec![]
-    });
-
-    for config in configs {
-        let (cpu, mem, disk) = statuses_exceeds(&config, cpu_status, mem_status, disk_status);
-
-        if cpu || mem || disk {
-            warn!(
-                "thresholds exceeded for {:?} : cpu: {}, mem: {}, disk: {}",
-                config, cpu, mem, disk
-            );
-            // TODO(isaidsari): send notification
-        }
-    }
-}
-
-fn cpu_status_exceeds(config: &MonitorConfig, status: &CpuStatusData) -> bool {
-    let means = status
-        .frames
-        .iter()
-        .map(|f| {
-            let val = f.cores_usage_mean();
-
-            if let Some(val) = val {
-                val
-            } else {
-                -1.0
-            }
-        })
-        .filter(|&val| val != -1.0);
-
-    for mean in means {
-        if mean >= config.cpu_threshold {
-            return true;
-        }
-
-        continue;
-    }
-
-    false
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cpu_status_exceeds_test() {
-        let data = CpuStatusData {
-            frames: vec![
-                // 20
-                CpuFrameStatus {
-                    id: -1,
-                    last_check: -1,
-                    cores_usage: vec![
-                        CpuCoreInfo {
-                            id: -1,
-                            cpu_id: "".to_string(),
-                            frame_id: -1,
-                            freq: -1,
-                            usage: 30,
-                        },
-                        CpuCoreInfo {
-                            id: -1,
-                            cpu_id: "".to_string(),
-                            frame_id: -1,
-                            freq: -1,
-                            usage: 20,
-                        },
-                        CpuCoreInfo {
-                            id: -1,
-                            cpu_id: "".to_string(),
-                            frame_id: -1,
-                            freq: -1,
-                            usage: 10,
-                        },
-                    ],
-                },
-                // 50
-                CpuFrameStatus {
-                    id: -1,
-                    last_check: -1,
-                    cores_usage: vec![
-                        CpuCoreInfo {
-                            id: -1,
-                            cpu_id: "".to_string(),
-                            frame_id: -1,
-                            freq: -1,
-                            usage: 40,
-                        },
-                        CpuCoreInfo {
-                            id: -1,
-                            cpu_id: "".to_string(),
-                            frame_id: -1,
-                            freq: -1,
-                            usage: 45,
-                        },
-                        CpuCoreInfo {
-                            id: -1,
-                            cpu_id: "".to_string(),
-                            frame_id: -1,
-                            freq: -1,
-                            usage: 65,
-                        },
-                    ],
-                },
-            ],
-        };
-
-        assert_eq!(
-            cpu_status_exceeds(
-                &MonitorConfig {
-                    id: -1,
-                    device_id: "".to_string(),
-                    updated_at: -1,
-                    disk_threshold: 0.0,
-                    mem_threshold: 0.0,
-                    cpu_threshold: 60.0
-                },
-                &data
-            ),
-            false
-        );
-        assert_eq!(
-            cpu_status_exceeds(
-                &MonitorConfig {
-                    id: -1,
-                    device_id: "".to_string(),
-                    updated_at: -1,
-                    disk_threshold: 0.0,
-                    mem_threshold: 0.0,
-                    cpu_threshold: 30.0
-                },
-                &data
-            ),
-            true
-        );
-    }
-}
-
-fn mem_status_exceeds(config: &MonitorConfig, status: &MemStatusData) -> bool {
-    true
-}
-fn disk_status_exceeds(config: &MonitorConfig, status: &DiskStatusData) -> bool {
-    true
-}
-fn statuses_exceeds(
-    config: &MonitorConfig,
-    cpu_status: &CpuStatusData,
-    mem_status: &MemStatusData,
-    disk_status: &DiskStatusData,
-) -> (bool, bool, bool) {
-    (
-        cpu_status_exceeds(config, cpu_status),
-        mem_status_exceeds(config, mem_status),
-        disk_status_exceeds(config, disk_status),
-    )
 }

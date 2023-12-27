@@ -1,5 +1,5 @@
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{server, Body, Method, Request, Response, Server};
+use hyper::{Body, Method, Request, Response, Server};
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -63,9 +63,6 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
         (&Method::GET, "/get-cpu-status") => api::get_cpu_status::get_cpu_status(req).await,
         (&Method::GET, "/get-mem-status") => api::get_mem_status::get_mem_status(req).await,
         (&Method::GET, "/get-disk-status") => api::get_disk_status::get_disk_status(req).await,
-        (&Method::POST, "/send-test-notification") => {
-            api::send_test_notification::send_test_notification(req).await
-        }
         (&Method::GET, "/validate-token-test") => {
             api::validate_token_test::validate_token_test(req).await
         }
@@ -73,10 +70,14 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     }
 }
 
-fn init_logger() {
+fn init_logger(test_assertions: bool) {
     if cfg!(debug_assertions) {
         env_logger::builder()
             .filter_level(log::LevelFilter::Debug)
+            .init();
+    } else if test_assertions {
+        env_logger::builder()
+            .filter_level(log::LevelFilter::Info)
             .init();
     } else {
         env_logger::builder()
@@ -92,9 +93,16 @@ async fn shutdown_signal() {
         .expect("failed to install CTRL+C signal handler");
 }
 
+// https://stackoverflow.com/a/63442117/12555423
+#[cfg(test)]
+#[ctor::ctor]
+fn init_tests() {
+    init_logger(true);
+}
+
 #[tokio::main]
 async fn main() {
-    init_logger();
+    init_logger(false);
 
     let socket_addr = match get_socket_addr() {
         Some(addr) => addr,

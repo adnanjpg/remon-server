@@ -3,6 +3,7 @@ use sysinfo::{CpuExt, System, SystemExt};
 
 use self::models::ServerDescription;
 
+mod config_exceeds;
 pub mod models;
 pub mod persistence;
 pub mod system_monitor;
