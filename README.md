@@ -23,8 +23,13 @@ The mobile app provides a user-friendly interface for configuring what events tr
 
 5. Open Source: This project is open source, so you can customize and extend it to meet your specific needs.
 
+## Linux Setup
+to run on linux, you should have the following packages installed
+1. pkg-config: `sudo apt install pkg-config`
+2. libssl-dev: `sudo apt install libssl-dev`
+
 ## Setup
 1. create a copy of the `.env.example` file in the root directory of the project, and name it `.env`
 2. follow the instructions in the [Firebase Documentation](https://firebase.google.com/docs/cloud-messaging/auth-server#provide-credentials-manually) to create a service account. after you create a service account, and download the json file
 3. set the value of `GOOGLE_APPLICATION_CREDENTIALS` in the `.env` file to the path of the json file you downloaded, as shown in the `.env.example` file
-   
+
