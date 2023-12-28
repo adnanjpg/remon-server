@@ -162,6 +162,10 @@ async fn send_notification_to_exceeding_device(
         body: body.to_string(),
     };
     let fcm_token = config.fcm_token.to_string();
+
+    // TODO(adnanjpg): currently the notifications are sent silently
+    // this has to have a higher priority
+    // add a priority field to the send_notification_to_single function
     let not_res = notification_service::send_notification_to_single(
         &config.device_id,
         &fcm_token,
