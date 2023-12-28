@@ -1,4 +1,3 @@
-use log::debug;
 use sqlx::SqliteConnection;
 
 use super::get_default_sql_connection;
