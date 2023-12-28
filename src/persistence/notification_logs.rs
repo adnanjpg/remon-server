@@ -1,9 +1,10 @@
+use log::debug;
 use sqlx::SqliteConnection;
 
 use super::get_default_sql_connection;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Serialize, Deserialize, sqlx::Type, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum NotificationType {
     StatusLimitsExceeding,
@@ -14,24 +15,30 @@ pub struct NotificationLog {
     pub id: i64,
     pub notification_type: NotificationType,
     pub device_id: String,
+    pub fcm_token: String,
+    pub title: String,
+    pub body: String,
     pub sent_at: i64,
 }
 
-const NOTIFICATION_LOGS_TABLE_NAME: &str = "cpu_infos";
+const NOTIFICATION_LOGS_TABLE_NAME: &str = "notification_logs";
 
-pub(super) async fn insert_notification_log(log: &NotificationLog) -> Result<(), sqlx::Error> {
+pub async fn insert_notification_log(log: &NotificationLog) -> Result<(), sqlx::Error> {
     let mut conn = get_default_sql_connection().await?;
 
     let statement = format!(
         "INSERT INTO {} 
-        (notification_type, device_id, sent_at) 
-        VALUES (?, ?, ?)",
+        (notification_type, device_id, fcm_token, title, body, sent_at) 
+        VALUES (?, ?, ?, ?, ?, ?)",
         NOTIFICATION_LOGS_TABLE_NAME
     );
 
     sqlx::query(&statement)
         .bind(&log.notification_type)
         .bind(&log.device_id)
+        .bind(&log.fcm_token)
+        .bind(&log.title)
+        .bind(&log.body)
         .bind(&log.sent_at)
         .execute(&mut conn)
         .await?;
@@ -39,10 +46,10 @@ pub(super) async fn insert_notification_log(log: &NotificationLog) -> Result<(),
     Ok(())
 }
 
-pub(super) async fn fetch_latest_for_device_id_and_type(
+pub async fn fetch_single_latest_for_device_id_and_type(
     device_id: &str,
     notification_type: &NotificationType,
-) -> Result<Vec<NotificationLog>, sqlx::Error> {
+) -> Result<Option<NotificationLog>, sqlx::Error> {
     let mut conn = get_default_sql_connection().await?;
 
     let statement = format!(
@@ -51,13 +58,14 @@ pub(super) async fn fetch_latest_for_device_id_and_type(
         FROM {}
         WHERE device_id = ?
         AND notification_type = ?
+        ORDER BY sent_at DESC
         ",
         NOTIFICATION_LOGS_TABLE_NAME
     );
     let info = sqlx::query_as::<_, NotificationLog>(&statement)
         .bind(&device_id)
         .bind(&notification_type)
-        .fetch_all(&mut conn)
+        .fetch_optional(&mut conn)
         .await?;
 
     Ok(info)
@@ -71,6 +79,9 @@ pub(super) async fn create_notification_logs_table(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         notification_type INTEGER NOT NULL,
         device_id TEXT NOT NULL,
+        fcm_token TEXT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
         sent_at INTEGER NOT NULL
     )",
         NOTIFICATION_LOGS_TABLE_NAME

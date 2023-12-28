@@ -4,7 +4,9 @@ use crate::monitor::models::get_hardware_info::{HardwareDiskInfo, HardwareMemInf
 use crate::monitor::models::get_mem_status::MemStatusData;
 use crate::monitor::persistence::fetch_monitor_configs;
 use crate::notification_service::{self, NotificationMessage};
-use log::{error, warn};
+use crate::persistence::notification_logs::{self, NotificationType};
+use chrono::Duration;
+use log::{error, info, warn};
 use std::collections::HashMap;
 use std::vec;
 
@@ -70,19 +72,62 @@ pub(super) async fn check_thresholds(
 
             warn!("{}", warn_msg);
 
-            // TODO(adnanjpg): dont spam the user or fcm
-            // send_notification_to_exceeding_device(&config, cpu, mem, disk).await;
+            send_notification_to_exceeding_device(&config, cpu, mem, disk).await;
         }
     }
 }
 
-#[allow(dead_code)]
+// TODO(adnanjpg): make it configurable
+fn get_send_notification_interval() -> Duration {
+    Duration::seconds(5 * 60)
+}
+
+async fn should_send_notification_to_exceeding_device(config: &MonitorConfig) -> bool {
+    let latest_record: Result<Option<notification_logs::NotificationLog>, sqlx::Error> =
+        notification_logs::fetch_single_latest_for_device_id_and_type(
+            &config.device_id,
+            &NotificationType::StatusLimitsExceeding,
+        )
+        .await;
+
+    let should_send = match latest_record {
+        Ok(val) => match val {
+            Some(v) => {
+                let now_millis = chrono::Utc::now().timestamp_millis();
+
+                let mss = get_send_notification_interval().num_milliseconds();
+                let earliest_date_to_send = v.sent_at + mss;
+
+                let res = earliest_date_to_send <= now_millis;
+
+                res
+            }
+            None => true,
+        },
+        Err(e) => {
+            error!("{}", e);
+
+            return false;
+        }
+    };
+
+    should_send
+}
+
 async fn send_notification_to_exceeding_device(
     config: &MonitorConfig,
     cpu: Option<f64>,
     mem: Option<f64>,
     disk: Option<f64>,
 ) -> bool {
+    let should_send = should_send_notification_to_exceeding_device(&config).await;
+
+    if !should_send {
+        warn!("did not send notification to exceeding device because a notification has already been sent in the last {} seconds", get_send_notification_interval().num_seconds());
+
+        return false;
+    }
+
     let title = "IMPORTANT: Your config limits are exceeded";
 
     let mut exceeding_msgs: Vec<String> = vec![];
@@ -117,7 +162,13 @@ async fn send_notification_to_exceeding_device(
         body: body.to_string(),
     };
     let fcm_token = config.fcm_token.to_string();
-    let not_res = notification_service::send_notification_to_single(&fcm_token, &message).await;
+    let not_res = notification_service::send_notification_to_single(
+        &config.device_id,
+        &fcm_token,
+        &message,
+        &NotificationType::StatusLimitsExceeding,
+    )
+    .await;
 
     if let Err(not_res) = not_res {
         error!(
@@ -127,6 +178,8 @@ async fn send_notification_to_exceeding_device(
 
         return false;
     }
+
+    info!("sent exceeding notifications successfully");
 
     return true;
 }

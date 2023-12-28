@@ -1,6 +1,11 @@
 use gauth::serv_account::ServiceAccount;
+use log::error;
 use serde_derive::{Deserialize, Serialize};
 use serde_json::json;
+
+use crate::persistence::notification_logs::{
+    insert_notification_log, NotificationLog, NotificationType,
+};
 
 // reads the service key file name from the environment
 // variable GOOGLE_APPLICATION_CREDENTIALS
@@ -84,9 +89,11 @@ pub struct NotificationMessage {
 
 async fn send_notification_to(
     device_id: &str,
+    fcm_token: &str,
     auth_token: &str,
     project_id: &str,
     message: &NotificationMessage,
+    notification_type: &NotificationType,
 ) -> Result<bool, String> {
     // https://firebase.google.com/docs/reference/fcm/rest/v1/projects.messages/send
     let url = format!(
@@ -96,7 +103,7 @@ async fn send_notification_to(
 
     let body = json!({
         "message": {
-            "token": device_id,
+            "token": fcm_token,
             "notification": {
                 "title": message.title,
                 "body": message.body,
@@ -118,6 +125,15 @@ async fn send_notification_to(
             let stat = res.status();
             let suc = stat.is_success();
 
+            let sent_at = chrono::Utc::now().timestamp_millis();
+            let add_res =
+                add_notification_log(device_id, fcm_token, message, notification_type, &sent_at)
+                    .await;
+
+            if !add_res {
+                return Err("failed to insert notifiaction log".to_string());
+            };
+
             Ok(suc)
         }
         Err(err) => {
@@ -127,9 +143,39 @@ async fn send_notification_to(
     }
 }
 
-pub async fn send_notification_to_multi(
-    device_ids: &Vec<&str>,
+pub async fn add_notification_log(
+    device_id: &str,
+    fcm_token: &str,
     message: &NotificationMessage,
+    notification_type: &NotificationType,
+    sent_at: &i64,
+) -> bool {
+    let not_log = NotificationLog {
+        id: -1,
+        notification_type: notification_type.to_owned(),
+        device_id: device_id.to_string(),
+        fcm_token: fcm_token.to_string(),
+        sent_at: sent_at.to_owned(),
+        title: message.title.to_string(),
+        body: message.body.to_string(),
+    };
+
+    let ret = match insert_notification_log(&not_log).await {
+        Ok(_) => true,
+        Err(error) => {
+            error!("{}", error);
+
+            return false;
+        }
+    };
+
+    ret
+}
+
+pub async fn send_notification_to_multi(
+    device_ids_and_tokens: &Vec<(&str, &str)>,
+    message: &NotificationMessage,
+    notification_type: &NotificationType,
 ) -> Result<bool, String> {
     let project_id = match get_project_id() {
         Ok(project_id) => project_id,
@@ -143,8 +189,10 @@ pub async fn send_notification_to_multi(
 
     let mut results = Vec::new();
 
-    for device_id in device_ids {
-        let res = send_notification_to(device_id, &tkn, &project_id, &message).await;
+    for dev in device_ids_and_tokens {
+        let res =
+            send_notification_to(dev.0, dev.1, &tkn, &project_id, &message, notification_type)
+                .await;
 
         match res {
             Ok(res) => results.push(res),
@@ -157,7 +205,9 @@ pub async fn send_notification_to_multi(
 
 pub async fn send_notification_to_single(
     device_id: &str,
+    fcm_token: &str,
     message: &NotificationMessage,
+    notification_type: &NotificationType,
 ) -> Result<bool, String> {
-    send_notification_to_multi(&vec![device_id], &message).await
+    send_notification_to_multi(&vec![(device_id, fcm_token)], &message, notification_type).await
 }
