@@ -169,16 +169,27 @@ fn mem_status_exceeds(
 
     let means = status.mems_usage_means_percentages(&totals_map);
 
+    // in some cases, more than one mem can exceed the threshold
+    // so we want to return the exceed with the biggest value,
+    // so we can let the user set their threat level right
+    let mut biggest_val: StatusExceedsReturn = None;
+
     for mean in means {
         let vall = mean.1 as f64;
         if vall >= config.mem_threshold {
-            return Some(vall);
+            if let Some(biggest_val) = biggest_val {
+                if biggest_val > vall {
+                    continue;
+                }
+            }
+
+            biggest_val = Some(vall);
         }
 
         continue;
     }
 
-    None
+    biggest_val
 }
 
 fn disk_status_exceeds(
@@ -193,16 +204,27 @@ fn disk_status_exceeds(
 
     let means = status.disks_usage_means_percentages(&totals_map);
 
+    // in some cases, more than one disk can exceed the threshold
+    // so we want to return the exceed with the biggest value,
+    // so we can let the user set their threat level right
+    let mut biggest_val: StatusExceedsReturn = None;
+
     for mean in means {
         let vall = mean.1 as f64;
         if vall >= config.disk_threshold {
-            return Some(vall);
+            if let Some(biggest_val) = biggest_val {
+                if biggest_val > vall {
+                    continue;
+                }
+            }
+
+            biggest_val = Some(vall);
         }
 
         continue;
     }
 
-    None
+    biggest_val
 }
 
 type StatusExceedsReturn = Option<
