@@ -6,6 +6,7 @@ use std::net::SocketAddr;
 
 mod api;
 mod notification_service;
+pub mod persistence;
 
 use env_logger;
 use log::{error, info};
@@ -108,6 +109,14 @@ async fn main() {
         Some(addr) => addr,
         None => {
             error!("Failed to get local IP address.");
+            return;
+        }
+    };
+
+    match crate::persistence::init_db().await {
+        Ok(val) => val,
+        Err(e) => {
+            error!("Database initialization failed: {:?}", e);
             return;
         }
     };

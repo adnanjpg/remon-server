@@ -2,12 +2,12 @@ use sqlx::SqliteConnection;
 
 use crate::monitor::models::get_hardware_info::HardwareMemInfo;
 
-use super::{get_sql_connection, FetchId, SQLITE_DB_CONN_STR};
+use super::{get_default_sql_connection, FetchId};
 
 const HARDWARE_MEM_INFOS_TABLE_NAME: &str = "mem_infos";
 
 pub(super) async fn insert_hardware_mem_info(info: &HardwareMemInfo) -> Result<(), sqlx::Error> {
-    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+    let mut conn = get_default_sql_connection().await?;
 
     // check if a record with the same cpu_id already exists
     let exists_record_check = format!(
@@ -54,7 +54,7 @@ pub(super) async fn insert_hardware_mem_info(info: &HardwareMemInfo) -> Result<(
 }
 
 pub(super) async fn fetch_latest_hardware_mems_info() -> Result<Vec<HardwareMemInfo>, sqlx::Error> {
-    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+    let mut conn = get_default_sql_connection().await?;
 
     // get all with distinct mem_id
     let statement = format!(

@@ -2,7 +2,7 @@ use sqlx::SqliteConnection;
 
 use crate::monitor::models::MonitorConfig;
 
-use super::{get_sql_connection, FetchId, SQLITE_DB_CONN_STR};
+use super::{get_default_sql_connection, FetchId};
 
 const MONITOR_CONFIGS_TABLE_NAME: &str = "configs";
 
@@ -10,7 +10,7 @@ pub async fn insert_or_update_monitor_config(
     config: &MonitorConfig,
     device_id: &str,
 ) -> Result<(), sqlx::Error> {
-    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+    let mut conn = get_default_sql_connection().await?;
 
     // check if a record with the same device_id already exists
     let exists_record_check = format!(
@@ -70,7 +70,7 @@ pub async fn insert_or_update_monitor_config(
 }
 
 pub async fn fetch_monitor_configs() -> Result<Vec<MonitorConfig>, sqlx::Error> {
-    let mut conn = get_sql_connection(SQLITE_DB_CONN_STR).await?;
+    let mut conn = get_default_sql_connection().await?;
 
     let statement = format!("SELECT * FROM {}", MONITOR_CONFIGS_TABLE_NAME);
     let configs = sqlx::query_as::<_, MonitorConfig>(&statement)
