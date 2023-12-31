@@ -1,7 +1,7 @@
-use log::debug;
-use sysinfo::{CpuExt, System, SystemExt};
-
 use self::models::ServerDescription;
+
+use log::debug;
+use sysinfo::{CpuRefreshKind, RefreshKind, System};
 
 mod config_exceeds;
 pub mod models;
@@ -13,28 +13,24 @@ pub async fn init() -> Result<(), ()> {
     monitor.start_monitoring().await;
     debug!("System monitor started");
 
+    // TODO(isaidsari): Check sysinfo library has support for current platform
     Ok(())
 }
 
-const LE_DOT: &str = " • ";
-
 pub fn get_default_server_desc() -> ServerDescription {
     let mut system = System::new_all();
-    system.refresh_all();
+    system.refresh_specifics(RefreshKind::new().with_cpu(CpuRefreshKind::everything()));
 
-    // TODO: add pc name / user name
-    let cpu = system.cpus()[0].brand();
+    let cpu = system.cpus().first().unwrap().brand();
     let mem = (system.total_memory() as f64) / 1024.0 / 1024.0 / 1024.0;
-    let name = system.name().unwrap_or("Unknown".to_string())
-        + LE_DOT
-        + match system.global_cpu_info().vendor_id() {
-            "GenuineIntel" => "Intel",
-            other => other,
-        };
-    let description = system.long_os_version().unwrap_or("Unknown".to_string())
-        + LE_DOT
+    let name = System::host_name().unwrap_or("Unknown".to_string());
+
+    let description = System::long_os_version().unwrap_or("Unknown".to_string())
+        + " • "
+        + System::cpu_arch().unwrap_or_default().as_str()
+        + " • "
         + cpu
-        + LE_DOT
+        + " • "
         + &format!("{:.1}GB", &mem);
 
     ServerDescription { name, description }

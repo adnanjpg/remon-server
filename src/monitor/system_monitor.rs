@@ -1,26 +1,27 @@
-use crate::monitor::models::get_cpu_status::{CpuCoreInfo, CpuFrameStatus};
-use log::{debug, error};
+use super::{
+    models::{
+        get_cpu_status::{CpuCoreInfo, CpuFrameStatus, CpuStatusData},
+        get_disk_status::{DiskFrameStatus, SingleDiskInfo, DiskStatusData},
+        get_hardware_info::{HardwareCpuInfo, HardwareDiskInfo, HardwareInfo, HardwareMemInfo},
+        get_mem_status::{MemFrameStatus, MemStatusData, SingleMemInfo},
+    },
+    persistence::{
+        insert_cpu_status_frame, insert_disk_status_frame, insert_hardware_info,
+        insert_mem_status_frame,
+    },
+    config_exceeds::check_thresholds,
+};
 
-use crate::monitor::models::get_disk_status::{DiskFrameStatus, SingleDiskInfo};
-use crate::monitor::models::get_hardware_info::{
-    HardwareCpuInfo, HardwareDiskInfo, HardwareInfo, HardwareMemInfo,
-};
-use crate::monitor::models::get_mem_status::{MemFrameStatus, MemStatusData, SingleMemInfo};
-use crate::monitor::persistence::{
-    insert_cpu_status_frame, insert_disk_status_frame, insert_hardware_info,
-    insert_mem_status_frame,
-};
-use std::vec;
+use blake3::Hasher;
+use chrono::Utc;
+use log::{debug, error};
 use std::{
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
+    vec,
 };
-use sysinfo::{CpuExt, CpuRefreshKind, DiskExt, RefreshKind, SystemExt};
+use sysinfo::{Cpu, CpuRefreshKind, Disk, Disks, MemoryRefreshKind, RefreshKind, System};
 use tokio::time;
-
-use super::models::{get_cpu_status::CpuStatusData, get_disk_status::DiskStatusData};
-
-use super::config_exceeds::check_thresholds;
 
 // TODO(isaidsari): make it configurable
 pub fn get_check_interval() -> Duration {
@@ -36,10 +37,10 @@ trait CpuId {
     fn get_cpu_id(&self) -> String;
 }
 
-impl CpuId for sysinfo::Cpu {
+impl CpuId for Cpu {
     fn get_cpu_id(&self) -> String {
         let the_str: String = format!("{}{}", self.vendor_id(), self.brand());
-        let mut hasher = blake3::Hasher::new();
+        let mut hasher = Hasher::new();
         hasher.update(the_str.as_bytes());
 
         let hash = hasher.finalize();
@@ -54,17 +55,12 @@ trait DiskId {
     fn get_disk_id(&self) -> String;
 }
 
-impl DiskId for sysinfo::Disk {
+impl DiskId for Disk {
     fn get_disk_id(&self) -> String {
         let the_str: String = format!(
             "{}{}{}{}{}{}",
             self.name().to_string_lossy(),
-            self.file_system()
-                .iter()
-                .map(|c| *c as char)
-                .collect::<Vec<_>>()
-                .iter()
-                .collect::<String>(),
+            self.file_system().to_str().unwrap_or_default(),
             format!("{:?}", self.kind()),
             if self.is_removable() { "yes" } else { "no" },
             self.mount_point().to_string_lossy(),
@@ -73,7 +69,7 @@ impl DiskId for sysinfo::Disk {
 
         debug!("the str: {}", the_str);
 
-        let mut hasher = blake3::Hasher::new();
+        let mut hasher = Hasher::new();
 
         hasher.update(the_str.as_bytes());
 
@@ -95,8 +91,14 @@ impl SystemMonitor {
     }
 
     pub async fn start_monitoring(&self) {
+        // TODO(isaidsari): put it more convenient place
+        if !sysinfo::IS_SUPPORTED_SYSTEM {
+            error!("sysinfo is not supported on this system");
+            return;
+        }
+
         fn get_last_check() -> i64 {
-            chrono::Utc::now().timestamp_millis()
+            Utc::now().timestamp_millis()
         }
 
         let should_exit_clone = Arc::clone(&self.should_exit);
@@ -104,10 +106,11 @@ impl SystemMonitor {
         let check_interval = self.check_interval;
 
         tokio::spawn(async move {
-            let mut system = sysinfo::System::new();
+            let mut system = System::new();
+            let mut disks = Disks::new_with_refreshed_list();
 
             while !*should_exit_clone.lock().unwrap() {
-                let start_time = std::time::Instant::now();
+                let start_time = Instant::now();
 
                 // refresh all system info WARN: this takes too much time
                 // let mut system = sysinfo::System::new_all();
@@ -116,23 +119,36 @@ impl SystemMonitor {
                 // Refresh system information
                 system.refresh_specifics(
                     RefreshKind::new()
+                        // TODO(isaidsari): check if we need to refresh all of them
                         .with_cpu(CpuRefreshKind::everything())
-                        .with_memory()
-                        .with_disks_list()
-                        .with_disks(),
+                        .with_memory(MemoryRefreshKind::everything()),
                 );
 
-                // disk
-                let all_disks = system.disks();
-                let disks_last_check = chrono::Utc::now().timestamp_millis();
+                // Refresh disks information, since with sysinfo v0.30 it's not refreshed with the System
+                // NOTE: if a disk is added or removed, this method won't take it into account
+                disks.refresh();
+
+                // disks
                 let mut disk_usage: DiskFrameStatus = DiskFrameStatus {
                     id: -1,
-                    last_check: disks_last_check,
+                    last_check: get_last_check(),
                     disks_usage: vec![],
                 };
                 let mut disks_info: Vec<HardwareDiskInfo> = vec![];
-                for disk in all_disks {
-                    let disk_id = &disk.get_disk_id();
+                for disk in &disks {
+                    let disk_id = disk.get_disk_id();
+                    let disk_name = match disk.name().to_os_string().into_string() {
+                        Ok(name) => {
+                            if name.is_empty() {
+                                // if the name is empty, it's probably a local disk
+                                // TODO(isaidsari): add C: etc
+                                "Local Disk".to_string()
+                            } else {
+                                name
+                            }
+                        }
+                        Err(_) => "".to_string(),
+                    };
 
                     disk_usage.disks_usage.push(SingleDiskInfo {
                         id: -1,
@@ -144,24 +160,27 @@ impl SystemMonitor {
 
                     disks_info.push(HardwareDiskInfo {
                         id: -1,
-                        fs_type: disk.file_system().iter().map(|c| *c as char).collect(),
+                        fs_type: disk
+                            .file_system()
+                            .to_os_string()
+                            .into_string()
+                            .unwrap_or_default(),
                         is_removable: disk.is_removable(),
                         kind: format!("{:?}", disk.kind()),
                         mount_point: disk.mount_point().to_string_lossy().to_string(),
                         // sqlx doesn't support u64
                         total_space: disk.total_space() as i64,
                         disk_id: disk_id.to_string(),
-                        name: disk.name().to_string_lossy().to_string(),
+                        name: disk_name,
                         last_check: get_last_check(),
                     });
                 }
 
                 // cpu
                 let all_cpus = system.cpus();
-                let cpu_last_check = chrono::Utc::now().timestamp_millis();
                 let mut cpu_usage: CpuFrameStatus = CpuFrameStatus {
                     id: -1,
-                    last_check: cpu_last_check,
+                    last_check: get_last_check(),
                     cores_usage: vec![],
                 };
                 let mut cpu_info: Vec<HardwareCpuInfo> = vec![];
@@ -199,17 +218,16 @@ impl SystemMonitor {
                 }
 
                 // mem
-                let mem_last_check = chrono::Utc::now().timestamp_millis();
                 let mem_info: Vec<HardwareMemInfo> = vec![HardwareMemInfo {
                     id: -1,
                     mem_id: "1".to_string(),
-                    last_check: mem_last_check,
+                    last_check: get_last_check(),
                     total_space: system.total_memory() as i64,
                 }];
 
                 let mem_usage: MemFrameStatus = MemFrameStatus {
                     id: -1,
-                    last_check: mem_last_check,
+                    last_check: get_last_check(),
                     mems_usage: vec![SingleMemInfo {
                         id: -1,
                         frame_id: -1,
