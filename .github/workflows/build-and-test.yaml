@@ -4,7 +4,7 @@ name: CI
 
 jobs:
   build_and_test:
-    name: Rust project
+    name: Build and test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -34,6 +34,7 @@ jobs:
           args: --release
 
       # https://stackoverflow.com/a/64702025/12555423
+      # these will be used once we add integration tests
       # - name: ⚙ Integration test
       #   uses: actions-rs/cargo@v1
       #   with:
