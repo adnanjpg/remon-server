@@ -3,17 +3,19 @@ on: [pull_request]
 name: CI for pull requests
 
 jobs:
+  # https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2204-Readme.md
   build_and_test_ubuntu:
-    name: Build and test on Ubuntu
-    runs-on: ubuntu-latest
+    name: Build and test on Ubuntu (x86_64)
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - id: build_and_test
         uses: ./.github/build-and-test
 
+  # https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md
   build_and_test_windows:
-    name: Build and test on Windows
-    runs-on: windows-latest
+    name: Build and test on Windows (x86_64)
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - id: build_and_test
@@ -21,7 +23,7 @@ jobs:
 
   # https://github.com/actions/runner-images/blob/main/images/macos/macos-13-Readme.md
   build_and_test_macos_x86_64:
-    name: Build and test on macOS
+    name: Build and test on macOS (x86_64)
     runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
@@ -30,7 +32,7 @@ jobs:
 
   # https://github.com/actions/runner-images/blob/main/images/macos/macos-13-arm64-Readme.md
   build_and_test_macos_arm64:
-    name: Build and test on macOS
+    name: Build and test on macOS (ARM64)
     runs-on: macos-13-arm64
     steps:
       - uses: actions/checkout@v4
