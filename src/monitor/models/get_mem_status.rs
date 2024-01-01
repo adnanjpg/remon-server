@@ -186,7 +186,7 @@ mod tests {
             // 77.5 available, 72.5 used, 48.33% used
             mem2id.to_string() => 150,
             // 25 available, 45 used, 64.28% used
-            mem3id.to_string() => 300,
+            mem3id.to_string() => 70,
         };
 
         assert_eq!(
