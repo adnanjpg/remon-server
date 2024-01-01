@@ -1,0 +1,20 @@
+on: [push]
+
+name: CI
+
+jobs:
+  build_and_test_windows:
+    name: Build and test on Windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: build_and_test
+        uses: ./.github/build-and-test
+
+  build_and_test_macos:
+    name: Build and test on macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: build_and_test
+        uses: ./.github/build-and-test
