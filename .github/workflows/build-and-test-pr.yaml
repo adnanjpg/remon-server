@@ -1,0 +1,31 @@
+on: [pull_request]
+
+name: CI for pull requests
+
+jobs:
+  # https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2204-Readme.md
+  build_and_test_ubuntu:
+    name: Build and test on Ubuntu
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - id: build_and_test
+        uses: ./.github/build-and-test
+
+  # https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md
+  build_and_test_windows:
+    name: Build and test on Windows
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - id: build_and_test
+        uses: ./.github/build-and-test
+
+  # https://github.com/actions/runner-images/blob/main/images/macos/macos-13-Readme.md
+  build_and_test_macos:
+    name: Build and test on macOS
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - id: build_and_test
+        uses: ./.github/build-and-test
