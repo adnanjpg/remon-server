@@ -1,6 +1,6 @@
 on: [push]
 
-name: CI
+name: CI for push
 
 jobs:
   build_and_test_ubuntu:

@@ -1,6 +1,6 @@
 on: [pull_request]
 
-name: CI
+name: CI for pull requests
 
 jobs:
   build_and_test_ubuntu:
