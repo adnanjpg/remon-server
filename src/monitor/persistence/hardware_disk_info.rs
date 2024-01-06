@@ -1,13 +1,11 @@
-use sqlx::SqliteConnection;
-
-use crate::monitor::models::get_hardware_info::HardwareDiskInfo;
+use crate::{monitor::models::get_hardware_info::HardwareDiskInfo, persistence::SQLConnection};
 
 use super::{get_default_sql_connection, FetchId};
 
 const HARDWARE_DISK_INFOS_TABLE_NAME: &str = "disk_infos";
 
 pub(super) async fn insert_hardware_disk_info(info: &HardwareDiskInfo) -> Result<(), sqlx::Error> {
-    let mut conn = get_default_sql_connection().await?;
+    let conn = get_default_sql_connection().await?;
 
     // check if a record with the same cpu_id already exists
     let exists_record_check = format!(
@@ -17,7 +15,7 @@ pub(super) async fn insert_hardware_disk_info(info: &HardwareDiskInfo) -> Result
 
     let exists_check_res = sqlx::query_as::<_, FetchId>(&exists_record_check)
         .bind(&info.disk_id)
-        .fetch_optional(&mut conn)
+        .fetch_optional(&conn)
         .await?;
 
     // if exists, update it
@@ -33,7 +31,7 @@ pub(super) async fn insert_hardware_disk_info(info: &HardwareDiskInfo) -> Result
             sqlx::query(&statement)
                 .bind(&info.last_check)
                 .bind(&value.id)
-                .execute(&mut conn)
+                .execute(&conn)
                 .await?;
         }
         None => {
@@ -50,7 +48,7 @@ pub(super) async fn insert_hardware_disk_info(info: &HardwareDiskInfo) -> Result
                 .bind(&info.mount_point)
                 .bind(&info.total_space)
                 .bind(&info.last_check)
-                .execute(&mut conn)
+                .execute(&conn)
                 .await?;
         }
     };
@@ -60,7 +58,7 @@ pub(super) async fn insert_hardware_disk_info(info: &HardwareDiskInfo) -> Result
 
 pub(super) async fn fetch_latest_hardware_disks_info() -> Result<Vec<HardwareDiskInfo>, sqlx::Error>
 {
-    let mut conn = get_default_sql_connection().await?;
+    let conn = get_default_sql_connection().await?;
 
     // get all with distinct disk_id
     let statement = format!(
@@ -72,14 +70,14 @@ pub(super) async fn fetch_latest_hardware_disks_info() -> Result<Vec<HardwareDis
     );
 
     let info = sqlx::query_as::<_, HardwareDiskInfo>(&statement)
-        .fetch_all(&mut conn)
+        .fetch_all(&conn)
         .await?;
 
     Ok(info)
 }
 
 pub(super) async fn create_hardware_disk_infos_table(
-    conn: &mut SqliteConnection,
+    conn: &SQLConnection,
 ) -> Result<(), sqlx::Error> {
     let statement = format!(
         "CREATE TABLE IF NOT EXISTS {} (

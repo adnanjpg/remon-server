@@ -1,5 +1,3 @@
-use sqlx::SqliteConnection;
-
 mod monitor_config;
 use self::monitor_config::create_monitor_configs_table;
 pub use self::monitor_config::{fetch_monitor_configs, insert_or_update_monitor_config};
@@ -28,9 +26,10 @@ mod status_mem;
 use self::status_mem::{create_mem_status_frame_singles_table, create_mem_status_frames_table};
 pub use self::status_mem::{get_mem_status_between_dates, insert_mem_status_frame};
 
+use crate::persistence::SQLConnection;
 pub use crate::persistence::{get_default_sql_connection, get_sql_connection, FetchId};
 
-pub async fn init_db(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+pub async fn init_db(conn: &SQLConnection) -> Result<(), sqlx::Error> {
     create_monitor_configs_table(conn).await?;
 
     create_hardware_cpu_infos_table(conn).await?;

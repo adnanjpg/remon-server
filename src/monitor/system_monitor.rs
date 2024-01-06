@@ -1,7 +1,8 @@
 use super::{
+    config_exceeds::check_thresholds,
     models::{
         get_cpu_status::{CpuCoreInfo, CpuFrameStatus, CpuStatusData},
-        get_disk_status::{DiskFrameStatus, SingleDiskInfo, DiskStatusData},
+        get_disk_status::{DiskFrameStatus, DiskStatusData, SingleDiskInfo},
         get_hardware_info::{HardwareCpuInfo, HardwareDiskInfo, HardwareInfo, HardwareMemInfo},
         get_mem_status::{MemFrameStatus, MemStatusData, SingleMemInfo},
     },
@@ -9,7 +10,6 @@ use super::{
         insert_cpu_status_frame, insert_disk_status_frame, insert_hardware_info,
         insert_mem_status_frame,
     },
-    config_exceeds::check_thresholds,
 };
 
 use blake3::Hasher;
