@@ -29,6 +29,8 @@ log = "0.4.14"
 local-ip-address = "0.5.6"
 blake3 = "1.5.0"
 maplit = "1.0.2"
+lazy_static = "1.4.0"
+async_once = "0.2.6"
 
 [dev-dependencies]
 ctor = "0.2.6"

@@ -18,6 +18,10 @@ use local_ip_address::local_ip;
 
 use std::convert::TryInto;
 
+// https://stackoverflow.com/a/39175997/12555423
+#[macro_use]
+extern crate lazy_static;
+
 // TODO(adnanjpg): get port from env var
 const DEFAULT_PORT: u16 = 8080;
 

@@ -1,13 +1,11 @@
-use sqlx::SqliteConnection;
-
-use crate::monitor::models::get_hardware_info::HardwareMemInfo;
+use crate::{monitor::models::get_hardware_info::HardwareMemInfo, persistence::SQLConnection};
 
 use super::{get_default_sql_connection, FetchId};
 
 const HARDWARE_MEM_INFOS_TABLE_NAME: &str = "mem_infos";
 
 pub(super) async fn insert_hardware_mem_info(info: &HardwareMemInfo) -> Result<(), sqlx::Error> {
-    let mut conn = get_default_sql_connection().await?;
+    let conn = get_default_sql_connection().await?;
 
     // check if a record with the same cpu_id already exists
     let exists_record_check = format!(
@@ -17,7 +15,7 @@ pub(super) async fn insert_hardware_mem_info(info: &HardwareMemInfo) -> Result<(
 
     let exists_check_res = sqlx::query_as::<_, FetchId>(&exists_record_check)
         .bind(&info.mem_id)
-        .fetch_optional(&mut conn)
+        .fetch_optional(&conn)
         .await?;
 
     // if exists, update it
@@ -33,7 +31,7 @@ pub(super) async fn insert_hardware_mem_info(info: &HardwareMemInfo) -> Result<(
             sqlx::query(&statement)
                 .bind(&info.last_check)
                 .bind(&value.id)
-                .execute(&mut conn)
+                .execute(&conn)
                 .await?;
         }
         None => {
@@ -45,7 +43,7 @@ pub(super) async fn insert_hardware_mem_info(info: &HardwareMemInfo) -> Result<(
                 .bind(&info.mem_id)
                 .bind(&info.total_space)
                 .bind(&info.last_check)
-                .execute(&mut conn)
+                .execute(&conn)
                 .await?;
         }
     };
@@ -54,7 +52,7 @@ pub(super) async fn insert_hardware_mem_info(info: &HardwareMemInfo) -> Result<(
 }
 
 pub(super) async fn fetch_latest_hardware_mems_info() -> Result<Vec<HardwareMemInfo>, sqlx::Error> {
-    let mut conn = get_default_sql_connection().await?;
+    let conn = get_default_sql_connection().await?;
 
     // get all with distinct mem_id
     let statement = format!(
@@ -66,14 +64,14 @@ pub(super) async fn fetch_latest_hardware_mems_info() -> Result<Vec<HardwareMemI
     );
 
     let info = sqlx::query_as::<_, HardwareMemInfo>(&statement)
-        .fetch_all(&mut conn)
+        .fetch_all(&conn)
         .await?;
 
     Ok(info)
 }
 
 pub(super) async fn create_hardware_mem_infos_table(
-    conn: &mut SqliteConnection,
+    conn: &SQLConnection,
 ) -> Result<(), sqlx::Error> {
     let statement = format!(
         "CREATE TABLE IF NOT EXISTS {} (
