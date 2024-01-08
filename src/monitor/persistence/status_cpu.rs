@@ -1,6 +1,7 @@
-use sqlx::SqliteConnection;
-
-use crate::monitor::models::get_cpu_status::{CpuCoreInfo, CpuFrameStatus};
+use crate::{
+    monitor::models::get_cpu_status::{CpuCoreInfo, CpuFrameStatus},
+    persistence::SQLConnection,
+};
 
 use super::{get_default_sql_connection, FetchId};
 
@@ -8,7 +9,7 @@ const CPU_STATUS_FRAME_TABLE_NAME: &str = "cpu_status_frame";
 const CPU_STATUS_FRAME_CORE_TABLE_NAME: &str = "cpu_status_frame_core";
 
 pub async fn insert_cpu_status_frame(status: &CpuFrameStatus) -> Result<(), sqlx::Error> {
-    let mut conn = get_default_sql_connection().await?;
+    let conn = get_default_sql_connection().await?;
 
     let statement = format!(
         "INSERT INTO {} 
@@ -21,7 +22,7 @@ pub async fn insert_cpu_status_frame(status: &CpuFrameStatus) -> Result<(), sqlx
 
     let query_res = sqlx::query_as::<_, FetchId>(&statement)
         .bind(&status.last_check)
-        .fetch_one(&mut conn)
+        .fetch_one(&conn)
         .await?;
 
     let frame_id = query_res.id;
@@ -36,7 +37,7 @@ pub async fn insert_cpu_status_frame(status: &CpuFrameStatus) -> Result<(), sqlx
 }
 
 async fn insert_cpu_status_frame_core(status: &CpuCoreInfo) -> Result<(), sqlx::Error> {
-    let mut conn = get_default_sql_connection().await?;
+    let conn = get_default_sql_connection().await?;
 
     let statement = format!(
         "INSERT INTO {} (frame_id, cpu_id, freq, usage) VALUES (?, ?, ?, ?)",
@@ -47,7 +48,7 @@ async fn insert_cpu_status_frame_core(status: &CpuCoreInfo) -> Result<(), sqlx::
         .bind(&status.cpu_id)
         .bind(&status.freq)
         .bind(&status.usage)
-        .execute(&mut conn)
+        .execute(&conn)
         .await?;
 
     Ok(())
@@ -57,7 +58,7 @@ pub async fn get_cpu_status_between_dates(
     start_date: i64,
     end_date: i64,
 ) -> Result<Vec<CpuFrameStatus>, sqlx::Error> {
-    let mut conn = get_default_sql_connection().await?;
+    let conn = get_default_sql_connection().await?;
 
     let frames_statement = format!(
         "SELECT id, last_check FROM {} WHERE last_check BETWEEN ? AND ?",
@@ -66,7 +67,7 @@ pub async fn get_cpu_status_between_dates(
     let frames_query = sqlx::query_as::<_, (i64, i64)>(&frames_statement)
         .bind(&start_date)
         .bind(&end_date)
-        .fetch_all(&mut conn)
+        .fetch_all(&conn)
         .await?;
 
     let frame_ids = frames_query
@@ -80,7 +81,7 @@ pub async fn get_cpu_status_between_dates(
     );
 
     let singles_query = sqlx::query_as::<_, CpuCoreInfo>(&singles_statement)
-        .fetch_all(&mut conn)
+        .fetch_all(&conn)
         .await?;
 
     let frames: Vec<CpuFrameStatus> = frames_query
@@ -105,7 +106,7 @@ pub async fn get_cpu_status_between_dates(
 }
 
 pub(super) async fn create_cpu_status_frames_table(
-    conn: &mut SqliteConnection,
+    conn: &SQLConnection,
 ) -> Result<(), sqlx::Error> {
     let statement = format!(
         "CREATE TABLE IF NOT EXISTS {} (
@@ -121,7 +122,7 @@ pub(super) async fn create_cpu_status_frames_table(
 }
 
 pub(super) async fn create_cpu_status_frame_cores_table(
-    conn: &mut SqliteConnection,
+    conn: &SQLConnection,
 ) -> Result<(), sqlx::Error> {
     let statement = format!(
         "CREATE TABLE IF NOT EXISTS {} (

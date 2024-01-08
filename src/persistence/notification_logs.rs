@@ -1,6 +1,4 @@
-use sqlx::SqliteConnection;
-
-use super::get_default_sql_connection;
+use super::{get_default_sql_connection, SQLConnection};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, sqlx::Type, Clone)]
@@ -23,7 +21,7 @@ pub struct NotificationLog {
 const NOTIFICATION_LOGS_TABLE_NAME: &str = "notification_logs";
 
 pub async fn insert_notification_log(log: &NotificationLog) -> Result<(), sqlx::Error> {
-    let mut conn = get_default_sql_connection().await?;
+    let conn = get_default_sql_connection().await?;
 
     let statement = format!(
         "INSERT INTO {} 
@@ -39,7 +37,7 @@ pub async fn insert_notification_log(log: &NotificationLog) -> Result<(), sqlx::
         .bind(&log.title)
         .bind(&log.body)
         .bind(&log.sent_at)
-        .execute(&mut conn)
+        .execute(&conn)
         .await?;
 
     Ok(())
@@ -49,7 +47,7 @@ pub async fn fetch_single_latest_for_device_id_and_type(
     device_id: &str,
     notification_type: &NotificationType,
 ) -> Result<Option<NotificationLog>, sqlx::Error> {
-    let mut conn = get_default_sql_connection().await?;
+    let conn = get_default_sql_connection().await?;
 
     let statement = format!(
         "
@@ -64,14 +62,14 @@ pub async fn fetch_single_latest_for_device_id_and_type(
     let info = sqlx::query_as::<_, NotificationLog>(&statement)
         .bind(&device_id)
         .bind(&notification_type)
-        .fetch_optional(&mut conn)
+        .fetch_optional(&conn)
         .await?;
 
     Ok(info)
 }
 
 pub(super) async fn create_notification_logs_table(
-    conn: &mut SqliteConnection,
+    conn: &SQLConnection,
 ) -> Result<(), sqlx::Error> {
     let statement = format!(
         "CREATE TABLE IF NOT EXISTS {} (

@@ -1,6 +1,4 @@
-use sqlx::SqliteConnection;
-
-use crate::monitor::models::MonitorConfig;
+use crate::{monitor::models::MonitorConfig, persistence::SQLConnection};
 
 use super::{get_default_sql_connection, FetchId};
 
@@ -10,7 +8,7 @@ pub async fn insert_or_update_monitor_config(
     config: &MonitorConfig,
     device_id: &str,
 ) -> Result<(), sqlx::Error> {
-    let mut conn = get_default_sql_connection().await?;
+    let conn = get_default_sql_connection().await?;
 
     // check if a record with the same device_id already exists
     let exists_record_check = format!(
@@ -19,7 +17,7 @@ pub async fn insert_or_update_monitor_config(
     );
     let exists_check_res = sqlx::query_as::<_, FetchId>(&exists_record_check)
         .bind(&device_id)
-        .fetch_optional(&mut conn)
+        .fetch_optional(&conn)
         .await?;
 
     match exists_check_res {
@@ -43,7 +41,7 @@ pub async fn insert_or_update_monitor_config(
                 .bind(&config.fcm_token)
                 .bind(&config.updated_at)
                 .bind(value.id)
-                .execute(&mut conn)
+                .execute(&conn)
                 .await?;
         }
         None => {
@@ -61,7 +59,7 @@ pub async fn insert_or_update_monitor_config(
                 .bind(&config.disk_threshold)
                 .bind(&config.fcm_token)
                 .bind(&config.updated_at)
-                .execute(&mut conn)
+                .execute(&conn)
                 .await?;
         }
     };
@@ -70,19 +68,17 @@ pub async fn insert_or_update_monitor_config(
 }
 
 pub async fn fetch_monitor_configs() -> Result<Vec<MonitorConfig>, sqlx::Error> {
-    let mut conn = get_default_sql_connection().await?;
+    let conn = get_default_sql_connection().await?;
 
     let statement = format!("SELECT * FROM {}", MONITOR_CONFIGS_TABLE_NAME);
     let configs = sqlx::query_as::<_, MonitorConfig>(&statement)
-        .fetch_all(&mut conn)
+        .fetch_all(&conn)
         .await?;
 
     Ok(configs)
 }
 
-pub(super) async fn create_monitor_configs_table(
-    conn: &mut SqliteConnection,
-) -> Result<(), sqlx::Error> {
+pub(super) async fn create_monitor_configs_table(conn: &SQLConnection) -> Result<(), sqlx::Error> {
     let statement = format!(
         "CREATE TABLE IF NOT EXISTS {} (
         id INTEGER PRIMARY KEY NOT NULL,
