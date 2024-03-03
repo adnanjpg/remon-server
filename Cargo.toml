@@ -23,7 +23,6 @@ sqlx = { version = "0.7.2", features = ["sqlite", "runtime-tokio"] }
 sysinfo = "0.30.3"
 tokio = { version = "1.33.0", features = ["full"] }
 totp-rs = "5.4.0"
-gauth = "0.7.0"
 env_logger = "0.10.0"
 log = "0.4.14"
 local-ip-address = "0.5.6"
@@ -31,6 +30,7 @@ blake3 = "1.5.0"
 maplit = "1.0.2"
 lazy_static = "1.4.0"
 async_once = "0.2.6"
+fcm = { git = "https://github.com/rj76/fcm-rust.git", branch = "new-api" }
 
 [dev-dependencies]
 ctor = "0.2.6"
