@@ -30,7 +30,7 @@ blake3 = "1.5.0"
 maplit = "1.0.2"
 lazy_static = "1.4.0"
 async_once = "0.2.6"
-fcm = { git = "https://github.com/rj76/fcm-rust.git", branch = "new-api" }
+fcm = { git = "https://github.com/rj76/fcm-rust.git", branch = "main" }
 
 [dev-dependencies]
 ctor = "0.2.6"
