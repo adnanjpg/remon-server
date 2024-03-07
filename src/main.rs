@@ -13,6 +13,7 @@ use log::{error, info};
 
 mod auth;
 mod monitor;
+mod grpc;
 
 use local_ip_address::local_ip;
 
@@ -129,6 +130,14 @@ async fn main() {
         Ok(_) => {}
         Err(_) => {
             error!("Failed to initialize monitor.");
+            return;
+        }
+    }
+
+    match grpc::grpc_service::init().await {
+        Ok(_) => {}
+        Err(_) => {
+            error!("Failed to initialize gRPC.");
             return;
         }
     }

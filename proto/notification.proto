@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package remonproto;
+
+service NotificationService {
+  rpc SendNotification(NotificationRequest) returns (NotificationResponse) {}
+}
+
+message NotificationRequest {
+  string title = 1;
+  string body = 2;
+  string token = 3;
+}
+
+message NotificationResponse {
+  string message = 1;
+}

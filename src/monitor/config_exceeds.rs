@@ -79,7 +79,7 @@ pub(super) async fn check_thresholds(
 
 // TODO(adnanjpg): make it configurable
 fn get_send_notification_interval() -> Duration {
-    Duration::seconds(5 * 60)
+    Duration::try_seconds(60 * 5).expect("failed to create duration")
 }
 
 async fn should_send_notification_to_exceeding_device(config: &MonitorConfig) -> bool {
