@@ -20,6 +20,7 @@ runs:
         toolchain: stable
 
     - name: Install protoc compiler
+      shell: bash
       run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
     - name: 🔨 Build
