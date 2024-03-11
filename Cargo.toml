@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 base32 = "0.4.0"
 base64 = "0.21.5"
-chrono = "0.4.31"
+chrono = "0.4.35"
 dotenv = "0.15.0"
 fast_qr = "0.11.0"
 hyper = { version = "0.14.27", features = ["full"] }
