@@ -48,7 +48,8 @@ impl NotificationServiceImpl for NotificationService {
 
         if configs.is_empty() {
             return Ok(Response::new(NotificationResponse {
-                message: "No monitor configs found".to_string(),
+                success: false,
+                message: Some("No monitor configs found".to_string()),
             }));
         };
 
@@ -68,12 +69,12 @@ impl NotificationServiceImpl for NotificationService {
         let response = if res.is_ok() {
             NotificationResponse {
                 success: true,
-                message: Option::from("Notification sent successfully".to_string()),
+                message: Some(String::from("Notification sent")),
             }
         } else {
             NotificationResponse {
                 success: false,
-                message: Option::from("Failed to send notification".to_string()),
+                message: Some(format!("Failed to send notification: {}", res.err().unwrap())),
             }
         };
 
