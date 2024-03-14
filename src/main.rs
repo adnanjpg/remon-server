@@ -12,8 +12,8 @@ use env_logger;
 use log::{error, info};
 
 mod auth;
-mod monitor;
 mod grpc;
+mod monitor;
 
 use local_ip_address::local_ip;
 
@@ -164,6 +164,7 @@ async fn main() {
             info!("Listening on http://{}", addr);
         }
 
+        // will wait for either server or server_local to finish
         tokio::select! {
             _ = server_local => {},
             _ = server => {},

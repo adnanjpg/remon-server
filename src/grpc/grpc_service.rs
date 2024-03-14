@@ -1,5 +1,11 @@
 use log::{error, info};
 use tonic::{transport::Server, Request, Response, Status};
+use tonic_reflection::server as ReflectionServer;
+
+use crate::{
+    monitor::persistence::fetch_monitor_configs, notification_service,
+    persistence::notification_logs::NotificationType,
+};
 
 use remonproto::{
     notification_service_server::{
@@ -8,11 +14,6 @@ use remonproto::{
     NotificationRequest, NotificationResponse,
 };
 
-use crate::notification_service;
-use crate::persistence::notification_logs::NotificationType;
-
-use crate::monitor::persistence::fetch_monitor_configs;
-
 pub mod remonproto {
     tonic::include_proto!("remonproto");
 
@@ -20,7 +21,9 @@ pub mod remonproto {
         tonic::include_file_descriptor_set!("remonproto_descriptor");
 }
 
-#[derive(Default)]
+const DEFAULT_ADDR: &str = "[::1]:50051";
+
+#[derive(Default, Debug)]
 pub struct NotificationService;
 
 #[tonic::async_trait]
@@ -56,11 +59,13 @@ impl NotificationServiceImpl for NotificationService {
 
         let response = if res.is_ok() {
             NotificationResponse {
-                message: "Notification sent successfully".to_string(),
+                success: true,
+                message: Option::from("Notification sent successfully".to_string()),
             }
         } else {
             NotificationResponse {
-                message: format!("Failed to send notification: {}", res.err().unwrap()),
+                success: false,
+                message: Option::from("Failed to send notification".to_string()),
             }
         };
 
@@ -70,22 +75,21 @@ impl NotificationServiceImpl for NotificationService {
 }
 
 pub async fn init() -> Result<(), Box<dyn std::error::Error>> {
-    let addr = "[::1]:50051".parse()?;
     let notification_service = NotificationService::default();
 
     // use reflection to expose the service
-    let reflection_service = tonic_reflection::server::Builder::configure()
+    let reflection_service = ReflectionServer::Builder::configure()
         .register_encoded_file_descriptor_set(remonproto::FILE_DESCRIPTOR_SET)
         .build()
         .unwrap();
 
-    info!("gRPC service listening on {}", addr);
+    info!("gRPC service listening on {}", DEFAULT_ADDR);
 
     tokio::spawn(async move {
         Server::builder()
             .add_service(NotificationServiceServer::new(notification_service))
             .add_service(reflection_service)
-            .serve(addr)
+            .serve(DEFAULT_ADDR.parse().unwrap())
             .await
             .unwrap();
     });

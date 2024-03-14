@@ -6,6 +6,17 @@ service NotificationService {
   rpc SendNotification(NotificationRequest) returns (NotificationResponse) {}
 }
 
+/*
+enum Type {
+  NOTIFICATION = 0;
+  LOG = 1;
+  DEBUG = 2;
+}
+
+verbocity?
+
+*/
+
 message NotificationRequest {
   string title = 1;
   string body = 2;
@@ -13,5 +24,6 @@ message NotificationRequest {
 }
 
 message NotificationResponse {
-  string message = 1;
+  bool success = 1;
+  optional string message = 2;
 }
