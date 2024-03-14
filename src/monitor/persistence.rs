@@ -27,7 +27,7 @@ use self::status_mem::{create_mem_status_frame_singles_table, create_mem_status_
 pub use self::status_mem::{get_mem_status_between_dates, insert_mem_status_frame};
 
 use crate::persistence::SQLConnection;
-pub use crate::persistence::{get_default_sql_connection, get_sql_connection, FetchId};
+pub use crate::persistence::{get_default_sql_connection, FetchId};
 
 pub async fn init_db(conn: &SQLConnection) -> Result<(), sqlx::Error> {
     create_monitor_configs_table(conn).await?;
