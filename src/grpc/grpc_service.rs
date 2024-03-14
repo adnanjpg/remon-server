@@ -39,10 +39,18 @@ impl NotificationServiceImpl for NotificationService {
             request.title, request.body
         );
 
+        // TODO(@isaidsari): this part is not complete
+        // it needs to think more about it
         let configs = fetch_monitor_configs().await.unwrap_or_else(|e| {
             error!("failed to fetch monitor configs: {}", e);
             vec![]
         });
+
+        if configs.is_empty() {
+            return Ok(Response::new(NotificationResponse {
+                message: "No monitor configs found".to_string(),
+            }));
+        };
 
         let res = notification_service::send_notification_to_single(
             &configs[0].device_id,

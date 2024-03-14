@@ -5,9 +5,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     tonic_build::configure()
         .file_descriptor_set_path(out_dir.join("remonproto_descriptor.bin"))
-        .compile(&[r".\proto\notification.proto"], &["proto"])?;
+        .compile(&["./proto/notification.proto"], &["proto"])?;
 
-    tonic_build::compile_protos(r".\proto\notification.proto")?;
+    tonic_build::compile_protos("./proto/notification.proto")?;
 
     Ok(())
 }
