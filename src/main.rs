@@ -1,14 +1,15 @@
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server};
+use logger::init_logger;
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
 
 mod api;
+mod logger;
 mod notification_service;
 pub mod persistence;
 
-use env_logger;
 use log::{error, info};
 
 mod auth;
@@ -72,22 +73,6 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
             api::validate_token_test::validate_token_test(req).await
         }
         (_, _) => api::_404::_404(req),
-    }
-}
-
-fn init_logger(test_assertions: bool) {
-    if cfg!(debug_assertions) {
-        env_logger::builder()
-            .filter_level(log::LevelFilter::Debug)
-            .init();
-    } else if test_assertions {
-        env_logger::builder()
-            .filter_level(log::LevelFilter::Info)
-            .init();
-    } else {
-        env_logger::builder()
-            .filter_level(log::LevelFilter::Info)
-            .init();
     }
 }
 
