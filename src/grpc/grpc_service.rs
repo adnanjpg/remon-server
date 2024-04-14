@@ -3,15 +3,19 @@ use tonic::{transport::Server, Request, Response, Status};
 use tonic_reflection::server as ReflectionServer;
 
 use crate::{
-    monitor::persistence::fetch_monitor_configs, notification_service,
-    persistence::notification_logs::NotificationType,
+    monitor::persistence::fetch_monitor_configs,
+    notification_service,
+    persistence::{
+        app_logs::{insert_app_log, AppLog, LogLevel},
+        notification_logs::NotificationType,
+    },
 };
 
 use remonproto::{
     notification_service_server::{
         NotificationService as NotificationServiceImpl, NotificationServiceServer,
     },
-    NotificationRequest, NotificationResponse,
+    LogRequest, LogResponse, NotificationRequest, NotificationResponse,
 };
 
 pub mod remonproto {
@@ -74,12 +78,37 @@ impl NotificationServiceImpl for NotificationService {
         } else {
             NotificationResponse {
                 success: false,
-                message: Some(format!("Failed to send notification: {}", res.err().unwrap())),
+                message: Some(format!(
+                    "Failed to send notification: {}",
+                    res.err().unwrap()
+                )),
             }
         };
 
         // return the response
         Ok(Response::new(response))
+    }
+
+    async fn log(&self, request: Request<LogRequest>) -> Result<Response<LogResponse>, Status> {
+        let log = request.into_inner();
+
+        info!("Received log message: {}", log.message);
+
+        let app_log = AppLog {
+            id: -1,
+            log_level: LogLevel::from_string(&log.level),
+            app_id: "source".to_string(), // TODO(isaidsari):
+            logged_at: chrono::Utc::now().timestamp(),
+            message: log.message,
+            target: log.target,
+        };
+
+        let res = insert_app_log(&app_log).await;
+
+        Ok(Response::new(LogResponse {
+            success: res.is_ok(),
+            message: Some("Log received".to_string()),
+        }))
     }
 }
 
