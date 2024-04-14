@@ -5,11 +5,11 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 
 mod api;
+mod logger;
 mod notification_service;
 pub mod persistence;
 
-use env_logger;
-use log::{error, info};
+use log::{error, info, warn};
 
 mod auth;
 mod monitor;
@@ -75,22 +75,6 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     }
 }
 
-fn init_logger(test_assertions: bool) {
-    if cfg!(debug_assertions) {
-        env_logger::builder()
-            .filter_level(log::LevelFilter::Debug)
-            .init();
-    } else if test_assertions {
-        env_logger::builder()
-            .filter_level(log::LevelFilter::Info)
-            .init();
-    } else {
-        env_logger::builder()
-            .filter_level(log::LevelFilter::Info)
-            .init();
-    }
-}
-
 async fn shutdown_signal() {
     // Wait for the CTRL+C signal for graceful shutdown
     tokio::signal::ctrl_c()
@@ -102,18 +86,19 @@ async fn shutdown_signal() {
 #[cfg(test)]
 #[ctor::ctor]
 fn init_tests() {
-    init_logger(true);
+    //logger::LogService::new(true);
 }
 
 #[tokio::main]
 async fn main() {
-    init_logger(false);
+    logger::LogService::new();
 
     let socket_addr = match get_socket_addr() {
         Some(addr) => addr,
         None => {
             error!("Failed to get local IP address.");
-            return;
+            SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT))
+            // return;
         }
     };
 
@@ -124,6 +109,11 @@ async fn main() {
             return;
         }
     };
+
+    //logger::LogService::new();
+    // env_logger::builder()
+    //         .filter_level(log::LevelFilter::Debug)
+    //         .init();
 
     match monitor::init().await {
         Ok(_) => {}
