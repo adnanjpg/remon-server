@@ -19,9 +19,18 @@ runs:
       with:
         toolchain: stable
 
-    - name: Install protoc compiler
-      shell: bash
-      run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+    name: Install protoc compiler
+    shell: bash
+    # run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+    run: |
+         if [ "$RUNNER_OS" == "Linux" ]; then
+              sudo apt-get update && sudo apt-get install -y protobuf-compiler
+         elif [ "$RUNNER_OS" == "Windows" ]; then
+              choco install important_windows_software
+         else
+              echo "$RUNNER_OS not supported"
+              exit 1
+         fi
 
     - name: 🔨 Build
       uses: actions-rs/cargo@v1
