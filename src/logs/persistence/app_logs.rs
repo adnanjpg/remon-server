@@ -1,6 +1,7 @@
 use super::{get_default_sql_connection, SQLConnection};
 
 use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
 
 #[derive(Debug, Serialize, Deserialize, sqlx::Type, Clone, PartialEq, PartialOrd)]
 #[serde(rename_all = "lowercase")]
@@ -69,6 +70,39 @@ pub async fn insert_app_log(log: &AppLog) -> Result<(), sqlx::Error> {
         .await?;
 
     Ok(())
+}
+
+pub async fn get_app_ids(
+    start_date: Option<i64>,
+    end_date: Option<i64>,
+) -> Result<Vec<String>, sqlx::Error> {
+    let conn = get_default_sql_connection().await?;
+
+    let app_ids_query = match (start_date, end_date) {
+        (Some(_), Some(_)) => {
+            let app_ids_statement = format!(
+                "SELECT DISTINCT app_id FROM {} WHERE logged_at BETWEEN ? AND ?",
+                APP_LOGS_TABLE_NAME
+            );
+
+            sqlx::query_scalar::<_, String>(&app_ids_statement)
+                .bind(&start_date)
+                .bind(&end_date)
+                .fetch_all(&conn)
+                .await?
+        }
+        _ => {
+            let app_ids_statement = format!("SELECT DISTINCT app_id FROM {}", APP_LOGS_TABLE_NAME);
+
+            sqlx::query_scalar::<_, String>(&app_ids_statement)
+                .fetch_all(&conn)
+                .await?
+        }
+    };
+
+    let app_ids = app_ids_query;
+
+    Ok(app_ids)
 }
 
 pub(super) async fn create_app_logs_table(conn: &SQLConnection) -> Result<(), sqlx::Error> {

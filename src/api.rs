@@ -14,6 +14,10 @@ pub mod teapot;
 pub mod update_info;
 pub mod validate_token_test;
 
+pub mod logs {
+    pub mod get_app_ids;
+}
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]

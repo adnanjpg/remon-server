@@ -72,6 +72,11 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
         (&Method::GET, "/validate-token-test") => {
             api::validate_token_test::validate_token_test(req).await
         }
+
+        // logs
+        (&Method::GET, "/logs/get-app-ids") => api::logs::get_app_ids::get_app_ids(req).await,
+
+        // 404
         (_, _) => api::_404::_404(req),
     }
 }
