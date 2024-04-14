@@ -1,7 +1,7 @@
 use super::{get_default_sql_connection, SQLConnection};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, sqlx::Type, Clone)]
+#[derive(Debug, Serialize, Deserialize, sqlx::Type, Clone, PartialEq, PartialOrd)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Trace,
@@ -21,9 +21,20 @@ impl LogLevel {
             log::Level::Error => LogLevel::Error,
         }
     }
+    pub fn from_string(level: &str) -> LogLevel {
+        match level.to_lowercase().as_str() {
+            "error" => LogLevel::Error,
+            "warn" => LogLevel::Warning,
+            "warning" => LogLevel::Warning,
+            "info" => LogLevel::Info,
+            "debug" => LogLevel::Debug,
+            "trace" => LogLevel::Trace,
+            _ => LogLevel::Info,
+        }
+    }
 }
 
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
 pub struct AppLog {
     pub id: i64,
     pub log_level: LogLevel,

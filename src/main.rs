@@ -1,6 +1,5 @@
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server};
-use logger::init_logger;
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -10,7 +9,7 @@ mod logger;
 mod notification_service;
 pub mod persistence;
 
-use log::{error, info};
+use log::{error, info, warn};
 
 mod auth;
 mod monitor;
@@ -87,18 +86,19 @@ async fn shutdown_signal() {
 #[cfg(test)]
 #[ctor::ctor]
 fn init_tests() {
-    init_logger(true);
+    //logger::LogService::new(true);
 }
 
 #[tokio::main]
 async fn main() {
-    init_logger(false);
+    logger::LogService::new();
 
     let socket_addr = match get_socket_addr() {
         Some(addr) => addr,
         None => {
             error!("Failed to get local IP address.");
-            return;
+            SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT))
+            // return;
         }
     };
 
@@ -109,6 +109,11 @@ async fn main() {
             return;
         }
     };
+
+    //logger::LogService::new();
+    // env_logger::builder()
+    //         .filter_level(log::LevelFilter::Debug)
+    //         .init();
 
     match monitor::init().await {
         Ok(_) => {}

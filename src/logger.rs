@@ -1,109 +1,134 @@
-use chrono::Local;
-use env_logger::fmt::Color;
-use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use std::{
+    io::{self, Write},
+    sync::{Arc, Mutex},
+};
 
-use std::io::Write;
+use chrono::Local;
+use log::error;
+use tokio::sync::mpsc;
 
 use crate::persistence::app_logs::{insert_app_log, AppLog, LogLevel};
 
-async fn log_to_db_receiver(mut receiver: mpsc::Receiver<AppLog>) {
-    while let Some(app_log) = receiver.recv().await {
-        let app_log_rec = insert_app_log(&app_log)
-            .await
-            .expect("Failed to insert app log");
+pub struct LogService {
+    sender: mpsc::Sender<AppLog>,
+}
+
+pub struct CustomPipe {
+    buffer_tx: Arc<Mutex<mpsc::Sender<AppLog>>>,
+}
+
+impl CustomPipe {
+    fn new(tx: Arc<Mutex<mpsc::Sender<AppLog>>>) -> Self {
+        CustomPipe { buffer_tx: tx }
     }
 }
-#[derive(Debug)]
-struct MyValue {
-    data: String,
-    // Add any other fields you need
+
+impl Write for CustomPipe {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let log_str = String::from_utf8_lossy(buf);
+        let log_str = log_str.trim_end();
+
+        // extract log level, target, and message format is
+        // TODO(isaidsari): this isnt the way
+        let log_parts: Vec<&str> = log_str.splitn(4, " ").collect();
+        let log_level = log_parts[2];
+
+        io::stdout()
+            .write_all(format!("{:?}\n", log_level).as_bytes())
+            .unwrap();
+
+        let app_log = AppLog {
+            id: -1,
+            log_level: LogLevel::from_string(log_level),
+            app_id: DEF_APP_NAME.to_owned(),
+            logged_at: Local::now().timestamp(),
+            message: log_str.to_string(),
+            target: "stdout".to_owned(),
+        };
+
+        let buffer_tx = self.buffer_tx.clone();
+        if app_log.log_level >= LogLevel::Warning {
+            if let Err(e) = buffer_tx.lock().unwrap().try_send(app_log) {
+                error!("Failed to send log to buffer: {}", e);
+            }
+        }
+
+        //io::stdout().write_all(buf).unwrap();
+        //writeln!(io::stdout(), "{}", log_str).unwrap();
+
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
-lazy_static! {
-    static ref GLOBAL_VALUE: Mutex<Option<MyValue>> = Mutex::new(None);
-}
+impl LogService {
+    pub fn new() -> Self {
+        // Create a buffer channel for asynchronous processing
+        let (buffer_tx, mut buffer_rx) = mpsc::channel::<AppLog>(100);
+        let this = LogService {
+            sender: mpsc::Sender::clone(&buffer_tx),
+        };
 
-async fn set_global_value(value: MyValue) {
-    let mut global_value = GLOBAL_VALUE.lock().await.unwrap();
-    *global_value = Some(value);
+        let mut builder = env_logger::builder();
+
+        builder.target(env_logger::Target::Pipe(Box::new(CustomPipe::new(
+            Arc::new(Mutex::new(buffer_tx)),
+        ))));
+
+        builder.format(|buf, record| {
+            let dt = Local::now();
+
+            // TODO(isaidsari): use library for this
+            let lvl = match record.level() {
+                log::Level::Error => "\x1b[1;31mERROR\x1b[0m",
+                log::Level::Warn => "\x1b[1;33mWARN\x1b[0m",
+                log::Level::Info => "\x1b[1;34mINFO\x1b[0m",
+                log::Level::Debug => "\x1b[1;36mDEBUG\x1b[0m",
+                log::Level::Trace => "\x1b[1;37mTRACE\x1b[0m",
+            };
+            let targ = format!("\x1b[1;32m{}\x1b[0m", record.target());
+            let msg = record.args();
+
+            writeln!(
+                buf,
+                "{} {} [{}] {}",
+                dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+                record.level(),
+                record.target(),
+                record.args()
+            )
+            .unwrap();
+
+            writeln!(
+                io::stdout(),
+                "{} {} [{}] {}",
+                dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+                lvl,
+                targ,
+                msg
+            )
+        });
+
+        builder.filter_level(log::LevelFilter::Debug);
+
+        builder.init();
+
+        // Spawn the task for processing the buffer asynchronously
+        tokio::spawn(async move {
+            while let Some(app_log) = buffer_rx.recv().await {
+                println!("app log received at {}", app_log.message);
+                let app_log_rec = insert_app_log(&app_log)
+                    .await
+                    .expect("Failed to insert app log");
+            }
+        });
+
+        this
+    }
 }
 
 // TODO(adnanjpg): make this configurable
 const DEF_APP_NAME: &str = "remon";
-
-pub fn init_logger(test_assertions: bool) {
-    let (sender, receiver) = mpsc::channel::<AppLog>(100);
-
-    let sender_arc = Arc::new(sender);
-
-    let receiver_task = log_to_db_receiver(receiver);
-    tokio::spawn(receiver_task);
-
-    // make sender have a &'static lifetime
-    let sender_static = to_static_fr(&sender_arc);
-
-    let mut bui = env_logger::builder();
-    let bui = bui.format(|buf, record| {
-        let dt = Local::now();
-
-        let lvl = record.level();
-        let targ = record.target();
-        let msg = record.args();
-
-        let app_log = AppLog {
-            id: -1,
-            log_level: LogLevel::from_log_crate_level(&lvl),
-            app_id: DEF_APP_NAME.to_owned(),
-            logged_at: dt.timestamp(),
-            message: msg.to_string(),
-            target: targ.to_owned(),
-        };
-        // let senn = Arc::clone(&sender_arc_for_closure);
-        tokio::spawn(async move {
-            sender_static
-                .send(app_log)
-                .await
-                .expect("Failed to send message");
-        });
-
-        let mut level_style = buf.style();
-        level_style
-            .set_color(match record.level() {
-                log::Level::Error => Color::Red,
-                log::Level::Warn => Color::Yellow,
-                log::Level::Info => Color::Green,
-                log::Level::Debug => Color::Blue,
-                log::Level::Trace => Color::Magenta,
-            })
-            .set_bold(true);
-
-        let mut date_style = buf.style();
-        date_style
-            .set_color(Color::Rgb(91, 24, 128))
-            .set_bold(true)
-            .set_bg(Color::Rgb(255, 255, 255));
-
-        let mut target_style = buf.style();
-        target_style
-            .set_color(Color::Rgb(128, 24, 60))
-            .set_bold(true);
-
-        writeln!(
-            buf,
-            "{} {} {}: {}",
-            date_style.value(dt.format("%Y-%m-%d %H:%M:%S")),
-            level_style.value(lvl),
-            target_style.value(targ),
-            msg
-        )
-    });
-
-    if cfg!(debug_assertions) {
-        bui.filter_level(log::LevelFilter::Debug).init();
-    } else if test_assertions {
-        bui.filter_level(log::LevelFilter::Info).init();
-    } else {
-        bui.filter_level(log::LevelFilter::Info).init();
-    }
-}
