@@ -12,6 +12,7 @@ pub mod persistence;
 use log::{error, info, warn};
 
 mod auth;
+mod logs;
 mod monitor;
 
 use local_ip_address::local_ip;

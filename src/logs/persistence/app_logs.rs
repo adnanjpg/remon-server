@@ -1,4 +1,5 @@
 use super::{get_default_sql_connection, SQLConnection};
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, sqlx::Type, Clone, PartialEq, PartialOrd)]
