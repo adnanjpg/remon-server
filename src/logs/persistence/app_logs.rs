@@ -1,9 +1,14 @@
+use crate::logs::models::get_app_logs::{OrderBy, OrderByDirection, PaginationInfo};
+
 use super::{get_default_sql_connection, SQLConnection};
 
+use chrono::format::format;
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use sqlx::{Execute, QueryBuilder, Sqlite};
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 
-#[derive(Debug, Serialize, Deserialize, sqlx::Type, Clone, PartialEq, PartialOrd)]
+#[derive(Debug, Serialize, Deserialize, sqlx::Type, Clone, PartialEq, PartialOrd, EnumIter)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Trace,
@@ -85,11 +90,13 @@ pub async fn get_app_ids(
                 APP_LOGS_TABLE_NAME
             );
 
-            sqlx::query_scalar::<_, String>(&app_ids_statement)
+            let binded = sqlx::query_scalar::<_, String>(&app_ids_statement)
                 .bind(&start_date)
-                .bind(&end_date)
-                .fetch_all(&conn)
-                .await?
+                .bind(&end_date);
+
+            let res = binded.fetch_all(&conn).await?;
+
+            res
         }
         _ => {
             let app_ids_statement = format!("SELECT DISTINCT app_id FROM {}", APP_LOGS_TABLE_NAME);
@@ -103,6 +110,89 @@ pub async fn get_app_ids(
     let app_ids = app_ids_query;
 
     Ok(app_ids)
+}
+
+pub async fn get_app_logs(
+    start_date: Option<i64>,
+    end_date: Option<i64>,
+    app_ids: Option<Vec<String>>,
+    order_by: Option<OrderBy>,
+    order_by_direction: Option<OrderByDirection>,
+    filter_by_word: Option<String>,
+    levels: Option<Vec<LogLevel>>,
+    pagination_info: &PaginationInfo,
+) -> Result<Vec<AppLog>, sqlx::Error> {
+    let conn = get_default_sql_connection().await?;
+
+    // 1 = 1 is a hack to make the query builder work
+    let mut query: QueryBuilder<Sqlite> =
+        QueryBuilder::new(format!("SELECT * from {} where 1=1 ", APP_LOGS_TABLE_NAME));
+
+    // if let Some(start_date) = start_date {
+    //     query.push(" AND logged_at >= ?");
+    //     query.push_bind(start_date);
+    // }
+
+    // if let Some(end_date) = end_date {
+    //     query.push(" AND logged_at <= ?");
+    //     query.push_bind(end_date);
+    // }
+
+    // if let Some(app_ids) = &app_ids {
+    //     query.push(" AND app_id IN (");
+    //     let it = app_ids.iter();
+    //     for (i, app_id) in it.enumerate() {
+    //         query.push("?");
+    //         query.push_bind(app_id);
+
+    //         if i < app_ids.len() - 1 {
+    //             query.push(", ");
+    //         }
+    //     }
+    //     query.push(")");
+    // }
+
+    // if let Some(filter_by_word) = filter_by_word {
+    //     query.push(" AND message LIKE ?");
+    //     query.push_bind(format!("%{}%", filter_by_word));
+    // }
+
+    // if let Some(levels) = &levels {
+    //     query.push(" AND log_level IN (");
+    //     for (i, level) in levels.iter().enumerate() {
+    //         query.push("?");
+    //         query.push_bind(level);
+
+    //         if i < levels.len() - 1 {
+    //             query.push(", ");
+    //         }
+    //     }
+    //     query.push(")");
+    // }
+
+    // if let Some(order_by) = order_by {
+    //     query.push(" ORDER BY ");
+    //     query.push(&order_by);
+
+    //     if let Some(order_by_direction) = order_by_direction {
+    //         query.push(" ");
+    //         query.push(&order_by_direction.to_string());
+    //     }
+    // }
+
+    query.push(format!(
+        " LIMIT {} OFFSET {}",
+        pagination_info.page_size,
+        pagination_info.page * pagination_info.page_size
+    ));
+
+    let qub = query.build();
+    let query_sql = qub.sql();
+
+    let query_res = sqlx::query_as::<_, AppLog>(&query_sql);
+    let app_logs: Vec<AppLog> = query_res.fetch_all(&conn).await?;
+
+    Ok(app_logs)
 }
 
 pub(super) async fn create_app_logs_table(conn: &SQLConnection) -> Result<(), sqlx::Error> {
