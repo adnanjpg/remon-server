@@ -193,7 +193,7 @@ pub async fn get_app_logs(
             levels
                 .iter()
                 // sqlx serialize
-                .map(|l| format!("{}", l.to_string()))
+                .map(|l| format!("'{}'", l.to_string()))
                 .collect::<Vec<String>>()
                 .join(", ")
         ));
