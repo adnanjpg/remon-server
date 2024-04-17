@@ -163,7 +163,8 @@ pub async fn get_app_logs(req: Request<Body>) -> Result<Response<Body>, Infallib
     {
         Ok(val) => val,
         Err(err) => {
-            let bod = serde_json::to_string(&ResponseBody::Error(err.to_string())).unwrap();
+            let err_str = err.to_string();
+            let bod = serde_json::to_string(&ResponseBody::Error(err_str)).unwrap();
 
             let response = err_res_builder(bod);
 
@@ -176,7 +177,7 @@ pub async fn get_app_logs(req: Request<Body>) -> Result<Response<Body>, Infallib
     let len = app_logs.len() as i64;
     let res_model = GepAppLogsResponse {
         total: page * req_len + len,
-        page: page + 1,
+        page: page + 0,
         page_size: len,
         logs: app_logs,
     };

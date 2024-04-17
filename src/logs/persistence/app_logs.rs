@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::logs::models::get_app_logs::{OrderBy, OrderByDirection, PaginationInfo};
 
 use super::{get_default_sql_connection, SQLConnection};
@@ -18,6 +20,14 @@ pub enum LogLevel {
     Error,
 }
 
+impl fmt::Display for LogLevel {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+        // or, alternatively:
+        // fmt::Debug::fmt(self, f)
+    }
+}
+
 impl LogLevel {
     pub fn from_log_crate_level(s: &log::Level) -> LogLevel {
         match s {
@@ -28,6 +38,7 @@ impl LogLevel {
             log::Level::Error => LogLevel::Error,
         }
     }
+
     pub fn from_string(level: &str) -> LogLevel {
         match level.to_lowercase().as_str() {
             "error" => LogLevel::Error,
@@ -128,57 +139,75 @@ pub async fn get_app_logs(
     let mut query: QueryBuilder<Sqlite> =
         QueryBuilder::new(format!("SELECT * from {} where 1=1 ", APP_LOGS_TABLE_NAME));
 
-    // if let Some(start_date) = start_date {
-    //     query.push(" AND logged_at >= ?");
-    //     query.push_bind(start_date);
-    // }
+    if let Some(start_date) = start_date {
+        // query.push(" AND logged_at >= ?");
+        // query.push_bind(start_date);
 
-    // if let Some(end_date) = end_date {
-    //     query.push(" AND logged_at <= ?");
-    //     query.push_bind(end_date);
-    // }
+        query.push(format!(" AND logged_at >= {}", start_date));
+    }
 
-    // if let Some(app_ids) = &app_ids {
-    //     query.push(" AND app_id IN (");
-    //     let it = app_ids.iter();
-    //     for (i, app_id) in it.enumerate() {
-    //         query.push("?");
-    //         query.push_bind(app_id);
+    if let Some(end_date) = end_date {
+        // query.push(" AND logged_at <= ?");
+        // query.push_bind(end_date);
 
-    //         if i < app_ids.len() - 1 {
-    //             query.push(", ");
-    //         }
-    //     }
-    //     query.push(")");
-    // }
+        query.push(format!(" AND logged_at <= {}", end_date));
+    }
 
-    // if let Some(filter_by_word) = filter_by_word {
-    //     query.push(" AND message LIKE ?");
-    //     query.push_bind(format!("%{}%", filter_by_word));
-    // }
+    if let Some(app_ids) = &app_ids {
+        // query.push(" AND app_id IN (");
+        // let it = app_ids.iter();
+        // for (i, app_id) in it.enumerate() {
+        //     query.push("?");
+        //     query.push_bind(app_id);
 
-    // if let Some(levels) = &levels {
-    //     query.push(" AND log_level IN (");
-    //     for (i, level) in levels.iter().enumerate() {
-    //         query.push("?");
-    //         query.push_bind(level);
+        //     if i < app_ids.len() - 1 {
+        //         query.push(", ");
+        //     }
+        // }
+        // query.push(")");
 
-    //         if i < levels.len() - 1 {
-    //             query.push(", ");
-    //         }
-    //     }
-    //     query.push(")");
-    // }
+        query.push(format!(" AND app_id IN ({})", app_ids.join(", ")));
+    }
 
-    // if let Some(order_by) = order_by {
-    //     query.push(" ORDER BY ");
-    //     query.push(&order_by);
+    if let Some(filter_by_word) = filter_by_word {
+        // query.push(" AND message LIKE ?");
+        // query.push_bind(format!("%{}%", filter_by_word));
 
-    //     if let Some(order_by_direction) = order_by_direction {
-    //         query.push(" ");
-    //         query.push(&order_by_direction.to_string());
-    //     }
-    // }
+        query.push(format!(" AND message LIKE '%{}%'", filter_by_word));
+    }
+
+    if let Some(levels) = &levels {
+        // query.push(" AND log_level IN (");
+        // for (i, level) in levels.iter().enumerate() {
+        //     query.push("?");
+        //     query.push_bind(level);
+
+        //     if i < levels.len() - 1 {
+        //         query.push(", ");
+        //     }
+        // }
+        // query.push(")");
+
+        query.push(format!(
+            " AND log_level IN ({})",
+            levels
+                .iter()
+                // sqlx serialize
+                .map(|l| format!("{}", l.to_string()))
+                .collect::<Vec<String>>()
+                .join(", ")
+        ));
+    }
+
+    if let Some(order_by) = order_by {
+        query.push(" ORDER BY ");
+        query.push(&order_by);
+
+        if let Some(order_by_direction) = order_by_direction {
+            query.push(" ");
+            query.push(&order_by_direction.to_string());
+        }
+    }
 
     query.push(format!(
         " LIMIT {} OFFSET {}",
@@ -186,10 +215,7 @@ pub async fn get_app_logs(
         pagination_info.page * pagination_info.page_size
     ));
 
-    let qub = query.build();
-    let query_sql = qub.sql();
-
-    let query_res = sqlx::query_as::<_, AppLog>(&query_sql);
+    let query_res = query.build_query_as::<AppLog>();
     let app_logs: Vec<AppLog> = query_res.fetch_all(&conn).await?;
 
     Ok(app_logs)
