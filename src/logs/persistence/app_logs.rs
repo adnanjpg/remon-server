@@ -166,7 +166,13 @@ pub async fn get_app_logs(
         // }
         // query.push(")");
 
-        query.push(format!(" AND app_id IN ({})", app_ids.join(", ")));
+        let ids = app_ids
+            .iter()
+            .map(|l| format!("'{}'", l.to_string()))
+            .collect::<Vec<String>>()
+            .join(", ");
+
+        query.push(format!(" AND app_id IN ({})", ids));
     }
 
     if let Some(filter_by_word) = filter_by_word {
@@ -201,11 +207,14 @@ pub async fn get_app_logs(
 
     if let Some(order_by) = order_by {
         query.push(" ORDER BY ");
-        query.push(&order_by);
+        query.push(format!("'{}'", &order_by));
 
         if let Some(order_by_direction) = order_by_direction {
             query.push(" ");
-            query.push(&order_by_direction.to_string());
+            query.push(format!(
+                "{}",
+                &order_by_direction.to_string().to_lowercase()
+            ));
         }
     }
 
