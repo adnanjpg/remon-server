@@ -30,3 +30,13 @@ pub struct MonitorConfig {
     pub fcm_token: String,
     pub updated_at: i64,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProcessInfo {
+    pub pid: u32,
+    pub name: String,
+    pub cpu: f32,
+    pub mem: u64,
+    pub status: String,
+    pub cmd: Vec<String>,
+}

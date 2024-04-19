@@ -3,6 +3,7 @@ use hyper::{Body, Method, Request, Response, Server};
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::process::{exit, ExitCode};
 
 mod api;
 mod logger;
@@ -68,6 +69,7 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
         (&Method::GET, "/get-cpu-status") => api::get_cpu_status::get_cpu_status(req).await,
         (&Method::GET, "/get-mem-status") => api::get_mem_status::get_mem_status(req).await,
         (&Method::GET, "/get-disk-status") => api::get_disk_status::get_disk_status(req).await,
+        (&Method::GET, "/get-processes") => api::get_processes::get_processes(req).await,
         (&Method::GET, "/validate-token-test") => {
             api::validate_token_test::validate_token_test(req).await
         }

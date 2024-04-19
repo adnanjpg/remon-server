@@ -13,6 +13,7 @@ pub mod login;
 pub mod teapot;
 pub mod update_info;
 pub mod validate_token_test;
+pub mod get_processes;
 
 use serde::{Deserialize, Serialize};
 

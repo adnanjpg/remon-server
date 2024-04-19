@@ -1,0 +1,29 @@
+use hyper::{Body, Request, Response};
+use log::debug;
+use std::convert::Infallible;
+
+use crate::{
+    api::{authenticate, ResponseBody},
+    monitor::get_process_list,
+};
+
+pub async fn get_processes(req: Request<Body>) -> Result<Response<Body>, Infallible> {
+    match authenticate(&req) {
+        Ok(val) => val,
+        Err(err) => {
+            return Ok(err);
+        }
+    };
+
+    let start = std::time::Instant::now();
+    let processes = get_process_list();
+    debug!("get_processes[{}] took: {:?}",processes.len(), start.elapsed());
+
+    let response = Response::builder()
+        .status(hyper::StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(Body::from(serde_json::to_string(&processes).unwrap()))
+        .unwrap();
+
+    Ok(response)
+}

@@ -1,7 +1,9 @@
-use self::models::ServerDescription;
+use self::models::{ProcessInfo, ServerDescription};
 
 use log::debug;
-use sysinfo::{CpuRefreshKind, RefreshKind, System};
+use sysinfo::{CpuRefreshKind, ProcessRefreshKind, RefreshKind, System};
+
+use std::time::Instant;
 
 mod config_exceeds;
 pub mod models;
@@ -34,4 +36,72 @@ pub fn get_default_server_desc() -> ServerDescription {
         + &format!("{:.1}GB", &mem);
 
     ServerDescription { name, description }
+}
+
+pub fn get_process_list() -> Vec<ProcessInfo> {
+    let system = System::new_with_specifics(
+        RefreshKind::new().with_processes(
+            ProcessRefreshKind::new()
+                .with_cpu()
+                .with_memory()
+                .with_cmd(sysinfo::UpdateKind::Always),
+        ),
+    );
+
+    let mut processes = Vec::new();
+    for (pid, process) in system.processes() {
+        processes.push(models::ProcessInfo {
+            pid: pid.as_u32(),
+            name: process.name().to_string(),
+            cpu: process.cpu_usage(),
+            mem: process.memory(),
+            status: process.status().to_string(),
+            cmd: process.cmd().to_vec(),
+        });
+    }
+
+    processes
+}
+
+// for testing
+fn get_process_list_wmetrics() -> Vec<models::ProcessInfo> {
+    let start_total_time = Instant::now();
+
+    // Timing metrics for fetching process information
+    let start_process_time = Instant::now();
+    let system = System::new_with_specifics(
+        RefreshKind::new().with_processes(
+            ProcessRefreshKind::new()
+                .with_cpu()
+                .with_memory()
+                .with_cmd(sysinfo::UpdateKind::Always),
+        ),
+    );
+    let process_time = start_process_time.elapsed();
+
+    // Timing metrics for processing process information
+    let start_process_processing_time = Instant::now();
+    let mut processes = Vec::new();
+    for (pid, process) in system.processes() {
+        processes.push(models::ProcessInfo {
+            pid: pid.as_u32(),
+            name: process.name().to_string(),
+            cpu: process.cpu_usage(),
+            mem: process.memory(),
+            status: process.status().to_string(),
+            cmd: process.cmd().to_vec(),
+        });
+    }
+    let process_processing_time = start_process_processing_time.elapsed();
+
+    let total_time = start_total_time.elapsed();
+
+    debug!("get_process_list took: {:?}", total_time);
+    debug!("get_process_list process took: {:?}", process_time);
+    debug!(
+        "get_process_list process processing took: {:?}",
+        process_processing_time
+    );
+
+    processes
 }
