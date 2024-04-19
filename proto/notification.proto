@@ -10,7 +10,6 @@ service NotificationService {
 message NotificationRequest {
   string title = 1;
   string body = 2;
-  string token = 3;
 }
 
 message NotificationResponse {

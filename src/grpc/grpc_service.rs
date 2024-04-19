@@ -113,19 +113,18 @@ impl NotificationServiceImpl for NotificationService {
 }
 
 pub async fn init() -> Result<(), Box<dyn std::error::Error>> {
-    let notification_service = NotificationService::default();
+    let notification_service = NotificationServiceServer::new(NotificationService::default());
 
     // use reflection to expose the service
     let reflection_service = ReflectionServer::Builder::configure()
         .register_encoded_file_descriptor_set(remonproto::FILE_DESCRIPTOR_SET)
         .build()
         .unwrap();
-
     info!("gRPC service listening on {}", DEFAULT_ADDR);
 
     tokio::spawn(async move {
         Server::builder()
-            .add_service(NotificationServiceServer::new(notification_service))
+            .add_service(notification_service)
             .add_service(reflection_service)
             .serve(DEFAULT_ADDR.parse().unwrap())
             .await
