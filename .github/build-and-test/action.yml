@@ -20,7 +20,7 @@ runs:
         toolchain: stable
         
     - name: 📦 Install dependencies
-      uses: bash
+      shell: bash
       run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
     - name: 🔨 Build
