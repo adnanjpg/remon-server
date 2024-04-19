@@ -22,7 +22,7 @@ runs:
     - name: 📦 Install protoc
       shell: bash
       run: |
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          if [ "${{ runner.os }}" = "windows-latest" ]; then
             choco install protoc
           else
             sudo apt-get install -y protobuf-compiler
