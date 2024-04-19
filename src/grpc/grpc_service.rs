@@ -1,4 +1,4 @@
-use log::{error, info};
+use log::{debug, error, info};
 use tonic::{transport::Server, Request, Response, Status};
 use tonic_reflection::server as ReflectionServer;
 
@@ -38,7 +38,7 @@ impl NotificationServiceImpl for NotificationService {
     ) -> Result<Response<NotificationResponse>, Status> {
         let request = request.into_inner();
 
-        info!(
+        debug!(
             "Received notification: {} - {}",
             request.title, request.body
         );
@@ -51,13 +51,14 @@ impl NotificationServiceImpl for NotificationService {
         });
 
         if configs.is_empty() {
-            return Ok(Response::new(NotificationResponse {
-                success: false,
-                message: Some("No monitor configs found".to_string()),
-            }));
+            // return Ok(Response::new(NotificationResponse {
+            //     success: false,
+            //     message: Some("No monitor configs found".to_string()),
+            // }));
+            return Err(Status::not_found("No monitor configs found"));
         };
 
-        let res = notification_service::send_notification_to_single(
+        let result = notification_service::send_notification_to_single(
             &configs[0].device_id,
             &configs[0].fcm_token,
             &notification_service::NotificationMessage {
@@ -68,31 +69,28 @@ impl NotificationServiceImpl for NotificationService {
         )
         .await;
 
-        info!("Notification sent: {:?}", res);
-
-        let response = if res.is_ok() {
-            NotificationResponse {
-                success: true,
-                message: Some(String::from("Notification sent")),
+        match result {
+            Ok(_) => {
+                debug!("Notification sent: {:?}", result);
+                Ok(Response::new(NotificationResponse {
+                    success: true,
+                    message: Some("Notification sent".to_string()),
+                }))
             }
-        } else {
-            NotificationResponse {
-                success: false,
-                message: Some(format!(
+            Err(e) => {
+                debug!("Failed to send notification: {}", e);
+                Err(Status::internal(format!(
                     "Failed to send notification: {}",
-                    res.err().unwrap()
-                )),
+                    e
+                )))
             }
-        };
-
-        // return the response
-        Ok(Response::new(response))
+        }
     }
 
     async fn log(&self, request: Request<LogRequest>) -> Result<Response<LogResponse>, Status> {
         let log = request.into_inner();
 
-        info!("Received log message: {}", log.message);
+        debug!("Received log message: {}", log.message);
 
         let app_log = AppLog {
             id: -1,
@@ -103,12 +101,19 @@ impl NotificationServiceImpl for NotificationService {
             target: log.target,
         };
 
-        let res = insert_app_log(&app_log).await;
-
-        Ok(Response::new(LogResponse {
-            success: res.is_ok(),
-            message: Some("Log received".to_string()),
-        }))
+        match insert_app_log(&app_log).await {
+            Ok(_) => {
+                debug!("Log received: {:?}", app_log);
+                Ok(Response::new(LogResponse {
+                    success: true,
+                    message: Some("Log received".to_string()),
+                }))
+            }
+            Err(e) => {
+                debug!("Failed to insert log: {}", e);
+                Err(Status::internal(format!("Failed to insert log: {}", e)))
+            }
+        }
     }
 }
 
