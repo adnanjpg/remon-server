@@ -1,44 +1,82 @@
 name: "Build and test app"
 description: "Build and test app on different platforms"
-runs:
-  using: "composite"
-  steps:
-    - uses: actions/checkout@v2
-    - name: ⚡ Cache
-      uses: actions/cache@v2
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+on:
+  push:
+    branches:
+      - main
 
-    - uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        
-    - name: 📦 Install dependencies
-      shell: bash
-      run: |
-        if [[ "${runner.os}" == "Linux" ]]; then
-          sudo apt-get update && sudo apt-get install -y protobuf-compiler
-        elif [[ "${runner.os}" == "Windows" ]]; then
-          choco install protoc
-        elif [[ "${runner.os}" == "macOS" ]]; then
-          brew install protobuf
-        else
-          echo "Unsupported operating system: ${runner.os}"
-          exit 1
-        fi
+jobs:
+  build_linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [linux]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
 
-    - name: 🔨 Build
-      uses: actions-rs/cargo@v1
-      with:
-        command: build
-        args: --release --all-features
+      - name: ⚡ Cache
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: 🔎 Test
-      uses: actions-rs/cargo@v1
-      with:
-        command: test
-        args: --release
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Build and test
+        run: |
+          # Commands to build and test the app
+
+  build_windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        os: [windows]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: ⚡ Cache
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install dependencies
+        run: choco install protoc
+
+      - name: Build and test
+        run: |
+          # Commands to build and test the app
+
+  build_macos:
+    runs-on: macOS-latest
+    strategy:
+      matrix:
+        os: [macOS]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: ⚡ Cache
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install dependencies
+        run: brew install protobuf
+
+      - name: Build and test
+        run: |
+          # Commands to build and test the app
