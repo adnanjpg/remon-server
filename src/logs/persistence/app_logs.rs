@@ -11,6 +11,10 @@ use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
 #[derive(Debug, Serialize, Deserialize, sqlx::Type, Clone, PartialEq, PartialOrd, EnumIter)]
+use super::{get_default_sql_connection, SQLConnection};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize, sqlx::Type, Clone, PartialEq, PartialOrd)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Trace,

@@ -13,6 +13,7 @@ use log::{error, info, warn};
 
 mod auth;
 mod logs;
+mod grpc;
 mod monitor;
 
 use local_ip_address::local_ip;
@@ -129,6 +130,14 @@ async fn main() {
         }
     }
 
+    match grpc::grpc_service::init().await {
+        Ok(_) => {}
+        Err(_) => {
+            error!("Failed to initialize gRPC.");
+            return;
+        }
+    }
+
     let server = Server::bind(&socket_addr)
         .serve(make_service_fn(|_conn| async {
             Ok::<_, Infallible>(service_fn(req_handler))
@@ -151,6 +160,7 @@ async fn main() {
             info!("Listening on http://{}", addr);
         }
 
+        // will wait for either server or server_local to finish
         tokio::select! {
             _ = server_local => {},
             _ = server => {},

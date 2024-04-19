@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package remonproto;
+
+service NotificationService {
+  rpc SendNotification(NotificationRequest) returns (NotificationResponse) {}
+  rpc Log(LogRequest) returns (LogResponse) {}
+}
+
+message NotificationRequest {
+  string title = 1;
+  string body = 2;
+}
+
+message NotificationResponse {
+  bool success = 1;
+  optional string message = 2;
+}
+
+message LogRequest {
+  string level = 1;
+  string target = 2;
+  string message = 3;
+}
+
+message LogResponse {
+  bool success = 1;
+  optional string message = 2;
+}
