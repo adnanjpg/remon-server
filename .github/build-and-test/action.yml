@@ -1,5 +1,3 @@
-# a composite action, as described here:
-# https://docs.github.com/en/actions/creating-actions/creating-a-composite-action
 name: "Build and test app"
 description: "Build and test app on different platforms"
 runs:
@@ -21,7 +19,17 @@ runs:
         
     - name: 📦 Install dependencies
       shell: bash
-      run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      run: |
+        if [[ "${runner.os}" == "Linux" ]]; then
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        elif [[ "${runner.os}" == "Windows" ]]; then
+          choco install protoc
+        elif [[ "${runner.os}" == "macOS" ]]; then
+          brew install protobuf
+        else
+          echo "Unsupported operating system: ${runner.os}"
+          exit 1
+        fi
 
     - name: 🔨 Build
       uses: actions-rs/cargo@v1
@@ -34,11 +42,3 @@ runs:
       with:
         command: test
         args: --release
-
-    # https://stackoverflow.com/a/64702025/12555423
-    # these will be used once we add integration tests
-    # - name: ⚙ Integration test
-    #   uses: actions-rs/cargo@v1
-    #   with:
-    #     command: test
-    #     args: --release --features "integration_tests"
