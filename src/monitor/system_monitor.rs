@@ -15,6 +15,7 @@ use super::{
 use blake3::Hasher;
 use chrono::Utc;
 use log::{debug, error};
+use reqwest;
 use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -276,6 +277,11 @@ impl SystemMonitor {
                 // TODO(adnanjpg): run on a different thread with a different interval
                 check_thresholds(cpu_status, mem_status, &mem_info, disk_status, &disks_info).await;
 
+                match check_connectivity("").await {
+                    true => debug!("connection is up"),
+                    false => error!("connection is down"),
+                }
+
                 let duration = match check_interval.checked_sub(elapsed_time) {
                     Some(duration) => duration,
                     None => {
@@ -292,5 +298,24 @@ impl SystemMonitor {
     #[allow(dead_code)]
     pub fn stop_monitoring(&self) {
         *self.should_exit.lock().unwrap() = true;
+    }
+}
+
+const DEFAULT_PING_URL: &str = "https://www.google.com";
+
+pub async fn check_connectivity(url: &str) -> bool {
+    let url = if url.is_empty() {
+        DEFAULT_PING_URL
+    } else {
+        url
+    };
+
+    let response = reqwest::get(url).await;
+    match response {
+        Ok(r) => r.status().is_success(),
+        Err(e) => {
+            error!("failed to ping the url: {}", e);
+            false
+        }
     }
 }
