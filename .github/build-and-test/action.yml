@@ -18,10 +18,10 @@ runs:
     - uses: actions-rs/toolchain@v1
       with:
         toolchain: stable
-
-    - name: Install protoc compiler
-    shell: bash
-    run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        
+    - name: 📦 Install dependencies
+      uses: bash
+      run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
     - name: 🔨 Build
       uses: actions-rs/cargo@v1
