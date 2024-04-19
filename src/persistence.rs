@@ -3,9 +3,6 @@ use log::error;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::{Pool, Sqlite};
 
-pub mod app_logs;
-pub mod notification_logs;
-
 const SQLITE_DBS_FOLDER_PATH: &str = "./db";
 const SQLITE_DB_PATH: &str = "./db/monitor.sqlite3";
 const SQLITE_DB_CONN_STR: &str = "sqlite:./db/monitor.sqlite3";
@@ -78,9 +75,7 @@ pub async fn init_db() -> Result<(), sqlx::Error> {
     let conn = get_default_sql_connection().await?;
 
     crate::monitor::persistence::init_db(&conn).await?;
-
-    notification_logs::create_notification_logs_table(&conn).await?;
-    app_logs::create_app_logs_table(&conn).await?;
+    crate::logs::persistence::init_db(&conn).await?;
 
     Ok(())
 }

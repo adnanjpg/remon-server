@@ -3,9 +3,7 @@ use serde_derive::{Deserialize, Serialize};
 
 use fcm;
 
-use crate::persistence::notification_logs::{
-    insert_notification_log, NotificationLog, NotificationType,
-};
+use crate::logs::persistence::{insert_notification_log, NotificationLog, NotificationType};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NotificationMessage {

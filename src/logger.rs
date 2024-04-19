@@ -7,7 +7,7 @@ use chrono::Local;
 use log::error;
 use tokio::sync::mpsc;
 
-use crate::persistence::app_logs::{insert_app_log, AppLog, LogLevel};
+use crate::logs::persistence::{insert_app_log, AppLog, LogLevel};
 
 pub struct LogService {
     sender: mpsc::Sender<AppLog>,
