@@ -1,82 +1,49 @@
+# a composite action, as described here:
+# https://docs.github.com/en/actions/creating-actions/creating-a-composite-action
 name: "Build and test app"
 description: "Build and test app on different platforms"
-on:
-  push:
-    branches:
-      - main
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v2
+    - name: ⚡ Cache
+      uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-jobs:
-  build_linux:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        os: [linux]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
-
-      - name: ⚡ Cache
-        uses: actions/cache@v2
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Build and test
-        run: |
-          # Commands to build and test the app
-
-  build_windows:
-    runs-on: windows-latest
-    strategy:
-      matrix:
-        os: [windows]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
-
-      - name: ⚡ Cache
-        uses: actions/cache@v2
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Install dependencies
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        
+    - name: 📦 Install protoc
+      shell: bash
+      if: runner.os == 'Linux'
+        run: sudo apt-get install -y protobuf-compiler
+      if: runner.os == 'macOS'
+        run: brew install protobuf
+      if: runner.os == 'Windows'
         run: choco install protoc
 
-      - name: Build and test
-        run: |
-          # Commands to build and test the app
+    - name: 🔨 Build
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --release --all-features
 
-  build_macos:
-    runs-on: macOS-latest
-    strategy:
-      matrix:
-        os: [macOS]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
+    - name: 🔎 Test
+      uses: actions-rs/cargo@v1
+      with:
+        command: test
+        args: --release
 
-      - name: ⚡ Cache
-        uses: actions/cache@v2
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Install dependencies
-        run: brew install protobuf
-
-      - name: Build and test
-        run: |
-          # Commands to build and test the app
+    # https://stackoverflow.com/a/64702025/12555423
+    # these will be used once we add integration tests
+    # - name: ⚙ Integration test
+    #   uses: actions-rs/cargo@v1
+    #   with:
+    #     command: test
+    #     args: --release --features "integration_tests"
