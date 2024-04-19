@@ -22,10 +22,15 @@ runs:
     - name: 📦 Install protoc
       shell: bash
       run: |
-          if [ "${{ runner.os }}" = "windows-latest" ]; then
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            sudo apt-get install -y protobuf-compiler
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            brew install protobuf
+          elif [ "${{ runner.os }}" = "Windows" ]; then
             choco install protoc
           else
-            sudo apt-get install -y protobuf-compiler
+            echo "Unsupported OS"
+            exit 1
           fi
 
     - name: 🔨 Build
