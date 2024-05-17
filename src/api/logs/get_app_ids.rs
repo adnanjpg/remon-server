@@ -9,7 +9,7 @@ use crate::{
 
 #[derive(Serialize)]
 struct GepAppIdsResponse {
-    app_ids: Vec<String>,
+    ids: Vec<String>,
 }
 
 pub async fn get_app_ids(req: Request<Body>) -> Result<Response<Body>, Infallible> {
@@ -80,7 +80,7 @@ pub async fn get_app_ids(req: Request<Body>) -> Result<Response<Body>, Infallibl
             .unwrap()
     };
 
-    let app_ids = match logs::persistence::get_app_ids(start_time, end_time).await {
+    let ids = match logs::persistence::get_app_ids(start_time, end_time).await {
         Ok(val) => val,
         Err(err) => {
             let bod = serde_json::to_string(&ResponseBody::Error(err.to_string())).unwrap();
@@ -91,7 +91,7 @@ pub async fn get_app_ids(req: Request<Body>) -> Result<Response<Body>, Infallibl
         }
     };
 
-    let res_model = GepAppIdsResponse { app_ids };
+    let res_model = GepAppIdsResponse { ids };
 
     let res_json = serde_json::to_string(&res_model);
 
