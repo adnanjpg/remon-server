@@ -3,12 +3,9 @@ use tonic::{transport::Server, Request, Response, Status};
 use tonic_reflection::server as ReflectionServer;
 
 use crate::{
+    logs::persistence::{insert_app_log, AppLog, LogLevel, NotificationType},
     monitor::persistence::fetch_monitor_configs,
     notification_service,
-    persistence::{
-        app_logs::{insert_app_log, AppLog, LogLevel},
-        notification_logs::NotificationType,
-    },
 };
 
 use remonproto::{

@@ -4,15 +4,8 @@ use crate::logs::models::get_app_logs::{OrderBy, OrderByDirection, PaginationInf
 
 use super::{get_default_sql_connection, SQLConnection};
 
-use chrono::format::format;
 use serde::{Deserialize, Serialize};
-use sqlx::{Execute, QueryBuilder, Sqlite};
-use strum::IntoEnumIterator;
-use strum_macros::EnumIter;
-
-#[derive(Debug, Serialize, Deserialize, sqlx::Type, Clone, PartialEq, PartialOrd, EnumIter)]
-use super::{get_default_sql_connection, SQLConnection};
-use serde::{Deserialize, Serialize};
+use sqlx::{QueryBuilder, Sqlite};
 
 #[derive(Debug, Serialize, Deserialize, sqlx::Type, Clone, PartialEq, PartialOrd)]
 #[serde(rename_all = "lowercase")]
@@ -33,15 +26,15 @@ impl fmt::Display for LogLevel {
 }
 
 impl LogLevel {
-    pub fn from_log_crate_level(s: &log::Level) -> LogLevel {
-        match s {
-            log::Level::Trace => LogLevel::Trace,
-            log::Level::Debug => LogLevel::Debug,
-            log::Level::Info => LogLevel::Info,
-            log::Level::Warn => LogLevel::Warning,
-            log::Level::Error => LogLevel::Error,
-        }
-    }
+    // pub fn from_log_crate_level(s: &log::Level) -> LogLevel {
+    //     match s {
+    //         log::Level::Trace => LogLevel::Trace,
+    //         log::Level::Debug => LogLevel::Debug,
+    //         log::Level::Info => LogLevel::Info,
+    //         log::Level::Warn => LogLevel::Warning,
+    //         log::Level::Error => LogLevel::Error,
+    //     }
+    // }
 
     pub fn from_string(level: &str) -> LogLevel {
         match level.to_lowercase().as_str() {
@@ -234,7 +227,7 @@ pub async fn get_app_logs(
     Ok(app_logs)
 }
 
-pub(super) async fn create_app_logs_table(conn: &SQLConnection) -> Result<(), sqlx::Error> {
+pub async fn create_app_logs_table(conn: &SQLConnection) -> Result<(), sqlx::Error> {
     let statement = format!(
         "CREATE TABLE IF NOT EXISTS {} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
