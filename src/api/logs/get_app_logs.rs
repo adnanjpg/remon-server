@@ -4,11 +4,7 @@ use std::{collections::HashMap, convert::Infallible};
 
 use crate::{
     api::{authenticate, ResponseBody},
-    logs::{
-        self,
-        models::get_app_logs::{AppLogRecord, GetAppLogsRequest},
-        persistence::AppLog,
-    },
+    logs::{self, models::get_app_logs::GetAppLogsRequest, persistence::AppLog},
 };
 
 #[derive(Serialize)]

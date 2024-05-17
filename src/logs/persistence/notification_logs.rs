@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "lowercase")]
 pub enum NotificationType {
     StatusLimitsExceeding,
-    ServiceTest
+    ServiceTest,
 }
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
@@ -69,9 +69,7 @@ pub async fn fetch_single_latest_for_device_id_and_type(
     Ok(info)
 }
 
-pub(super) async fn create_notification_logs_table(
-    conn: &SQLConnection,
-) -> Result<(), sqlx::Error> {
+pub async fn create_notification_logs_table(conn: &SQLConnection) -> Result<(), sqlx::Error> {
     let statement = format!(
         "CREATE TABLE IF NOT EXISTS {} (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
