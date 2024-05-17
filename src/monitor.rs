@@ -3,8 +3,6 @@ use self::models::{ProcessInfo, ServerDescription};
 use log::debug;
 use sysinfo::{CpuRefreshKind, ProcessRefreshKind, RefreshKind, System};
 
-use std::time::Instant;
-
 mod config_exceeds;
 pub mod models;
 pub mod persistence;
@@ -64,44 +62,45 @@ pub fn get_process_list() -> Vec<ProcessInfo> {
 }
 
 // for testing
-fn get_process_list_wmetrics() -> Vec<models::ProcessInfo> {
-    let start_total_time = Instant::now();
+// TODO(isaidsari): use this in a test
+// fn get_process_list_wmetrics() -> Vec<models::ProcessInfo> {
+//     let start_total_time = Instant::now();
 
-    // Timing metrics for fetching process information
-    let start_process_time = Instant::now();
-    let system = System::new_with_specifics(
-        RefreshKind::new().with_processes(
-            ProcessRefreshKind::new()
-                .with_cpu()
-                .with_memory()
-                .with_cmd(sysinfo::UpdateKind::Always),
-        ),
-    );
-    let process_time = start_process_time.elapsed();
+//     // Timing metrics for fetching process information
+//     let start_process_time = Instant::now();
+//     let system = System::new_with_specifics(
+//         RefreshKind::new().with_processes(
+//             ProcessRefreshKind::new()
+//                 .with_cpu()
+//                 .with_memory()
+//                 .with_cmd(sysinfo::UpdateKind::Always),
+//         ),
+//     );
+//     let process_time = start_process_time.elapsed();
 
-    // Timing metrics for processing process information
-    let start_process_processing_time = Instant::now();
-    let mut processes = Vec::new();
-    for (pid, process) in system.processes() {
-        processes.push(models::ProcessInfo {
-            pid: pid.as_u32(),
-            name: process.name().to_string(),
-            cpu: process.cpu_usage(),
-            mem: process.memory(),
-            status: process.status().to_string(),
-            cmd: process.cmd().to_vec(),
-        });
-    }
-    let process_processing_time = start_process_processing_time.elapsed();
+//     // Timing metrics for processing process information
+//     let start_process_processing_time = Instant::now();
+//     let mut processes = Vec::new();
+//     for (pid, process) in system.processes() {
+//         processes.push(models::ProcessInfo {
+//             pid: pid.as_u32(),
+//             name: process.name().to_string(),
+//             cpu: process.cpu_usage(),
+//             mem: process.memory(),
+//             status: process.status().to_string(),
+//             cmd: process.cmd().to_vec(),
+//         });
+//     }
+//     let process_processing_time = start_process_processing_time.elapsed();
 
-    let total_time = start_total_time.elapsed();
+//     let total_time = start_total_time.elapsed();
 
-    debug!("get_process_list took: {:?}", total_time);
-    debug!("get_process_list process took: {:?}", process_time);
-    debug!(
-        "get_process_list process processing took: {:?}",
-        process_processing_time
-    );
+//     debug!("get_process_list took: {:?}", total_time);
+//     debug!("get_process_list process took: {:?}", process_time);
+//     debug!(
+//         "get_process_list process processing took: {:?}",
+//         process_processing_time
+//     );
 
-    processes
-}
+//     processes
+// }

@@ -3,14 +3,13 @@ use hyper::{Body, Method, Request, Response, Server};
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::process::{exit, ExitCode};
 
 mod api;
 mod logger;
 mod notification_service;
 pub mod persistence;
 
-use log::{error, info, warn};
+use log::{error, info};
 
 mod auth;
 mod monitor;
