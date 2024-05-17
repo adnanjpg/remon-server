@@ -12,6 +12,8 @@ pub mod persistence;
 use log::{error, info};
 
 mod auth;
+mod logs;
+mod grpc;
 mod monitor;
 
 use local_ip_address::local_ip;
@@ -72,6 +74,11 @@ async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
         (&Method::GET, "/validate-token-test") => {
             api::validate_token_test::validate_token_test(req).await
         }
+
+        // logs
+        (&Method::GET, "/logs/get-app-ids") => api::logs::get_app_ids::get_app_ids(req).await,
+        (&Method::GET, "/logs/get-app-logs") => api::logs::get_app_logs::get_app_logs(req).await,
+        // 404
         (_, _) => api::_404::_404(req),
     }
 }
@@ -124,6 +131,14 @@ async fn main() {
         }
     }
 
+    match grpc::grpc_service::init().await {
+        Ok(_) => {}
+        Err(_) => {
+            error!("Failed to initialize gRPC.");
+            return;
+        }
+    }
+
     let server = Server::bind(&socket_addr)
         .serve(make_service_fn(|_conn| async {
             Ok::<_, Infallible>(service_fn(req_handler))
@@ -146,6 +161,7 @@ async fn main() {
             info!("Listening on http://{}", addr);
         }
 
+        // will wait for either server or server_local to finish
         tokio::select! {
             _ = server_local => {},
             _ = server => {},

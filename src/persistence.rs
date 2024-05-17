@@ -78,6 +78,7 @@ pub async fn init_db() -> Result<(), sqlx::Error> {
     let conn = get_default_sql_connection().await?;
 
     crate::monitor::persistence::init_db(&conn).await?;
+    crate::logs::persistence::init_db(&conn).await?;
 
     notification_logs::create_notification_logs_table(&conn).await?;
     app_logs::create_app_logs_table(&conn).await?;

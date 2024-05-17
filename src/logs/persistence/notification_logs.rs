@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "lowercase")]
 pub enum NotificationType {
     StatusLimitsExceeding,
+    ServiceTest
 }
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]

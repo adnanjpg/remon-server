@@ -27,6 +27,7 @@ The mobile app provides a user-friendly interface for configuring what events tr
 to run on linux, you should have the following packages installed
 1. pkg-config: `sudo apt install pkg-config`
 2. libssl-dev: `sudo apt install libssl-dev`
+3. proto-compiler: `apt-get install protobuf-compiler`
 
 ## Setup
 1. create a copy of the `.env.example` file in the root directory of the project, and name it `.env`

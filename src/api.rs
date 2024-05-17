@@ -15,6 +15,11 @@ pub mod update_info;
 pub mod validate_token_test;
 pub mod get_processes;
 
+pub mod logs {
+    pub mod get_app_ids;
+    pub mod get_app_logs;
+}
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
