@@ -1,8 +1,17 @@
 use hyper::{Body, Request, Response};
 use log::debug;
+use serde::Serialize;
 use std::convert::Infallible;
 
-use crate::{api::authenticate, monitor::get_process_list};
+use crate::{
+    api::authenticate,
+    monitor::{get_process_list, models::ProcessInfo},
+};
+
+#[derive(Serialize)]
+struct ResponseData {
+    processes: Vec<ProcessInfo>,
+}
 
 pub async fn get_processes(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     match authenticate(&req) {
@@ -20,10 +29,12 @@ pub async fn get_processes(req: Request<Body>) -> Result<Response<Body>, Infalli
         start.elapsed()
     );
 
+    let res = ResponseData { processes };
+
     let response = Response::builder()
         .status(hyper::StatusCode::OK)
         .header("Content-Type", "application/json")
-        .body(Body::from(serde_json::to_string(&processes).unwrap()))
+        .body(Body::from(serde_json::to_string(&res).unwrap()))
         .unwrap();
 
     Ok(response)
