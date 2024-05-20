@@ -20,7 +20,7 @@ pub struct ValidateOtpData {
 
 fn generate_totp_secret(device_id: &str) -> String {
     // Encode the shared secret in base32
-    let encoded_secret = encode(Alphabet::RFC4648 { padding: false }, device_id.as_bytes());
+    let encoded_secret = encode(Alphabet::Rfc4648 { padding: false }, device_id.as_bytes());
 
     let totp = generate_totp_obj(&encoded_secret).unwrap();
     let otp_base32 = totp.get_secret_base32();

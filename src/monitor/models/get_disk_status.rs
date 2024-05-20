@@ -16,6 +16,7 @@ pub struct SingleDiskInfo {
     pub available: i64,
 }
 
+#[allow(dead_code)]
 trait SingleDiskInfoUsage {
     fn get_usage_percent(&self, total: i64) -> f64;
 }

@@ -1,7 +1,7 @@
 pub mod app_logs;
 
+pub use crate::persistence::get_default_sql_connection;
 use crate::persistence::SQLConnection;
-pub use crate::persistence::{get_default_sql_connection, get_sql_connection, FetchId};
 
 use self::app_logs::create_app_logs_table;
 pub use self::app_logs::{get_app_ids, get_app_logs, insert_app_log, AppLog, LogLevel};
