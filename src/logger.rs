@@ -34,10 +34,6 @@ impl Write for CustomPipe {
         let log_parts: Vec<&str> = log_str.splitn(4, " ").collect();
         let log_level = log_parts[2];
 
-        io::stdout()
-            .write_all(format!("{:?}\n", log_level).as_bytes())
-            .unwrap();
-
         let app_log = AppLog {
             id: -1,
             log_level: LogLevel::from_string(log_level),

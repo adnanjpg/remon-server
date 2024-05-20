@@ -1,7 +1,7 @@
 use self::models::{ProcessInfo, ServerDescription};
 
-use log::debug;
-use sysinfo::{CpuRefreshKind, ProcessRefreshKind, RefreshKind, System};
+use log::{debug, error};
+use sysinfo::{CpuRefreshKind, Pid, ProcessRefreshKind, RefreshKind, System};
 
 mod config_exceeds;
 pub mod models;
@@ -36,8 +36,8 @@ pub fn get_default_server_desc() -> ServerDescription {
     ServerDescription { name, description }
 }
 
-pub fn get_process_list() -> Vec<ProcessInfo> {
-    let system = System::new_with_specifics(
+pub async fn get_process_list() -> Vec<ProcessInfo> {
+    let mut system = System::new_with_specifics(
         RefreshKind::new().with_processes(
             ProcessRefreshKind::new()
                 .with_cpu()
@@ -45,6 +45,11 @@ pub fn get_process_list() -> Vec<ProcessInfo> {
                 .with_cmd(sysinfo::UpdateKind::Always),
         ),
     );
+
+    system.refresh_processes();
+    // wait for a while to get the updated process list
+    tokio::time::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL).await;
+    system.refresh_processes();
 
     let mut processes = Vec::new();
     for (pid, process) in system.processes() {
@@ -58,49 +63,31 @@ pub fn get_process_list() -> Vec<ProcessInfo> {
         });
     }
 
-    processes
+    // sort list descending order by cpu and return
+    processes.sort_by(|a, b| b.cpu.partial_cmp(&a.cpu).unwrap());
+
+    return processes;
 }
 
-// for testing
-// TODO(isaidsari): use this in a test
-// fn get_process_list_wmetrics() -> Vec<models::ProcessInfo> {
-//     let start_total_time = Instant::now();
+pub async fn kill_process(pid: u32) -> Result<(), String> {
+    let system =
+        System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
 
-//     // Timing metrics for fetching process information
-//     let start_process_time = Instant::now();
-//     let system = System::new_with_specifics(
-//         RefreshKind::new().with_processes(
-//             ProcessRefreshKind::new()
-//                 .with_cpu()
-//                 .with_memory()
-//                 .with_cmd(sysinfo::UpdateKind::Always),
-//         ),
-//     );
-//     let process_time = start_process_time.elapsed();
+    let process = system.process(Pid::from_u32(pid));
 
-//     // Timing metrics for processing process information
-//     let start_process_processing_time = Instant::now();
-//     let mut processes = Vec::new();
-//     for (pid, process) in system.processes() {
-//         processes.push(models::ProcessInfo {
-//             pid: pid.as_u32(),
-//             name: process.name().to_string(),
-//             cpu: process.cpu_usage(),
-//             mem: process.memory(),
-//             status: process.status().to_string(),
-//             cmd: process.cmd().to_vec(),
-//         });
-//     }
-//     let process_processing_time = start_process_processing_time.elapsed();
+    match process {
+        Some(process) => {
+            debug!("Killing process with pid {} , name {}", process.pid(), process.name());
+            let success = process.kill();
+            if success {
+                debug!("Process with pid {} killed successfully", pid);
+                Ok(())
+            } else {
+                error!("Failed to kill process with pid {}", pid);
+                Err(format!("Failed to kill process with pid {}", pid))
+            }
+        }
+        None => Err(format!("Process with pid {} not found", pid)),
+    }
 
-//     let total_time = start_total_time.elapsed();
-
-//     debug!("get_process_list took: {:?}", total_time);
-//     debug!("get_process_list process took: {:?}", process_time);
-//     debug!(
-//         "get_process_list process processing took: {:?}",
-//         process_processing_time
-//     );
-
-//     processes
-// }
+}
