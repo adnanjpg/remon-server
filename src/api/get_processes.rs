@@ -3,7 +3,10 @@ use log::debug;
 use serde::Serialize;
 use std::convert::Infallible;
 
-use crate::{api::authenticate, monitor::get_process_list};
+use crate::{
+    api::authenticate,
+    monitor::{get_process_list, models::ProcessInfo},
+};
 
 #[derive(Serialize)]
 struct ResponseData {
@@ -29,7 +32,9 @@ pub async fn get_processes(req: Request<Body>) -> Result<Response<Body>, Infalli
     let response = Response::builder()
         .status(hyper::StatusCode::OK)
         .header("Content-Type", "application/json")
-        .body(Body::from(serde_json::to_string(&processes).unwrap()))
+        .body(Body::from(
+            serde_json::to_string(&ResponseData { processes }).unwrap(),
+        ))
         .unwrap();
 
     Ok(response)
