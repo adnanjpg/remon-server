@@ -2,10 +2,7 @@ use hyper::{Body, Request, Response};
 use log::debug;
 use std::convert::Infallible;
 
-use crate::{
-    api::{authenticate, ResponseBody},
-    monitor::get_process_list,
-};
+use crate::{api::authenticate, monitor::get_process_list};
 
 pub async fn get_processes(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     match authenticate(&req) {
@@ -16,8 +13,12 @@ pub async fn get_processes(req: Request<Body>) -> Result<Response<Body>, Infalli
     };
 
     let start = std::time::Instant::now();
-    let processes = get_process_list();
-    debug!("get_processes[{}] took: {:?}",processes.len(), start.elapsed());
+    let processes = get_process_list().await;
+    debug!(
+        "get_processes[{}] took: {:?}",
+        processes.len(),
+        start.elapsed()
+    );
 
     let response = Response::builder()
         .status(hyper::StatusCode::OK)
