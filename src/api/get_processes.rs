@@ -22,19 +22,19 @@ pub async fn get_processes(req: Request<Body>) -> Result<Response<Body>, Infalli
     };
 
     let start = std::time::Instant::now();
-    let processes = get_process_list();
+    let processes = get_process_list().await;
     debug!(
         "get_processes[{}] took: {:?}",
         processes.len(),
         start.elapsed()
     );
 
-    let res = ResponseData { processes };
-
     let response = Response::builder()
         .status(hyper::StatusCode::OK)
         .header("Content-Type", "application/json")
-        .body(Body::from(serde_json::to_string(&res).unwrap()))
+        .body(Body::from(
+            serde_json::to_string(&ResponseData { processes }).unwrap(),
+        ))
         .unwrap();
 
     Ok(response)
