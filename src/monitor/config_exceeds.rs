@@ -1,10 +1,12 @@
 use crate::monitor::models::get_cpu_status::CpuFrameStatusTrait;
 
+use crate::logs::persistence::{
+    fetch_single_latest_for_device_id_and_type, NotificationLog, NotificationType,
+};
 use crate::monitor::models::get_hardware_info::{HardwareDiskInfo, HardwareMemInfo};
 use crate::monitor::models::get_mem_status::MemStatusData;
 use crate::monitor::persistence::fetch_monitor_configs;
 use crate::notification_service::{self, NotificationMessage};
-use crate::persistence::notification_logs::{self, NotificationType};
 use chrono::Duration;
 use log::{error, info, warn};
 use std::collections::HashMap;
@@ -79,12 +81,12 @@ pub(super) async fn check_thresholds(
 
 // TODO(adnanjpg): make it configurable
 fn get_send_notification_interval() -> Duration {
-    Duration::seconds(5 * 60)
+    Duration::try_seconds(60 * 5).expect("failed to create duration")
 }
 
 async fn should_send_notification_to_exceeding_device(config: &MonitorConfig) -> bool {
-    let latest_record: Result<Option<notification_logs::NotificationLog>, sqlx::Error> =
-        notification_logs::fetch_single_latest_for_device_id_and_type(
+    let latest_record: Result<Option<NotificationLog>, sqlx::Error> =
+        fetch_single_latest_for_device_id_and_type(
             &config.device_id,
             &NotificationType::StatusLimitsExceeding,
         )

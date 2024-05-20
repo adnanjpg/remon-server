@@ -1,8 +1,14 @@
 use hyper::{Body, Request, Response};
 use log::debug;
+use serde::Serialize;
 use std::convert::Infallible;
 
 use crate::{api::authenticate, monitor::get_process_list};
+
+#[derive(Serialize)]
+struct ResponseData {
+    processes: Vec<ProcessInfo>,
+}
 
 pub async fn get_processes(req: Request<Body>) -> Result<Response<Body>, Infallible> {
     match authenticate(&req) {

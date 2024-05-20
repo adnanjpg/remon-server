@@ -7,9 +7,10 @@ use chrono::Local;
 use log::error;
 use tokio::sync::mpsc;
 
-use crate::persistence::app_logs::{insert_app_log, AppLog, LogLevel};
+use crate::logs::persistence::{insert_app_log, AppLog, LogLevel};
 
 pub struct LogService {
+    #[allow(dead_code)]
     sender: mpsc::Sender<AppLog>,
 }
 
@@ -116,7 +117,7 @@ impl LogService {
         tokio::spawn(async move {
             while let Some(app_log) = buffer_rx.recv().await {
                 println!("app log received at {}", app_log.message);
-                let app_log_rec = insert_app_log(&app_log)
+                insert_app_log(&app_log)
                     .await
                     .expect("Failed to insert app log");
             }
