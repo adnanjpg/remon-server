@@ -1,4 +1,5 @@
 use hyper::{Body, Request, Response};
+use serde::{Deserialize, Serialize};
 
 pub mod _404;
 pub mod get_cpu_status;
@@ -7,21 +8,19 @@ pub mod get_disk_status;
 pub mod get_hardware_info;
 pub mod get_mem_status;
 pub mod get_otp_qr;
+pub mod get_processes;
 pub mod healthcheck;
 pub mod hello;
+pub mod kill_process;
 pub mod login;
 pub mod teapot;
 pub mod update_info;
 pub mod validate_token_test;
-pub mod get_processes;
-pub mod kill_process;
 
 pub mod logs {
     pub mod get_app_ids;
     pub mod get_app_logs;
 }
-
-use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

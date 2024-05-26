@@ -1,3 +1,8 @@
+use chrono::Duration;
+use log::{error, info, warn};
+use std::collections::HashMap;
+use std::vec;
+
 use crate::monitor::models::get_cpu_status::CpuFrameStatusTrait;
 
 use crate::logs::persistence::{
@@ -7,10 +12,6 @@ use crate::monitor::models::get_hardware_info::{HardwareDiskInfo, HardwareMemInf
 use crate::monitor::models::get_mem_status::MemStatusData;
 use crate::monitor::persistence::fetch_monitor_configs;
 use crate::notification_service::{self, NotificationMessage};
-use chrono::Duration;
-use log::{error, info, warn};
-use std::collections::HashMap;
-use std::vec;
 
 use super::models::get_cpu_status::CpuStatusData;
 use super::models::get_disk_status::{DiskStatusData, DiskStatusDataTrait};
