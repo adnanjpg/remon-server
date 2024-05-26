@@ -1,10 +1,10 @@
+use chrono::Local;
+use colored::Colorize;
+use log::error;
 use std::{
     io::{self, Write},
     sync::{Arc, Mutex},
 };
-
-use chrono::Local;
-use log::error;
 use tokio::sync::mpsc;
 
 use crate::logs::persistence::{insert_app_log, AppLog, LogLevel};
@@ -27,32 +27,31 @@ impl CustomPipe {
 
 impl Write for CustomPipe {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let log_str = String::from_utf8_lossy(buf);
-        let log_str = log_str.trim_end();
-
-        // extract log level, target, and message format is
-        // TODO(isaidsari): this isnt the way
-        let log_parts: Vec<&str> = log_str.splitn(4, " ").collect();
-        let log_level = log_parts[2];
-
-        let app_log = AppLog {
-            id: -1,
-            log_level: LogLevel::from_string(log_level),
-            app_id: DEF_APP_NAME.to_owned(),
-            logged_at: Local::now().timestamp(),
-            message: log_str.to_string(),
-            target: "stdout".to_owned(),
+        let app_log = match serde_json::from_slice::<AppLog>(buf) {
+            Ok(log) => log,
+            Err(e) => {
+                return Err(io::Error::new(io::ErrorKind::Other, e.to_string()));
+            }
         };
 
-        let buffer_tx = self.buffer_tx.clone();
-        if app_log.log_level >= LogLevel::Warning {
-            if let Err(e) = buffer_tx.lock().unwrap().try_send(app_log) {
-                error!("Failed to send log to buffer: {}", e);
+        match self.buffer_tx.lock() {
+            Ok(buffer_tx) => {
+                if let Err(e) = buffer_tx.try_send(app_log) {
+                    error!("Failed to send log to buffer: {}", e);
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "Failed to send log to buffer",
+                    ));
+                }
+            }
+            Err(e) => {
+                error!("Failed to acquire lock on buffer_tx: {}", e);
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Failed to acquire lock on buffer_tx",
+                ));
             }
         }
-
-        //io::stdout().write_all(buf).unwrap();
-        //writeln!(io::stdout(), "{}", log_str).unwrap();
 
         Ok(buf.len())
     }
@@ -70,46 +69,53 @@ impl LogService {
             builder: env_logger::builder(),
         };
 
-        this.builder.target(env_logger::Target::Pipe(Box::new(CustomPipe::new(
-            Arc::new(Mutex::new(this.channel.0.clone()),
-        )))));
+        this.builder
+            .target(env_logger::Target::Pipe(Box::new(CustomPipe::new(
+                Arc::new(Mutex::new(this.channel.0.clone())),
+            ))));
 
         this.builder.format(|buf, record| {
-            let dt = Local::now();
+            fn log_level_to_colored(level: log::Level) -> colored::ColoredString {
+                match level {
+                    log::Level::Error => "ERROR".red(),
+                    log::Level::Warn => "WARN".yellow(),
+                    log::Level::Info => "INFO".bright_blue(),
+                    log::Level::Debug => "DEBUG".bright_cyan(),
+                    log::Level::Trace => "TRACE".white(),
+                }
+            }
 
-            // TODO(isaidsari): use library for this
-            let lvl = match record.level() {
-                log::Level::Error => "\x1b[1;31mERROR\x1b[0m",
-                log::Level::Warn => "\x1b[1;33mWARN\x1b[0m",
-                log::Level::Info => "\x1b[1;34mINFO\x1b[0m",
-                log::Level::Debug => "\x1b[1;36mDEBUG\x1b[0m",
-                log::Level::Trace => "\x1b[1;37mTRACE\x1b[0m",
-            };
-            let targ = format!("\x1b[1;32m{}\x1b[0m", record.target());
+            let dt = Local::now();
+            let timestamp = dt.format("%Y-%m-%d %H:%M:%S").to_string();
+            let level = format!("{:<5}", log_level_to_colored(record.level()));
+            let target = record.target().bright_green();
             let msg = record.args();
 
-            writeln!(
-                buf,
-                "{} {} [{}] {}",
-                dt.format("%Y-%m-%d %H:%M:%S").to_string(),
-                record.level(),
-                record.target(),
-                record.args()
-            )
-            .unwrap();
+            // TODO(@isaidsari): AppLog instertion level should be configurable
+            const APP_LOG_THRESHOLD: log::Level = log::Level::Warn;
+            if record.level() <= APP_LOG_THRESHOLD {
+                let app_log = AppLog {
+                    id: -1,
+                    log_level: LogLevel::from_string(record.level().as_str()),
+                    app_id: DEF_APP_NAME.to_owned(),
+                    logged_at: dt.timestamp(),
+                    message: msg.to_string(),
+                    target: record.target().to_owned(),
+                };
 
-            writeln!(
-                io::stdout(),
-                "{} {} [{}] {}",
-                dt.format("%Y-%m-%d %H:%M:%S").to_string(),
-                lvl,
-                targ,
-                msg
-            )
+                // binary serialization would be better
+                match serde_json::to_writer(buf, &app_log) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        error!("Failed to serialize log: {}", e);
+                    }
+                }
+            }
+
+            writeln!(io::stdout(), "{} {} [{}] {}", timestamp, level, target, msg)
         });
 
         this
-
     }
 
     pub fn set_level(mut self, level: log::LevelFilter) -> Self {
@@ -122,7 +128,7 @@ impl LogService {
 
         let _ = tokio::spawn(async move {
             while let Some(app_log) = self.channel.1.recv().await {
-                println!("app log received at {}", app_log.message);
+                println!("app log received '{}'", app_log.message);
                 insert_app_log(&app_log)
                     .await
                     .expect("Failed to insert app log");
