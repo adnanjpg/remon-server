@@ -92,12 +92,6 @@ impl SystemMonitor {
     }
 
     pub async fn start_monitoring(&self) {
-        // TODO(isaidsari): put it more convenient place
-        if !sysinfo::IS_SUPPORTED_SYSTEM {
-            error!("sysinfo is not supported on this system");
-            return;
-        }
-
         fn get_last_check() -> i64 {
             Utc::now().timestamp_millis()
         }

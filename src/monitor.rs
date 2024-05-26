@@ -1,20 +1,22 @@
-use self::models::{ProcessInfo, ServerDescription};
-
 use log::{debug, error};
+use std::error::Error;
 use sysinfo::{CpuRefreshKind, Pid, ProcessRefreshKind, RefreshKind, System};
+
+use self::models::{ProcessInfo, ServerDescription};
 
 mod config_exceeds;
 pub mod models;
 pub mod persistence;
 pub mod system_monitor;
 
-pub async fn init() -> Result<(), ()> {
+pub async fn init() -> Result<(), Box<dyn Error>> {
     let monitor = system_monitor::SystemMonitor::new();
     monitor.start_monitoring().await;
-    debug!("System monitor started");
-
-    // TODO(isaidsari): Check sysinfo library has support for current platform
-    Ok(())
+    if !sysinfo::IS_SUPPORTED_SYSTEM {
+        return Err("System not supported".into());
+    } else {
+        Ok(())
+    }
 }
 
 pub fn get_default_server_desc() -> ServerDescription {
@@ -77,7 +79,11 @@ pub async fn kill_process(pid: u32) -> Result<(), String> {
 
     match process {
         Some(process) => {
-            debug!("Killing process with pid {} , name {}", process.pid(), process.name());
+            debug!(
+                "Killing process with pid {} , name {}",
+                process.pid(),
+                process.name()
+            );
             let success = process.kill();
             if success {
                 debug!("Process with pid {} killed successfully", pid);
@@ -89,5 +95,4 @@ pub async fn kill_process(pid: u32) -> Result<(), String> {
         }
         None => Err(format!("Process with pid {} not found", pid)),
     }
-
 }

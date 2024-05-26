@@ -12,8 +12,8 @@ pub mod persistence;
 use log::{error, info};
 
 mod auth;
-mod logs;
 mod grpc;
+mod logs;
 mod monitor;
 
 use local_ip_address::local_ip;
@@ -95,16 +95,21 @@ async fn shutdown_signal() {
 #[cfg(test)]
 #[ctor::ctor]
 fn init_tests() {
-    logger::LogService::new().set_level(log::LevelFilter::Debug).build();
+    logger::LogService::new()
+        .set_level(log::LevelFilter::Debug)
+        .build();
 }
 
 #[tokio::main]
 async fn main() {
-
     if cfg!(debug_assertions) {
-        logger::LogService::new().set_level(log::LevelFilter::Debug).build();
+        logger::LogService::new()
+            .set_level(log::LevelFilter::Debug)
+            .build();
     } else {
-        logger::LogService::new().set_level(log::LevelFilter::Info).build();
+        logger::LogService::new()
+            .set_level(log::LevelFilter::Info)
+            .build();
     }
 
     let socket_addr = match get_socket_addr() {
