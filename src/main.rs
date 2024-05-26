@@ -95,12 +95,17 @@ async fn shutdown_signal() {
 #[cfg(test)]
 #[ctor::ctor]
 fn init_tests() {
-    //logger::LogService::new(true);
+    logger::LogService::new().set_level(log::LevelFilter::Debug).build();
 }
 
 #[tokio::main]
 async fn main() {
-    logger::LogService::new();
+
+    if cfg!(debug_assertions) {
+        logger::LogService::new().set_level(log::LevelFilter::Debug).build();
+    } else {
+        logger::LogService::new().set_level(log::LevelFilter::Info).build();
+    }
 
     let socket_addr = match get_socket_addr() {
         Some(addr) => addr,
@@ -118,11 +123,6 @@ async fn main() {
             return;
         }
     };
-
-    //logger::LogService::new();
-    // env_logger::builder()
-    //         .filter_level(log::LevelFilter::Debug)
-    //         .init();
 
     match monitor::init().await {
         Ok(_) => {}

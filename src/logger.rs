@@ -11,7 +11,8 @@ use crate::logs::persistence::{insert_app_log, AppLog, LogLevel};
 
 pub struct LogService {
     #[allow(dead_code)]
-    sender: mpsc::Sender<AppLog>,
+    channel: (mpsc::Sender<AppLog>, mpsc::Receiver<AppLog>),
+    builder: env_logger::Builder,
 }
 
 pub struct CustomPipe {
@@ -64,18 +65,16 @@ impl Write for CustomPipe {
 impl LogService {
     pub fn new() -> Self {
         // Create a buffer channel for asynchronous processing
-        let (buffer_tx, mut buffer_rx) = mpsc::channel::<AppLog>(100);
-        let this = LogService {
-            sender: mpsc::Sender::clone(&buffer_tx),
+        let mut this = LogService {
+            channel: mpsc::channel::<AppLog>(100),
+            builder: env_logger::builder(),
         };
 
-        let mut builder = env_logger::builder();
+        this.builder.target(env_logger::Target::Pipe(Box::new(CustomPipe::new(
+            Arc::new(Mutex::new(this.channel.0.clone()),
+        )))));
 
-        builder.target(env_logger::Target::Pipe(Box::new(CustomPipe::new(
-            Arc::new(Mutex::new(buffer_tx)),
-        ))));
-
-        builder.format(|buf, record| {
+        this.builder.format(|buf, record| {
             let dt = Local::now();
 
             // TODO(isaidsari): use library for this
@@ -109,21 +108,26 @@ impl LogService {
             )
         });
 
-        builder.filter_level(log::LevelFilter::Debug);
+        this
 
-        builder.init();
+    }
 
-        // Spawn the task for processing the buffer asynchronously
-        tokio::spawn(async move {
-            while let Some(app_log) = buffer_rx.recv().await {
+    pub fn set_level(mut self, level: log::LevelFilter) -> Self {
+        self.builder.filter_level(level);
+        self
+    }
+
+    pub fn build(mut self) {
+        self.builder.init();
+
+        let _ = tokio::spawn(async move {
+            while let Some(app_log) = self.channel.1.recv().await {
                 println!("app log received at {}", app_log.message);
                 insert_app_log(&app_log)
                     .await
                     .expect("Failed to insert app log");
             }
         });
-
-        this
     }
 }
 
