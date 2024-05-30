@@ -29,7 +29,7 @@ blake3 = "1.5.1"
 maplit = "1.0.2"
 lazy_static = "1.4.0"
 async_once = "0.2.6"
-fcm = { git = "https://github.com/rj76/fcm-rust.git", branch = "main" }
+fcm = { git = "https://github.com/rj76/fcm-rust.git" , rev = "cd7323ce" }
 strum = "0.26.2"
 strum_macros = "0.26.2"
 tokio = { version = "1.37.0", features = ["full"] }
