@@ -95,9 +95,12 @@ async fn shutdown_signal() {
 #[cfg(test)]
 #[ctor::ctor]
 fn init_tests() {
-    logger::LogService::new()
-        .set_level(log::LevelFilter::Debug)
-        .build();
+    // we can't use our custom logger in tests because it depends on tokio runtime
+    env_logger::builder()
+        .filter_level(log::LevelFilter::Trace)
+        .is_test(true)
+        .try_init()
+        .expect("Failed to initialize logger for tests");
 }
 
 #[tokio::main]
