@@ -1,5 +1,5 @@
 use chrono::Duration;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use std::vec;
 
@@ -126,7 +126,7 @@ async fn send_notification_to_exceeding_device(
     let should_send = should_send_notification_to_exceeding_device(&config).await;
 
     if !should_send {
-        warn!("did not send notification to exceeding device because a notification has already been sent in the last {} seconds", get_send_notification_interval().num_seconds());
+        debug!("did not send notification to exceeding device because a notification has already been sent in the last {} seconds", get_send_notification_interval().num_seconds());
 
         return false;
     }

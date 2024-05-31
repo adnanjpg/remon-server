@@ -1,6 +1,6 @@
 use chrono::Local;
 use colored::Colorize;
-use log::error;
+use log::{debug, error};
 use std::{
     io::{self, Write},
     sync::{Arc, Mutex},
@@ -128,7 +128,7 @@ impl LogService {
 
         let _ = tokio::spawn(async move {
             while let Some(app_log) = self.channel.1.recv().await {
-                println!("app log received '{}'", app_log.message);
+                debug!("AppLog received '{}'", app_log.message);
                 insert_app_log(&app_log)
                     .await
                     .expect("Failed to insert app log");

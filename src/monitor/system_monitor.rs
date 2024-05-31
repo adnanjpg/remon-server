@@ -26,7 +26,7 @@ use tokio::time;
 
 // TODO(isaidsari): make it configurable
 pub fn get_check_interval() -> Duration {
-    Duration::from_millis(10000)
+    Duration::from_millis(500)
 }
 
 pub struct SystemMonitor {

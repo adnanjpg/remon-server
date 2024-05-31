@@ -60,7 +60,7 @@ async fn send_notification_to(
             Ok(is_suc)
         }
         Err(err) => {
-            println!("err: {:?}", err);
+            error!("FCM error: {:?}", err);
             Err(err.to_string())
         }
     }

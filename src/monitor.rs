@@ -1,4 +1,4 @@
-use log::{debug, error};
+use log::{debug, error, info};
 use std::error::Error;
 use sysinfo::{CpuRefreshKind, Pid, ProcessRefreshKind, RefreshKind, System};
 
@@ -86,7 +86,7 @@ pub async fn kill_process(pid: u32) -> Result<(), String> {
             );
             let success = process.kill();
             if success {
-                debug!("Process with pid {} killed successfully", pid);
+                info!("Process with pid {} killed successfully", pid);
                 Ok(())
             } else {
                 error!("Failed to kill process with pid {}", pid);

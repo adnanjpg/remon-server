@@ -55,9 +55,18 @@ impl NotificationServiceImpl for NotificationService {
             return Err(Status::not_found("No monitor configs found"));
         };
 
+        let config = match configs.last() {
+            Some(config) => config,
+            None => {
+                return Err(Status::not_found("No monitor configs found"));
+            }
+        };
+
+        debug!("gRPC request: {:?}", request);
+
         let result = notification_service::send_notification_to_single(
-            &configs[0].device_id,
-            &configs[0].fcm_token,
+            &config.device_id,
+            &config.fcm_token,
             &notification_service::NotificationMessage {
                 title: request.title,
                 body: request.body,
@@ -65,6 +74,20 @@ impl NotificationServiceImpl for NotificationService {
             &NotificationType::StatusLimitsExceeding,
         )
         .await;
+
+        // let send_to = configs
+        //     .iter()
+        //     .map(|config| (config.device_id.as_str(), config.fcm_token.as_str()))
+        //     .collect::<Vec<(&str, &str)>>();
+        // let result = notification_service::send_notification_to_multi(
+        //     &send_to,
+        //     &notification_service::NotificationMessage {
+        //         title: request.title,
+        //         body: request.body,
+        //     },
+        //     &NotificationType::StatusLimitsExceeding,
+        // )
+        // .await;
 
         match result {
             Ok(_) => {
@@ -92,7 +115,7 @@ impl NotificationServiceImpl for NotificationService {
         let app_log = AppLog {
             id: -1,
             log_level: LogLevel::from_string(&log.level),
-            app_id: "source".to_string(), // TODO(isaidsari):
+            app_id: "gRPC".to_string(), // TODO(isaidsari):
             logged_at: chrono::Utc::now().timestamp(),
             message: log.message,
             target: log.target,
