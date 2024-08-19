@@ -1,0 +1,58 @@
+name: Build on Pull Request
+
+on:
+  # pull_request:
+  #   branches:
+  #     - dev
+  commit:
+    branches:
+      - pre_presentation
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+        include:
+          - target: x86_64-unknown-linux-gnu
+            platform: debian
+          - target: aarch64-unknown-linux-gnu
+            platform: arm
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Install Rust toolchain
+      run: rustup target add ${{ matrix.target }}
+
+    - name: Install protoc
+      shell: bash
+      run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            sudo apt-get install -y protobuf-compiler
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            brew install protobuf
+          elif [ "${{ runner.os }}" = "Windows" ]; then
+            choco install protoc
+          else
+            echo "Unsupported OS"
+            exit 1
+          fi
+
+    - name: Build project
+      run: cargo build --release --target ${{ matrix.target }}
+
+    - name: Package binary
+      run: |
+        mkdir -p dist
+        cp target/${{ matrix.target }}/release/your_project_name dist/
+        tar -czvf ${{ matrix.platform }}-${{ matrix.target }}-pr-release.tar.gz -C dist .
+      shell: bash
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: ${{ matrix.platform }}-${{ matrix.target }}-pr-release
+        path: ./${{ matrix.platform }}-${{ matrix.target }}-pr-release.tar.gz
