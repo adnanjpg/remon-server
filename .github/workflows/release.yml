@@ -4,9 +4,10 @@ on:
   # pull_request:
   #   branches:
   #     - dev
-  commit:
+  push:
     branches:
       - pre_presentation
+      - feature/*
 
 jobs:
   build:
