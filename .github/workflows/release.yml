@@ -50,7 +50,7 @@ jobs:
     - name: Package binary
       run: |
         mkdir -p dist
-        cp target/${{ matrix.target }}/release/your_project_name dist/
+        cp target/${{ matrix.target }}/release/remon_server dist/
         tar -czvf ${{ matrix.platform }}-${{ matrix.target }}-pr-release.tar.gz -C dist .
       shell: bash
 
