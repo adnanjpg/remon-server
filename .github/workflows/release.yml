@@ -19,8 +19,8 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             platform: debian
-          - target: aarch64-unknown-linux-gnu
-            platform: arm
+          # - target: aarch64-unknown-linux-gnu
+          #   platform: arm
 
     steps:
     - uses: actions/checkout@v2
