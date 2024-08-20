@@ -51,7 +51,7 @@ jobs:
       run: |
         mkdir -p dist
         ls -la target/x86_64-unknown-linux-gnu/release
-        cp target/${{ matrix.target }}/release/remon_server dist/
+        cp target/${{ matrix.target }}/release/remon-server dist/
         tar -czvf ${{ matrix.platform }}-${{ matrix.target }}-pr-release.tar.gz -C dist .
       shell: bash
 
