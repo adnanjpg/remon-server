@@ -8,8 +8,9 @@ use jsonwebtoken::{
     DecodingKey, EncodingKey, Header, Validation,
 };
 
-// TODO: !
-const JWT_SECRET: &str = "d3f4ult";
+fn get_jwt_secret() -> String {
+    std::env::var("JWT_SECRET").unwrap_or_else(|_| "d3f4ult".to_string())
+}
 
 const TOKEN_EXPIRE_TIME: StdDuration = StdDuration::from_secs(60 * 60);
 
@@ -44,7 +45,7 @@ pub async fn generate_token(device_id: &str) -> Result<String, JwtError> {
     let token = encode::<Claims>(
         &Header::default(),
         &claims,
-        &EncodingKey::from_secret(JWT_SECRET.as_ref()),
+        &EncodingKey::from_secret(get_jwt_secret().as_ref()),
     )?;
 
     Ok(token)
@@ -59,7 +60,7 @@ pub async fn validate_token(auth_token: &str) -> Result<String, JwtError> {
 
     let dec = decode::<Claims>(
         jwt,
-        &DecodingKey::from_secret(JWT_SECRET.as_ref()),
+        &DecodingKey::from_secret(get_jwt_secret().as_ref()),
         &Validation::new(Algorithm::HS256),
     );
 

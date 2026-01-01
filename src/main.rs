@@ -24,8 +24,12 @@ use std::convert::TryInto;
 #[macro_use]
 extern crate lazy_static;
 
-// TODO(adnanjpg): get port from env var
-const DEFAULT_PORT: u16 = 8080;
+fn get_port() -> u16 {
+    std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8080)
+}
 
 fn get_ip_array() -> Option<[u8; 4]> {
     match local_ip() {
@@ -50,7 +54,7 @@ fn get_ip_array() -> Option<[u8; 4]> {
 
 fn get_socket_addr() -> Option<SocketAddr> {
     match get_ip_array() {
-        Some(ip_array) => Some(SocketAddr::from((ip_array, DEFAULT_PORT))),
+        Some(ip_array) => Some(SocketAddr::from((ip_array, get_port()))),
         None => None,
     }
 }
@@ -105,6 +109,8 @@ fn init_tests() {
 
 #[tokio::main]
 async fn main() {
+    dotenv::dotenv().ok();
+
     if cfg!(debug_assertions) {
         logger::LogService::new()
             .set_level(log::LevelFilter::Debug)
@@ -119,7 +125,7 @@ async fn main() {
         Some(addr) => addr,
         None => {
             error!("Failed to get local IP address.");
-            SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT))
+            SocketAddr::from(([127, 0, 0, 1], get_port()))
             // return;
         }
     };
@@ -157,7 +163,7 @@ async fn main() {
     let mut socket_addrs = vec![socket_addr];
 
     if cfg!(debug_assertions) {
-        let debug_socket_addr = SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT));
+        let debug_socket_addr = SocketAddr::from(([127, 0, 0, 1], get_port()));
         let server_local = Server::bind(&debug_socket_addr)
             .serve(make_service_fn(|_conn| async {
                 Ok::<_, Infallible>(service_fn(req_handler))
