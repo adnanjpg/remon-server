@@ -1,0 +1,29 @@
+meta {
+  name: Get CPU Status
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/get-cpu-status?start_time={{start_time}}&end_time={{end_time}}
+  body: none
+  auth: bearer
+}
+
+params:query {
+  start_time: 0
+  end_time: 9999999999
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Get CPU usage statistics between specified timestamps.
+  Returns CPU usage frames with frequency and usage percentage per core.
+
+  Parameters:
+  - start_time: Unix timestamp (seconds)
+  - end_time: Unix timestamp (seconds)
+}

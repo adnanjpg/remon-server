@@ -1,0 +1,34 @@
+meta {
+  name: Update Info
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/update-info
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+body:json {
+  {
+    "cpu_threshold": 80.0,
+    "mem_threshold": 85.0,
+    "disk_threshold": 90.0,
+    "fcm_token": "your-fcm-token-here"
+  }
+}
+
+docs {
+  Update monitoring configuration including thresholds and FCM token.
+
+  Parameters:
+  - cpu_threshold: CPU usage percentage threshold (0-100)
+  - mem_threshold: Memory usage percentage threshold (0-100)
+  - disk_threshold: Disk usage percentage threshold (0-100)
+  - fcm_token: Firebase Cloud Messaging token for push notifications
+}

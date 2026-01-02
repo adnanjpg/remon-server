@@ -1,0 +1,19 @@
+meta {
+  name: Get Description
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/get-desc
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Get server description and basic information.
+}

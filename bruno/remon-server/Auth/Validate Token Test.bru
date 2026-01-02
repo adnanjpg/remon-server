@@ -1,0 +1,20 @@
+meta {
+  name: Validate Token Test
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/validate-token-test
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Test if the JWT token is valid.
+  Returns success: true if token is valid.
+}

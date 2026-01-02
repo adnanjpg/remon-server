@@ -1,0 +1,30 @@
+meta {
+  name: Kill Process
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/kill-process?pid={{pid}}
+  body: none
+  auth: bearer
+}
+
+params:query {
+  pid: 1234
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Kill a process by its PID.
+
+  ⚠️ WARNING: This will forcefully terminate the process.
+
+  Parameters:
+  - pid: Process ID to kill
+
+  First call "Get Processes" to find the PID you want to kill.
+}
