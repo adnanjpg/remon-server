@@ -26,7 +26,7 @@ use tokio::time;
 
 // TODO(isaidsari): make it configurable
 pub fn get_check_interval() -> Duration {
-    Duration::from_millis(500)
+    Duration::from_millis(5000)
 }
 
 pub struct SystemMonitor {
@@ -271,6 +271,7 @@ impl SystemMonitor {
                 // TODO(adnanjpg): run on a different thread with a different interval
                 check_thresholds(cpu_status, mem_status, &mem_info, disk_status, &disks_info).await;
 
+                // TODO
                 match check_connectivity("").await {
                     true => debug!("connection is up"),
                     false => error!("connection is down"),
