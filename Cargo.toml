@@ -18,9 +18,9 @@ jsonwebtoken = { version = "10.2.0", features = ["rust_crypto"]}
 reqwest = "0.12"
 ring = "0.17.14"
 serde = { version = "1.0.202", features = ["derive"] }
-serde_derive = "1.0.202"
+serde_derive = "1.0.228"
 serde_json = "1.0.117"
-thiserror = "1.0.61"
+thiserror = "2.0.17"
 sqlx = { version = "0.7.4", features = ["sqlite", "runtime-tokio"] }
 sysinfo = "0.30.12"
 totp-rs = "5.5.1"
@@ -30,17 +30,17 @@ local-ip-address = "0.6.1"
 blake3 = "1.5.1"
 maplit = "1.0.2"
 fcm = { git = "https://github.com/rj76/fcm-rust.git" , rev = "cd7323ce" }
-strum = "0.26.2"
-strum_macros = "0.26.2"
-tokio = { version = "1.37.0", features = ["full"] }
+strum = "0.27.2"
+strum_macros = "0.27.2"
+tokio = { version = "1.49.0", features = ["full"] }
 tonic = "0.11.0"
 tonic-reflection = "0.11.0"
 prost = "0.12.6"
-colored = "2.1.0"
+colored = "3"
 tracing-core = "0.1.36"
 
 [build-dependencies]
 tonic-build = "0.11.0"
 
 [dev-dependencies]
-ctor = "0.2.8"
+ctor = "0.6.3"
