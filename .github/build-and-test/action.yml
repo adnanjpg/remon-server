@@ -5,9 +5,9 @@ description: "Build and test app on different platforms"
 runs:
   using: "composite"
   steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: ⚡ Cache
-      uses: actions/cache@v2
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
@@ -34,12 +34,18 @@ runs:
           fi
 
     - name: 🔨 Build
+      env:
+        # Required for JWT validation in production builds
+        REMON__AUTH__JWT_SECRET: "ci-test-secret-minimum-32-characters-long-12345678"
       uses: actions-rs/cargo@v1
       with:
         command: build
         args: --release --all-features
 
     - name: 🔎 Test
+      env:
+        # Required for JWT validation in production builds
+        REMON__AUTH__JWT_SECRET: "ci-test-secret-minimum-32-characters-long-12345678"
       uses: actions-rs/cargo@v1
       with:
         command: test

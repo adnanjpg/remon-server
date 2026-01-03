@@ -1,0 +1,15 @@
+# Production environment configuration
+# Overrides default.toml settings for production deployment
+
+[server]
+port = 8080
+
+[logging]
+level = "info"
+format = "json"
+
+[monitoring]
+update_interval_ms = 10000
+
+[grpc]
+enable_reflection = false

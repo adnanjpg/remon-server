@@ -1,33 +1,30 @@
-use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Method, Request, Response, Server};
-
-use std::convert::Infallible;
+use axum::{
+    middleware,
+    routing::{get, post},
+    Router,
+};
+use log::{error, info};
 use std::net::SocketAddr;
+use tokio::net::TcpListener;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tower_http::LatencyUnit;
+use tracing::Level;
 
 mod api;
+mod config;
 mod logger;
 mod notification_service;
 pub mod persistence;
 
-use log::{error, info};
-
 mod auth;
-mod logs;
 mod grpc;
+mod logs;
 mod monitor;
 
 use local_ip_address::local_ip;
-
 use std::convert::TryInto;
 
-// https://stackoverflow.com/a/39175997/12555423
-#[macro_use]
-extern crate lazy_static;
-
-// TODO(adnanjpg): get port from env var
-const DEFAULT_PORT: u16 = 8080;
-
-fn get_ip_array() -> Option<[u8; 4]> {
+fn get_ip_array(_config: &config::Config) -> Option<[u8; 4]> {
     match local_ip() {
         Ok(ip) => {
             let ip_str = ip.to_string();
@@ -48,66 +45,82 @@ fn get_ip_array() -> Option<[u8; 4]> {
     }
 }
 
-fn get_socket_addr() -> Option<SocketAddr> {
-    match get_ip_array() {
-        Some(ip_array) => Some(SocketAddr::from((ip_array, DEFAULT_PORT))),
+fn get_socket_addr(config: &config::Config) -> Option<SocketAddr> {
+    match get_ip_array(config) {
+        Some(ip_array) => Some(SocketAddr::from((ip_array, config.server.port))),
         None => None,
     }
 }
 
-async fn req_handler(req: Request<Body>) -> Result<Response<Body>, Infallible> {
-    match (req.method(), req.uri().path()) {
-        (&Method::GET, "/hello") => api::hello::hello(req),
-        (&Method::GET, "/teapot") => api::teapot::teapot(req),
-        (&Method::GET, "/healthcheck") => api::healthcheck::healthcheck(req),
-        (&Method::POST, "/get-otp-qr") => api::get_otp_qr::get_otp_qr(req).await,
-        (&Method::POST, "/login") => api::login::login(req).await,
-        (&Method::POST, "/update-info") => api::update_info::update_info(req).await,
-        (&Method::GET, "/get-desc") => api::get_desc::get_desc(req),
-        (&Method::GET, "/get-hardware-info") => {
-            api::get_hardware_info::get_hardware_info(req).await
-        }
-        (&Method::GET, "/get-cpu-status") => api::get_cpu_status::get_cpu_status(req).await,
-        (&Method::GET, "/get-mem-status") => api::get_mem_status::get_mem_status(req).await,
-        (&Method::GET, "/get-disk-status") => api::get_disk_status::get_disk_status(req).await,
-        (&Method::GET, "/get-processes") => api::get_processes::get_processes(req).await,
-        (&Method::GET, "/kill-process") => api::kill_process::kill_process(req).await,
-        (&Method::GET, "/validate-token-test") => {
-            api::validate_token_test::validate_token_test(req).await
-        }
-
-        // logs
-        (&Method::GET, "/logs/get-app-ids") => api::logs::get_app_ids::get_app_ids(req).await,
-        (&Method::GET, "/logs/get-app-logs") => api::logs::get_app_logs::get_app_logs(req).await,
-        // 404
-        (_, _) => api::_404::_404(req),
-    }
-}
-
 async fn shutdown_signal() {
-    // Wait for the CTRL+C signal for graceful shutdown
     tokio::signal::ctrl_c()
         .await
         .expect("failed to install CTRL+C signal handler");
 }
 
-// https://stackoverflow.com/a/63442117/12555423
 #[cfg(test)]
 #[ctor::ctor]
 fn init_tests() {
-    //logger::LogService::new(true);
+    env_logger::builder()
+        .filter_level(log::LevelFilter::Trace)
+        .is_test(true)
+        .try_init()
+        .expect("Failed to initialize logger for tests");
 }
 
 #[tokio::main]
 async fn main() {
-    logger::LogService::new();
+    // Load configuration
+    let config = match config::Config::new() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("Failed to load configuration: {}", e);
+            std::process::exit(1);
+        }
+    };
 
-    let socket_addr = match get_socket_addr() {
+    // Initialize tracing subscriber for HTTP request logging
+    let log_level = match config.logging.level.to_lowercase().as_str() {
+        "trace" => Level::TRACE,
+        "debug" => Level::DEBUG,
+        "info" => Level::INFO,
+        "warn" => Level::WARN,
+        "error" => Level::ERROR,
+        _ => Level::INFO,
+    };
+
+    // Initialize tracing first (for HTTP logging)
+    tracing_subscriber::fmt()
+        .with_max_level(log_level)
+        .with_target(false)
+        .compact()
+        .init();
+
+    // Then initialize application logger
+    let log_filter = match config.logging.level.to_lowercase().as_str() {
+        "trace" => log::LevelFilter::Trace,
+        "debug" => log::LevelFilter::Debug,
+        "info" => log::LevelFilter::Info,
+        "warn" => log::LevelFilter::Warn,
+        "error" => log::LevelFilter::Error,
+        _ => log::LevelFilter::Info,
+    };
+
+    logger::LogService::new()
+        .set_level(log_filter)
+        .build();
+
+    // Validate JWT secret strength at startup
+    if let Err(e) = auth::token::validate() {
+        error!("{}", e);
+        std::process::exit(1);
+    }
+
+    let socket_addr = match get_socket_addr(&config) {
         Some(addr) => addr,
         None => {
             error!("Failed to get local IP address.");
-            SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT))
-            // return;
+            SocketAddr::from(([127, 0, 0, 1], config.server.port))
         }
     };
 
@@ -118,11 +131,6 @@ async fn main() {
             return;
         }
     };
-
-    //logger::LogService::new();
-    // env_logger::builder()
-    //         .filter_level(log::LevelFilter::Debug)
-    //         .init();
 
     match monitor::init().await {
         Ok(_) => {}
@@ -140,39 +148,98 @@ async fn main() {
         }
     }
 
-    let server = Server::bind(&socket_addr)
-        .serve(make_service_fn(|_conn| async {
-            Ok::<_, Infallible>(service_fn(req_handler))
-        }))
-        .with_graceful_shutdown(shutdown_signal());
+    // Build the Axum router
+    // Public routes (no authentication)
+    let public_routes = Router::new()
+        .route("/hello", get(api::handlers::misc::hello))
+        .route("/teapot", get(api::handlers::misc::teapot))
+        .route("/healthcheck", get(api::handlers::misc::healthcheck))
+        .route("/get-otp-qr", post(api::handlers::auth::get_otp_qr))
+        .route("/login", post(api::handlers::auth::login));
 
-    let mut socket_addrs = vec![socket_addr];
+    // Protected routes (require authentication)
+    let protected_routes = Router::new()
+        .route("/get-desc", get(api::handlers::monitor::get_desc))
+        .route(
+            "/get-hardware-info",
+            get(api::handlers::monitor::get_hardware_info),
+        )
+        .route(
+            "/get-cpu-status",
+            get(api::handlers::monitor::get_cpu_status),
+        )
+        .route(
+            "/get-mem-status",
+            get(api::handlers::monitor::get_mem_status),
+        )
+        .route(
+            "/get-disk-status",
+            get(api::handlers::monitor::get_disk_status),
+        )
+        .route(
+            "/get-processes",
+            get(api::handlers::process::get_processes),
+        )
+        .route(
+            "/kill-process",
+            get(api::handlers::process::kill_process),
+        )
+        .route("/update-info", post(api::handlers::monitor::update_info))
+        .route(
+            "/validate-token-test",
+            get(api::handlers::monitor::validate_token_test),
+        )
+        .route(
+            "/logs/get-app-ids",
+            get(api::handlers::logs::get_app_ids_handler),
+        )
+        .route(
+            "/logs/get-app-logs",
+            get(api::handlers::logs::get_app_logs_handler),
+        )
+        .layer(middleware::from_fn(api::middleware::auth_middleware));
+
+    // Merge routes with HTTP request/response logging
+    let app = public_routes.merge(protected_routes).layer(
+        TraceLayer::new_for_http()
+            .make_span_with(
+                DefaultMakeSpan::new()
+                    .level(Level::INFO)
+                    .include_headers(true),
+            )
+            .on_response(
+                DefaultOnResponse::new()
+                    .level(Level::INFO)
+                    .latency_unit(LatencyUnit::Millis),
+            ),
+    );
 
     if cfg!(debug_assertions) {
-        let debug_socket_addr = SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT));
-        let server_local = Server::bind(&debug_socket_addr)
-            .serve(make_service_fn(|_conn| async {
-                Ok::<_, Infallible>(service_fn(req_handler))
-            }))
-            .with_graceful_shutdown(shutdown_signal());
+        // In debug mode, run two servers
+        let debug_socket_addr = SocketAddr::from(([127, 0, 0, 1], config.server.port));
 
-        socket_addrs.push(debug_socket_addr);
+        info!("Listening on http://{}", socket_addr);
+        info!("Listening on http://{}", debug_socket_addr);
 
-        for addr in socket_addrs {
-            info!("Listening on http://{}", addr);
-        }
+        let listener_main = TcpListener::bind(socket_addr).await.unwrap();
+        let listener_debug = TcpListener::bind(debug_socket_addr).await.unwrap();
 
-        // will wait for either server or server_local to finish
+        let app_main = app.clone();
+        let app_debug = app;
+
         tokio::select! {
-            _ = server_local => {},
-            _ = server => {},
+            _ = axum::serve(listener_main, app_main).with_graceful_shutdown(shutdown_signal()) => {},
+            _ = axum::serve(listener_debug, app_debug).with_graceful_shutdown(shutdown_signal()) => {},
         }
     } else {
-        for addr in socket_addrs {
-            info!("Listening on http://{}", addr);
-        }
+        info!("Listening on http://{}", socket_addr);
 
-        if let Err(e) = server.await {
+        let listener = TcpListener::bind(socket_addr).await.unwrap();
+
+        if let Err(e) = axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+        {
             error!("server error: {}", e);
         }
     }

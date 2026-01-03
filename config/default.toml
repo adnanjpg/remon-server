@@ -1,0 +1,35 @@
+# Default configuration for remon-server
+# This file contains base settings that can be overridden by environment-specific configs
+
+[server]
+port = 8080
+host = "0.0.0.0"
+
+[database]
+# SQLite connection settings
+path = "./db/monitor.sqlite3"
+folder_path = "./db"
+max_connections = 1
+
+[auth]
+# JWT secret - should be overridden in production via environment variable
+jwt_secret = "d3f4ult"
+
+[monitoring]
+# System monitoring intervals and thresholds
+update_interval_ms = 5000
+enable_notifications = true
+
+[grpc]
+# gRPC server settings
+address = "127.0.0.1:50051"
+enable_reflection = true
+
+[logging]
+# Application logging configuration
+level = "info"
+format = "compact"
+
+[fcm]
+# Firebase Cloud Messaging settings
+credentials_path = "./.remon-mobile-fcm-creds.json"

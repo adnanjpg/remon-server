@@ -1,0 +1,29 @@
+meta {
+  name: Get Memory Status
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/get-mem-status?start_time={{start_time}}&end_time={{end_time}}
+  body: none
+  auth: bearer
+}
+
+params:query {
+  start_time: 0
+  end_time: 9999999999999
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Get memory usage statistics between specified timestamps.
+  Returns memory usage frames with available memory information.
+
+  Parameters:
+  - start_time: Unix timestamp in milliseconds
+  - end_time: Unix timestamp in milliseconds
+}

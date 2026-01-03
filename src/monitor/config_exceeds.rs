@@ -1,3 +1,8 @@
+use chrono::Duration;
+use log::{debug, error, info, warn};
+use std::collections::HashMap;
+use std::vec;
+
 use crate::monitor::models::get_cpu_status::CpuFrameStatusTrait;
 
 use crate::logs::persistence::{
@@ -7,10 +12,6 @@ use crate::monitor::models::get_hardware_info::{HardwareDiskInfo, HardwareMemInf
 use crate::monitor::models::get_mem_status::MemStatusData;
 use crate::monitor::persistence::fetch_monitor_configs;
 use crate::notification_service::{self, NotificationMessage};
-use chrono::Duration;
-use log::{error, info, warn};
-use std::collections::HashMap;
-use std::vec;
 
 use super::models::get_cpu_status::CpuStatusData;
 use super::models::get_disk_status::{DiskStatusData, DiskStatusDataTrait};
@@ -125,7 +126,7 @@ async fn send_notification_to_exceeding_device(
     let should_send = should_send_notification_to_exceeding_device(&config).await;
 
     if !should_send {
-        warn!("did not send notification to exceeding device because a notification has already been sent in the last {} seconds", get_send_notification_interval().num_seconds());
+        debug!("did not send notification to exceeding device because a notification has already been sent in the last {} seconds", get_send_notification_interval().num_seconds());
 
         return false;
     }

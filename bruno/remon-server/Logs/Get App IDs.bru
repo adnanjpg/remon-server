@@ -1,0 +1,30 @@
+meta {
+  name: Get App IDs
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/logs/get-app-ids?start_time={{start_time}}&end_time={{end_time}}
+  body: none
+  auth: bearer
+}
+
+params:query {
+  start_time: 0
+  end_time: 9999999999999
+  ~start_time:
+  ~end_time:
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Get list of application IDs that have logged entries.
+
+  Parameters (all optional):
+  - start_time: Unix timestamp in milliseconds - filter logs from this time
+  - end_time: Unix timestamp in milliseconds - filter logs until this time
+}

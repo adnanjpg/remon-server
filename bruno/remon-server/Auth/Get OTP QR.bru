@@ -1,0 +1,22 @@
+meta {
+  name: Get OTP QR
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/get-otp-qr
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "device_id": "{{device_id}}"
+  }
+}
+
+docs {
+  Generate a QR code for TOTP authentication setup.
+  The QR code will be printed in the server console.
+}

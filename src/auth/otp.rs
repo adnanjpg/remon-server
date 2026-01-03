@@ -5,6 +5,7 @@ use fast_qr::qr::QRCodeError;
 use totp_rs::{Algorithm, Secret, TotpUrlError, TOTP};
 
 use serde::{Deserialize, Serialize};
+use blake3;
 
 const OTP_APP_NAME: &str = "remon";
 const OTP_TIME_STEP: u64 = 30;
@@ -19,15 +20,15 @@ pub struct ValidateOtpData {
 }
 
 fn generate_totp_secret(device_id: &str) -> String {
-    // Encode the shared secret in base32
-    let encoded_secret = encode(Alphabet::Rfc4648 { padding: false }, device_id.as_bytes());
+    // Hash the device_id to get a consistent, fixed-size secret
+    // Using first 20 bytes (160 bits) which is standard for TOTP
+    let hash = blake3::hash(device_id.as_bytes());
+    let secret_bytes = &hash.as_bytes()[..20]; // Take first 20 bytes
 
-    let totp = generate_totp_obj(&encoded_secret).unwrap();
-    let otp_base32 = totp.get_secret_base32();
+    // Encode in base32
+    let encoded_secret = encode(Alphabet::Rfc4648 { padding: false }, secret_bytes);
 
-    otp_base32
-
-    // TOTP_KEY.to_owned()
+    encoded_secret
 }
 
 pub fn generate_otp_qr_url(device_id: &str) -> String {
@@ -53,15 +54,19 @@ pub fn outputqr(input: &str) -> Result<String, QRCodeError> {
 }
 
 fn generate_totp_obj(secret: &str) -> Result<TOTP, TotpUrlError> {
+    let secret_bytes = Secret::Encoded(secret.to_owned())
+        .to_bytes()
+        .map_err(|_| TotpUrlError::Secret("Invalid secret".to_string()))?;
+
     let totp = TOTP::new(
         OTP_ALGORITHM,
         OTP_DIGITS,
         OTP_SKEW,
         OTP_TIME_STEP,
-        Secret::Encoded(secret.to_owned()).to_bytes().unwrap(),
-    );
+        secret_bytes,
+    )?;
 
-    return totp;
+    Ok(totp)
 }
 
 pub fn check_totp_match(key: &str, secret: &str) -> bool {
@@ -69,9 +74,15 @@ pub fn check_totp_match(key: &str, secret: &str) -> bool {
         return false;
     }
 
-    let totp = generate_totp_obj(secret).unwrap();
+    let totp = match generate_totp_obj(secret) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
 
-    let result = totp.check_current(key).unwrap();
+    let result = match totp.check_current(key) {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
 
     result
 }
