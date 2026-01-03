@@ -1,0 +1,11 @@
+# Development environment configuration
+# Overrides default.toml settings for local development
+
+[server]
+port = 8080
+
+[logging]
+level = "debug"
+
+[monitoring]
+update_interval_ms = 5000

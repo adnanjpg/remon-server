@@ -1,0 +1,78 @@
+use config::{Config as ConfigBuilder, ConfigError, Environment, File};
+use serde::Deserialize;
+use std::env;
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Config {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub auth: AuthConfig,
+    pub monitoring: MonitoringConfig,
+    pub grpc: GrpcConfig,
+    pub logging: LoggingConfig,
+    pub fcm: FcmConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub port: u16,
+    pub host: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct DatabaseConfig {
+    pub path: String,
+    pub folder_path: String,
+    pub max_connections: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct AuthConfig {
+    pub jwt_secret: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct MonitoringConfig {
+    pub update_interval_ms: u64,
+    pub enable_notifications: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct GrpcConfig {
+    pub address: String,
+    pub enable_reflection: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct LoggingConfig {
+    pub level: String,
+    pub format: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct FcmConfig {
+    pub credentials_path: String,
+}
+
+impl Config {
+    pub fn new() -> Result<Self, ConfigError> {
+        // Determine the run environment (default to "development")
+        let run_env = env::var("RUN_ENV").unwrap_or_else(|_| "development".into());
+
+        let config = ConfigBuilder::builder()
+            // Start with default configuration
+            .add_source(File::with_name("config/default"))
+            // Layer on environment-specific configuration
+            .add_source(File::with_name(&format!("config/{}", run_env)).required(false))
+            // Override with environment variables (prefix: REMON_)
+            // Example: REMON_SERVER__PORT=9000 overrides server.port
+            .add_source(
+                Environment::with_prefix("REMON")
+                    .separator("__")
+                    .try_parsing(true),
+            )
+            .build()?;
+
+        config.try_deserialize()
+    }
+}

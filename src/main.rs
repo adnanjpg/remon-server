@@ -8,9 +8,10 @@ use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tower_http::LatencyUnit;
-use tracing_core::Level;
+use tracing::Level;
 
 mod api;
+mod config;
 mod logger;
 mod notification_service;
 pub mod persistence;
@@ -23,14 +24,7 @@ mod monitor;
 use local_ip_address::local_ip;
 use std::convert::TryInto;
 
-fn get_port() -> u16 {
-    std::env::var("PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(8080)
-}
-
-fn get_ip_array() -> Option<[u8; 4]> {
+fn get_ip_array(_config: &config::Config) -> Option<[u8; 4]> {
     match local_ip() {
         Ok(ip) => {
             let ip_str = ip.to_string();
@@ -51,9 +45,9 @@ fn get_ip_array() -> Option<[u8; 4]> {
     }
 }
 
-fn get_socket_addr() -> Option<SocketAddr> {
-    match get_ip_array() {
-        Some(ip_array) => Some(SocketAddr::from((ip_array, get_port()))),
+fn get_socket_addr(config: &config::Config) -> Option<SocketAddr> {
+    match get_ip_array(config) {
+        Some(ip_array) => Some(SocketAddr::from((ip_array, config.server.port))),
         None => None,
     }
 }
@@ -76,23 +70,52 @@ fn init_tests() {
 
 #[tokio::main]
 async fn main() {
-    dotenv::dotenv().ok();
+    // Load configuration
+    let config = match config::Config::new() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("Failed to load configuration: {}", e);
+            std::process::exit(1);
+        }
+    };
 
-    if cfg!(debug_assertions) {
-        logger::LogService::new()
-            .set_level(log::LevelFilter::Debug)
-            .build();
-    } else {
-        logger::LogService::new()
-            .set_level(log::LevelFilter::Info)
-            .build();
-    }
+    // Initialize tracing subscriber for HTTP request logging
+    let log_level = match config.logging.level.to_lowercase().as_str() {
+        "trace" => Level::TRACE,
+        "debug" => Level::DEBUG,
+        "info" => Level::INFO,
+        "warn" => Level::WARN,
+        "error" => Level::ERROR,
+        _ => Level::INFO,
+    };
 
-    let socket_addr = match get_socket_addr() {
+    // Initialize tracing first (for HTTP logging)
+    tracing_subscriber::fmt()
+        .with_max_level(log_level)
+        .with_target(false)
+        .compact()
+        .init();
+
+    // Then initialize application logger
+    let log_filter = match config.logging.level.to_lowercase().as_str() {
+        "trace" => log::LevelFilter::Trace,
+        "debug" => log::LevelFilter::Debug,
+        "info" => log::LevelFilter::Info,
+        "warn" => log::LevelFilter::Warn,
+        "error" => log::LevelFilter::Error,
+        _ => log::LevelFilter::Info,
+    };
+
+    logger::LogService::new()
+        .set_level(log_filter)
+        .build();
+
+
+    let socket_addr = match get_socket_addr(&config) {
         Some(addr) => addr,
         None => {
             error!("Failed to get local IP address.");
-            SocketAddr::from(([127, 0, 0, 1], get_port()))
+            SocketAddr::from(([127, 0, 0, 1], config.server.port))
         }
     };
 
@@ -171,22 +194,24 @@ async fn main() {
         )
         .layer(middleware::from_fn(api::middleware::auth_middleware));
 
-    // Merge routes
-    let app = public_routes
-        .merge(protected_routes)
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(DefaultMakeSpan::new().level(Level::DEBUG))
-                .on_response(
-                    DefaultOnResponse::new()
-                        .level(Level::DEBUG)
-                        .latency_unit(LatencyUnit::Millis),
-                ),
-        );
+    // Merge routes with HTTP request/response logging
+    let app = public_routes.merge(protected_routes).layer(
+        TraceLayer::new_for_http()
+            .make_span_with(
+                DefaultMakeSpan::new()
+                    .level(Level::INFO)
+                    .include_headers(true),
+            )
+            .on_response(
+                DefaultOnResponse::new()
+                    .level(Level::INFO)
+                    .latency_unit(LatencyUnit::Millis),
+            ),
+    );
 
     if cfg!(debug_assertions) {
         // In debug mode, run two servers
-        let debug_socket_addr = SocketAddr::from(([127, 0, 0, 1], get_port()));
+        let debug_socket_addr = SocketAddr::from(([127, 0, 0, 1], config.server.port));
 
         info!("Listening on http://{}", socket_addr);
         info!("Listening on http://{}", debug_socket_addr);

@@ -124,7 +124,8 @@ impl LogService {
     }
 
     pub fn build(mut self) {
-        self.builder.init();
+        // Use try_init to avoid panicking if another logger is already set
+        let _ = self.builder.try_init();
 
         let _ = tokio::spawn(async move {
             while let Some(app_log) = self.channel.1.recv().await {

@@ -9,7 +9,7 @@ edition = "2021"
 base32 = "0.5.0"
 base64 = "0.22.1"
 chrono = "0.4.38"
-dotenv = "0.15.0"
+config = "0.14"
 fast_qr = "0.13.1"
 axum = "0.8.8"
 tower = "0.5.2"
@@ -37,7 +37,8 @@ tonic = "0.11.0"
 tonic-reflection = "0.11.0"
 prost = "0.12.6"
 colored = "3"
-tracing-core = "0.1.36"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [build-dependencies]
 tonic-build = "0.11.0"

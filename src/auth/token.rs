@@ -8,8 +8,12 @@ use jsonwebtoken::{
     DecodingKey, EncodingKey, Header, Validation,
 };
 
+use crate::config::Config;
+
 fn get_jwt_secret() -> String {
-    std::env::var("JWT_SECRET").unwrap_or_else(|_| "d3f4ult".to_string())
+    Config::new()
+        .map(|cfg| cfg.auth.jwt_secret)
+        .unwrap_or_else(|_| "d3f4ult".to_string())
 }
 
 const TOKEN_EXPIRE_TIME: StdDuration = StdDuration::from_secs(60 * 60);
