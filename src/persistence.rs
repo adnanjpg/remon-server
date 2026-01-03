@@ -1,7 +1,6 @@
-use async_once::AsyncOnce;
-use log::error;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::{Pool, Sqlite};
+use tokio::sync::OnceCell;
 
 use crate::logs::persistence::app_logs::create_app_logs_table;
 use crate::logs::persistence::create_notification_logs_table;
@@ -20,22 +19,18 @@ pub type SQLConnection = Pool<Sqlite>;
 pub async fn get_default_sql_connection() -> Result<SQLConnection, sqlx::Error> {
     get_sql_connection().await
 }
+
 pub async fn get_sql_connection() -> Result<SQLConnection, sqlx::Error> {
-    let pool = POOL.get().await;
+    let pool = POOL
+        .get_or_try_init(|| async {
+            SqlitePoolOptions::new()
+                .max_connections(MAX_CONNECTIONS)
+                .connect(SQLITE_DB_CONN_STR)
+                .await
+        })
+        .await?;
 
-    match pool {
-        Ok(pool) => {
-            let oww = pool.to_owned();
-
-            Ok(oww)
-        }
-        Err(e) => {
-            error!("Failed to get db connection from pool: {:?}", e);
-
-            // TODO(adnanjpg): we can't clone sqlx::Error for some reason
-            Err(sqlx::Error::PoolClosed)
-        }
-    }
+    Ok(pool.clone())
 }
 
 // https://github.com/brettwooldridge/HikariCP/wiki/About-Pool-Sizing
@@ -50,18 +45,8 @@ pub async fn get_sql_connection() -> Result<SQLConnection, sqlx::Error> {
 // TODO(adnanjpg): make this configurable
 const MAX_CONNECTIONS: u32 = 1;
 
-// https://stackoverflow.com/a/67758135/12555423
-lazy_static! {
-    static ref POOL: AsyncOnce<Result<SQLConnection, sqlx::Error>> = AsyncOnce::new(async {
-        let con = SqlitePoolOptions::new()
-            .max_connections(MAX_CONNECTIONS)
-            .connect(SQLITE_DB_CONN_STR);
-
-        let pool = con.await;
-
-        pool
-    });
-}
+// Using tokio::sync::OnceCell for thread-safe lazy initialization
+static POOL: OnceCell<Pool<Sqlite>> = OnceCell::const_new();
 
 pub async fn init_db() -> Result<(), sqlx::Error> {
     // check if db folder exists

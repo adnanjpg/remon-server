@@ -23,9 +23,6 @@ mod monitor;
 use local_ip_address::local_ip;
 use std::convert::TryInto;
 
-#[macro_use]
-extern crate lazy_static;
-
 fn get_port() -> u16 {
     std::env::var("PORT")
         .ok()
