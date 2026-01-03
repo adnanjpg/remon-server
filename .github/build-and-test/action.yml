@@ -34,12 +34,18 @@ runs:
           fi
 
     - name: 🔨 Build
+      env:
+        # Required for JWT validation in production builds
+        REMON__AUTH__JWT_SECRET: "ci-test-secret-minimum-32-characters-long-12345678"
       uses: actions-rs/cargo@v1
       with:
         command: build
         args: --release --all-features
 
     - name: 🔎 Test
+      env:
+        # Required for JWT validation in production builds
+        REMON__AUTH__JWT_SECRET: "ci-test-secret-minimum-32-characters-long-12345678"
       uses: actions-rs/cargo@v1
       with:
         command: test
