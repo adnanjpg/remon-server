@@ -12,7 +12,7 @@ get {
 
 params:query {
   start_time: 0
-  end_time: 9999999999
+  end_time: 9999999999999
   ~start_time:
   ~end_time:
 }
@@ -25,6 +25,6 @@ docs {
   Get list of application IDs that have logged entries.
 
   Parameters (all optional):
-  - start_time: Unix timestamp (seconds) - filter logs from this time
-  - end_time: Unix timestamp (seconds) - filter logs until this time
+  - start_time: Unix timestamp in milliseconds - filter logs from this time
+  - end_time: Unix timestamp in milliseconds - filter logs until this time
 }

@@ -12,7 +12,7 @@ get {
 
 params:query {
   start_time: 0
-  end_time: 9999999999
+  end_time: 9999999999999
 }
 
 auth:bearer {
@@ -24,6 +24,6 @@ docs {
   Returns memory usage frames with available memory information.
 
   Parameters:
-  - start_time: Unix timestamp (seconds)
-  - end_time: Unix timestamp (seconds)
+  - start_time: Unix timestamp in milliseconds
+  - end_time: Unix timestamp in milliseconds
 }
