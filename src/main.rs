@@ -110,6 +110,11 @@ async fn main() {
         .set_level(log_filter)
         .build();
 
+    // Validate JWT secret strength at startup
+    if let Err(e) = auth::token::validate() {
+        error!("{}", e);
+        std::process::exit(1);
+    }
 
     let socket_addr = match get_socket_addr(&config) {
         Some(addr) => addr,
