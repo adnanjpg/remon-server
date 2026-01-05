@@ -207,7 +207,7 @@ async fn main() {
             get(api::handlers::docker::list_containers),
         )
         .route(
-            "/docker/containers/:id",
+            "/docker/containers/{id}",
             get(api::handlers::docker::get_container),
         )
         .route(
@@ -215,19 +215,19 @@ async fn main() {
             get(api::handlers::docker::get_stats),
         )
         .route(
-            "/docker/containers/:id/start",
+            "/docker/containers/{id}/start",
             post(api::handlers::docker::start_container),
         )
         .route(
-            "/docker/containers/:id/stop",
+            "/docker/containers/{id}/stop",
             post(api::handlers::docker::stop_container),
         )
         .route(
-            "/docker/containers/:id/restart",
+            "/docker/containers/{id}/restart",
             post(api::handlers::docker::restart_container),
         )
         .route(
-            "/docker/containers/:id/logs",
+            "/docker/containers/{id}/logs",
             get(api::handlers::docker::get_logs),
         )
         .layer(middleware::from_fn(api::middleware::auth_middleware));
