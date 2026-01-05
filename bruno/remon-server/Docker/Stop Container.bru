@@ -1,0 +1,24 @@
+meta {
+  name: Stop Container
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/docker/containers/{{container_id}}/stop
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Stop a running Docker container.
+
+  Parameters:
+  - container_id: Docker container ID or name
+
+  ⚠️ Warning: Container will be stopped with a 10 second timeout.
+}

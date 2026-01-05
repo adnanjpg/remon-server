@@ -1,0 +1,29 @@
+meta {
+  name: Get Container Logs
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/docker/containers/{{container_id}}/logs?tail={{tail}}
+  body: none
+  auth: bearer
+}
+
+params:query {
+  tail: 100
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Get logs from a Docker container.
+
+  Parameters:
+  - container_id: Docker container ID or name
+  - tail: Number of lines to return from the end (default: 100)
+
+  Returns both stdout and stderr logs.
+}
