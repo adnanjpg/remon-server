@@ -4,6 +4,8 @@ pub mod get_mem_status;
 
 pub mod get_hardware_info;
 
+pub mod docker;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]

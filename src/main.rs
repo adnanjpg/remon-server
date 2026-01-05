@@ -197,6 +197,39 @@ async fn main() {
             "/logs/get-app-logs",
             get(api::handlers::logs::get_app_logs_handler),
         )
+        // Docker routes
+        .route(
+            "/docker/status",
+            get(api::handlers::docker::get_docker_status),
+        )
+        .route(
+            "/docker/containers",
+            get(api::handlers::docker::list_containers),
+        )
+        .route(
+            "/docker/containers/:id",
+            get(api::handlers::docker::get_container),
+        )
+        .route(
+            "/docker/stats",
+            get(api::handlers::docker::get_stats),
+        )
+        .route(
+            "/docker/containers/:id/start",
+            post(api::handlers::docker::start_container),
+        )
+        .route(
+            "/docker/containers/:id/stop",
+            post(api::handlers::docker::stop_container),
+        )
+        .route(
+            "/docker/containers/:id/restart",
+            post(api::handlers::docker::restart_container),
+        )
+        .route(
+            "/docker/containers/:id/logs",
+            get(api::handlers::docker::get_logs),
+        )
         .layer(middleware::from_fn(api::middleware::auth_middleware));
 
     // Merge routes with HTTP request/response logging

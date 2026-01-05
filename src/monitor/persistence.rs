@@ -26,6 +26,14 @@ mod status_mem;
 use self::status_mem::{create_mem_status_frame_singles_table, create_mem_status_frames_table};
 pub use self::status_mem::{get_mem_status_between_dates, insert_mem_status_frame};
 
+mod docker_container;
+use self::docker_container::create_docker_containers_table;
+pub use self::docker_container::{fetch_all_containers, fetch_container_by_id, upsert_container_info};
+
+mod docker_stats;
+use self::docker_stats::{create_docker_stats_container_table, create_docker_stats_frames_table};
+pub use self::docker_stats::{get_docker_stats_between_dates, insert_docker_stats_frame};
+
 use crate::persistence::SQLConnection;
 pub use crate::persistence::{get_default_sql_connection, FetchId};
 
@@ -45,5 +53,10 @@ pub async fn init_db(conn: &SQLConnection) -> Result<(), sqlx::Error> {
     create_mem_status_frames_table(conn).await?;
     create_mem_status_frame_singles_table(conn).await?;
 
+    create_docker_containers_table(conn).await?;
+    create_docker_stats_frames_table(conn).await?;
+    create_docker_stats_container_table(conn).await?;
+
     Ok(())
 }
+

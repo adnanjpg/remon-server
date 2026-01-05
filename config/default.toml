@@ -33,3 +33,13 @@ format = "compact"
 [fcm]
 # Firebase Cloud Messaging settings
 credentials_path = "./.remon-mobile-fcm-creds.json"
+
+[docker]
+# Enable/disable Docker monitoring
+enabled = true
+# Docker socket path (Unix) or TCP endpoint
+# Leave empty for default: unix:///var/run/docker.sock (Linux/Mac) or npipe:////./pipe/docker_engine (Windows)
+# For TCP: tcp://localhost:2375
+socket_path = ""
+# Check interval in milliseconds
+check_interval_ms = 10000

@@ -8,10 +8,18 @@ mod config_exceeds;
 pub mod models;
 pub mod persistence;
 pub mod system_monitor;
+pub mod docker_actions;
+pub mod docker_monitor;
 
 pub async fn init() -> Result<(), Box<dyn Error>> {
+    // Start system monitor
     let monitor = system_monitor::SystemMonitor::new();
     monitor.start_monitoring().await;
+
+    // Start Docker monitor (will gracefully skip if Docker is not available)
+    let docker_monitor = docker_monitor::DockerMonitor::new().await;
+    docker_monitor.start_monitoring().await;
+
     if !sysinfo::IS_SUPPORTED_SYSTEM {
         return Err("System not supported".into());
     } else {
