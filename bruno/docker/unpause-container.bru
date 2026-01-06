@@ -1,0 +1,24 @@
+meta {
+  name: Unpause Container
+  type: http
+  seq: 11
+}
+
+post {
+  url: {{baseUrl}}/docker/containers/{{container_id}}/unpause
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Unpause a paused Docker container.
+  
+  Parameters:
+  - container_id: Docker container ID or name
+
+  ⚠️ Note: Container must be in paused state.
+}

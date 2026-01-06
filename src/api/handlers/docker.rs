@@ -10,16 +10,17 @@ use serde::{Deserialize, Serialize};
 use crate::{
     api::extractors::Claims,
     monitor::{
-        docker_actions::{
-            self, get_docker_version, is_docker_available, DockerActionError,
-        },
+        docker_actions::{self, get_docker_version, is_docker_available, DockerActionError},
         docker_monitor::{get_container_state_from_inspect, get_container_state_from_summary},
         models::docker::{
-            ContainerDetails, ContainerInfo, DockerActionResponse, DockerStatusResponse,
-            GetContainerLogsRequest, GetDockerStatsRequest, GetDockerStatsResponse,
-            ListContainersResponse,
+            ContainerDetails, ContainerInfo, ContainerInspectResponse, DockerActionResponse,
+            DockerStatusResponse, ForceDeleteRequest, GetContainerLogsRequest,
+            GetDockerStatsRequest, GetDockerStatsResponse, ListContainersResponse,
+            ListImagesResponse, PruneResult,
         },
-        persistence::{fetch_all_containers, fetch_container_by_id, get_docker_stats_between_dates},
+        persistence::{
+            fetch_all_containers, fetch_container_by_id, get_docker_stats_between_dates,
+        },
     },
 };
 
@@ -286,7 +287,10 @@ pub async fn get_logs(
     _claims: Claims,
     Path(container_id): Path<String>,
     Query(params): Query<GetContainerLogsRequest>,
-) -> Result<Json<crate::monitor::models::docker::GetContainerLogsResponse>, (StatusCode, Json<ResponseBody>)> {
+) -> Result<
+    Json<crate::monitor::models::docker::GetContainerLogsResponse>,
+    (StatusCode, Json<ResponseBody>),
+> {
     if !is_docker_available().await {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
@@ -307,5 +311,227 @@ pub async fn get_logs(
             ),
         })?;
 
-    Ok(Json(crate::monitor::models::docker::GetContainerLogsResponse { logs }))
+    Ok(Json(
+        crate::monitor::models::docker::GetContainerLogsResponse { logs },
+    ))
+}
+
+/// GET /docker/containers/{id}/inspect - Get full container inspect details
+pub async fn inspect_container(
+    _claims: Claims,
+    Path(container_id): Path<String>,
+) -> Result<Json<ContainerInspectResponse>, (StatusCode, Json<ResponseBody>)> {
+    if !is_docker_available().await {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ResponseBody::Error("Docker is not available".to_string())),
+        ));
+    }
+
+    let container = docker_actions::get_container_inspect_details(&container_id)
+        .await
+        .map_err(|e| match e {
+            DockerActionError::ContainerNotFound(_) => (
+                StatusCode::NOT_FOUND,
+                Json(ResponseBody::Error(e.to_string())),
+            ),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ResponseBody::Error(e.to_string())),
+            ),
+        })?;
+
+    Ok(Json(ContainerInspectResponse { container }))
+}
+
+/// POST /docker/containers/{id}/pause - Pause a container
+pub async fn pause_container(
+    _claims: Claims,
+    Path(container_id): Path<String>,
+) -> Result<Json<DockerActionResponse>, (StatusCode, Json<ResponseBody>)> {
+    if !is_docker_available().await {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ResponseBody::Error("Docker is not available".to_string())),
+        ));
+    }
+
+    docker_actions::pause_container(&container_id)
+        .await
+        .map_err(|e| match e {
+            DockerActionError::ContainerNotFound(_) => (
+                StatusCode::NOT_FOUND,
+                Json(ResponseBody::Error(e.to_string())),
+            ),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ResponseBody::Error(e.to_string())),
+            ),
+        })?;
+
+    Ok(Json(DockerActionResponse {
+        success: true,
+        message: format!("Container {} paused", container_id),
+    }))
+}
+
+/// POST /docker/containers/{id}/unpause - Unpause a container
+pub async fn unpause_container(
+    _claims: Claims,
+    Path(container_id): Path<String>,
+) -> Result<Json<DockerActionResponse>, (StatusCode, Json<ResponseBody>)> {
+    if !is_docker_available().await {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ResponseBody::Error("Docker is not available".to_string())),
+        ));
+    }
+
+    docker_actions::unpause_container(&container_id)
+        .await
+        .map_err(|e| match e {
+            DockerActionError::ContainerNotFound(_) => (
+                StatusCode::NOT_FOUND,
+                Json(ResponseBody::Error(e.to_string())),
+            ),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ResponseBody::Error(e.to_string())),
+            ),
+        })?;
+
+    Ok(Json(DockerActionResponse {
+        success: true,
+        message: format!("Container {} unpaused", container_id),
+    }))
+}
+
+/// DELETE /docker/containers/{id} - Delete a container
+pub async fn delete_container(
+    _claims: Claims,
+    Path(container_id): Path<String>,
+    Query(params): Query<ForceDeleteRequest>,
+) -> Result<Json<DockerActionResponse>, (StatusCode, Json<ResponseBody>)> {
+    if !is_docker_available().await {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ResponseBody::Error("Docker is not available".to_string())),
+        ));
+    }
+
+    docker_actions::delete_container(&container_id, params.force)
+        .await
+        .map_err(|e| match e {
+            DockerActionError::ContainerNotFound(_) => (
+                StatusCode::NOT_FOUND,
+                Json(ResponseBody::Error(e.to_string())),
+            ),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ResponseBody::Error(e.to_string())),
+            ),
+        })?;
+
+    Ok(Json(DockerActionResponse {
+        success: true,
+        message: format!("Container {} deleted", container_id),
+    }))
+}
+
+/// POST /docker/containers/prune - Prune stopped containers
+pub async fn prune_containers(
+    _claims: Claims,
+) -> Result<Json<PruneResult>, (StatusCode, Json<ResponseBody>)> {
+    if !is_docker_available().await {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ResponseBody::Error("Docker is not available".to_string())),
+        ));
+    }
+
+    let result = docker_actions::prune_containers().await.map_err(|e| {
+        error!("Failed to prune containers: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ResponseBody::Error(e.to_string())),
+        )
+    })?;
+
+    Ok(Json(result))
+}
+
+/// GET /docker/images - List all images
+pub async fn list_images(
+    _claims: Claims,
+) -> Result<Json<ListImagesResponse>, (StatusCode, Json<ResponseBody>)> {
+    if !is_docker_available().await {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ResponseBody::Error("Docker is not available".to_string())),
+        ));
+    }
+
+    let images = docker_actions::get_images().await.map_err(|e| {
+        error!("Failed to list images: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ResponseBody::Error(e.to_string())),
+        )
+    })?;
+
+    Ok(Json(ListImagesResponse { images }))
+}
+
+/// DELETE /docker/images/{id} - Delete an image
+pub async fn delete_image(
+    _claims: Claims,
+    Path(image_id): Path<String>,
+    Query(params): Query<ForceDeleteRequest>,
+) -> Result<Json<DockerActionResponse>, (StatusCode, Json<ResponseBody>)> {
+    if !is_docker_available().await {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ResponseBody::Error("Docker is not available".to_string())),
+        ));
+    }
+
+    docker_actions::delete_image(&image_id, params.force)
+        .await
+        .map_err(|e| match e {
+            DockerActionError::ImageNotFound(_) => (
+                StatusCode::NOT_FOUND,
+                Json(ResponseBody::Error(e.to_string())),
+            ),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ResponseBody::Error(e.to_string())),
+            ),
+        })?;
+
+    Ok(Json(DockerActionResponse {
+        success: true,
+        message: format!("Image {} deleted", image_id),
+    }))
+}
+
+/// POST /docker/images/prune - Prune unused images
+pub async fn prune_images(
+    _claims: Claims,
+) -> Result<Json<PruneResult>, (StatusCode, Json<ResponseBody>)> {
+    if !is_docker_available().await {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ResponseBody::Error("Docker is not available".to_string())),
+        ));
+    }
+
+    let result = docker_actions::prune_images().await.map_err(|e| {
+        error!("Failed to prune images: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ResponseBody::Error(e.to_string())),
+        )
+    })?;
+
+    Ok(Json(result))
 }

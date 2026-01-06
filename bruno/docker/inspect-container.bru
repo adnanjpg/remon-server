@@ -1,0 +1,37 @@
+meta {
+  name: Inspect Container
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/docker/containers/{{container_id}}/inspect
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+vars:pre-request {
+  container_id: 5ea780457498bf4e7ce56bfc3ed373ce0114eec341e153e5776ff2388f43829b
+}
+
+docs {
+  Get full container inspect details.
+  
+  Parameters:
+  - container_id: Docker container ID or name
+  
+  Returns:
+  - Container info (ID, name, image, created_at)
+  - Container state (running, paused, exit_code, etc.)
+  - Ports (host:container mapping)
+  - Volumes (binds, mounts)
+  - Environment variables
+  - Networks (IP, gateway, mac address)
+  - Restart policy
+  - Health check status and logs
+  - Labels
+}

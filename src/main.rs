@@ -1,6 +1,6 @@
 use axum::{
     middleware,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use log::{error, info};
@@ -106,9 +106,7 @@ async fn main() {
         _ => log::LevelFilter::Info,
     };
 
-    logger::LogService::new()
-        .set_level(log_filter)
-        .build();
+    logger::LogService::new().set_level(log_filter).build();
 
     // Validate JWT secret strength at startup
     if let Err(e) = auth::token::validate() {
@@ -176,14 +174,8 @@ async fn main() {
             "/get-disk-status",
             get(api::handlers::monitor::get_disk_status),
         )
-        .route(
-            "/get-processes",
-            get(api::handlers::process::get_processes),
-        )
-        .route(
-            "/kill-process",
-            get(api::handlers::process::kill_process),
-        )
+        .route("/get-processes", get(api::handlers::process::get_processes))
+        .route("/kill-process", get(api::handlers::process::kill_process))
         .route("/update-info", post(api::handlers::monitor::update_info))
         .route(
             "/validate-token-test",
@@ -207,13 +199,19 @@ async fn main() {
             get(api::handlers::docker::list_containers),
         )
         .route(
-            "/docker/containers/{id}",
-            get(api::handlers::docker::get_container),
+            "/docker/containers/prune",
+            post(api::handlers::docker::prune_containers),
         )
         .route(
-            "/docker/stats",
-            get(api::handlers::docker::get_stats),
+            "/docker/containers/{id}",
+            get(api::handlers::docker::get_container)
+                .delete(api::handlers::docker::delete_container),
         )
+        .route(
+            "/docker/containers/{id}/inspect",
+            get(api::handlers::docker::inspect_container),
+        )
+        .route("/docker/stats", get(api::handlers::docker::get_stats))
         .route(
             "/docker/containers/{id}/start",
             post(api::handlers::docker::start_container),
@@ -227,8 +225,26 @@ async fn main() {
             post(api::handlers::docker::restart_container),
         )
         .route(
+            "/docker/containers/{id}/pause",
+            post(api::handlers::docker::pause_container),
+        )
+        .route(
+            "/docker/containers/{id}/unpause",
+            post(api::handlers::docker::unpause_container),
+        )
+        .route(
             "/docker/containers/{id}/logs",
             get(api::handlers::docker::get_logs),
+        )
+        // Image routes
+        .route("/docker/images", get(api::handlers::docker::list_images))
+        .route(
+            "/docker/images/prune",
+            post(api::handlers::docker::prune_images),
+        )
+        .route(
+            "/docker/images/{id}",
+            delete(api::handlers::docker::delete_image),
         )
         .layer(middleware::from_fn(api::middleware::auth_middleware));
 
