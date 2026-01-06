@@ -113,8 +113,11 @@ async fn collect_docker_stats() -> Result<(), Box<dyn std::error::Error + Send +
             .unwrap_or_else(|| "unknown".to_string());
 
         // Extract created timestamp
-        let created_at = Utc.timestamp_millis_opt(container.created.unwrap_or(0)).unwrap().timestamp_micros(); // container.created.unwrap_or(0);
-        // it returns ms epoch, we use us ?
+        let created_at = Utc
+            .timestamp_millis_opt(container.created.unwrap_or(0))
+            .unwrap()
+            .timestamp_micros(); // container.created.unwrap_or(0);
+                                 // it returns ms epoch, we use us ?
 
         // Upsert container info
         let container_info = ContainerInfo {
@@ -151,6 +154,9 @@ async fn collect_docker_stats() -> Result<(), Box<dyn std::error::Error + Send +
                 memory_limit: 0,
                 network_rx_bytes: 0,
                 network_tx_bytes: 0,
+                block_read_bytes: 0,
+                block_write_bytes: 0,
+                pids: 0,
             });
             continue;
         }
@@ -172,6 +178,9 @@ async fn collect_docker_stats() -> Result<(), Box<dyn std::error::Error + Send +
                     memory_limit: 0,
                     network_rx_bytes: 0,
                     network_tx_bytes: 0,
+                    block_read_bytes: 0,
+                    block_write_bytes: 0,
+                    pids: 0,
                 });
             }
         }
@@ -196,7 +205,10 @@ async fn get_container_resource_stats(
     docker: &bollard::Docker,
     container_id: &str,
 ) -> Result<ContainerStats, Box<dyn std::error::Error + Send + Sync>> {
-    let options = StatsOptionsBuilder::new().stream(false).one_shot(true).build();
+    let options = StatsOptionsBuilder::new()
+        .stream(false)
+        .one_shot(true)
+        .build();
 
     let mut stats_stream = docker.stats(container_id, Some(options));
 
@@ -231,6 +243,33 @@ async fn get_container_resource_stats(
             })
             .unwrap_or((0, 0));
 
+        // Block I/O stats
+        let (block_read, block_write) = stats
+            .blkio_stats
+            .as_ref()
+            .and_then(|blkio| blkio.io_service_bytes_recursive.as_ref())
+            .map(|io_stats| {
+                io_stats.iter().fold((0i64, 0i64), |(read, write), entry| {
+                    match entry.op.as_deref() {
+                        Some("read") | Some("Read") => {
+                            (read + entry.value.unwrap_or(0) as i64, write)
+                        }
+                        Some("write") | Some("Write") => {
+                            (read, write + entry.value.unwrap_or(0) as i64)
+                        }
+                        _ => (read, write),
+                    }
+                })
+            })
+            .unwrap_or((0, 0));
+
+        // PIDs count
+        let pids = stats
+            .pids_stats
+            .as_ref()
+            .and_then(|p| p.current)
+            .unwrap_or(0) as i64;
+
         Ok(ContainerStats {
             id: -1,
             frame_id: -1,
@@ -240,6 +279,9 @@ async fn get_container_resource_stats(
             memory_limit,
             network_rx_bytes: network_rx,
             network_tx_bytes: network_tx,
+            block_read_bytes: block_read,
+            block_write_bytes: block_write,
+            pids,
         })
     } else {
         Err("No stats received".into())

@@ -1,0 +1,30 @@
+meta {
+  name: Get Container Stats
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/docker/containers/{{container_id}}/stats
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Get real-time resource stats for a container.
+  
+  Parameters:
+  - container_id: Docker container ID or name
+  
+  Returns:
+  - cpu_percent: CPU usage %
+  - memory_usage / memory_limit / memory_percent
+  - network_rx_bytes / network_tx_bytes
+  - block_read_bytes / block_write_bytes
+  - pids: Process count
+  - timestamp: Current epoch ms
+}

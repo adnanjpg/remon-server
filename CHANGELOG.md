@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [0.2.2] - 2026-01-07
+
+### Added
+
+- **Docker Logs Enhancement**: Time filtering with `start_time`, `end_time` (epoch ms)
+- **Log Streaming (SSE)**: New `GET /docker/containers/{id}/logs/stream` endpoint
+  - Real-time log streaming via Server-Sent Events
+  - Initial tail lines configurable, stays open until disconnect
+- **Real-time Container Stats**: New `GET /docker/containers/{id}/stats` endpoint
+  - CPU, memory (usage/limit/percent), network I/O, block I/O, pids
+- **Block I/O Metrics**: Added `block_read_bytes`, `block_write_bytes`, `pids` to container stats
+- **Podman Support**: Works with Podman via socket path configuration
+- **Bruno Collection**: Added `get-container-stats.bru`, `stream-container-logs.bru`
+
+### Changed
+
+- **Container Inspect**: `GET /docker/containers/{id}` now returns full inspect details (ports, volumes, env, networks, health)
+- **Endpoint Consolidation**: Removed separate `/docker/containers/{id}/inspect` endpoint (merged into `/docker/containers/{id}`)
+
+### Removed
+
+- Separate `/docker/containers/{id}/inspect` endpoint (now part of `/docker/containers/{id}`)
+
 ## [0.2.1] - 2026-01-05
 
 ### Added

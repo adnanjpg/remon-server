@@ -204,14 +204,14 @@ async fn main() {
         )
         .route(
             "/docker/containers/{id}",
-            get(api::handlers::docker::get_container)
+            get(api::handlers::docker::inspect_container)
                 .delete(api::handlers::docker::delete_container),
         )
-        .route(
-            "/docker/containers/{id}/inspect",
-            get(api::handlers::docker::inspect_container),
-        )
         .route("/docker/stats", get(api::handlers::docker::get_stats))
+        .route(
+            "/docker/containers/{id}/stats",
+            get(api::handlers::docker::get_container_stats),
+        )
         .route(
             "/docker/containers/{id}/start",
             post(api::handlers::docker::start_container),
@@ -235,6 +235,10 @@ async fn main() {
         .route(
             "/docker/containers/{id}/logs",
             get(api::handlers::docker::get_logs),
+        )
+        .route(
+            "/docker/containers/{id}/logs/stream",
+            get(api::handlers::docker::stream_logs),
         )
         // Image routes
         .route("/docker/images", get(api::handlers::docker::list_images))

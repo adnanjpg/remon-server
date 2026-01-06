@@ -5,13 +5,15 @@ meta {
 }
 
 get {
-  url: {{baseUrl}}/docker/containers/{{container_id}}/logs?tail={{tail}}
+  url: {{baseUrl}}/docker/containers/{{container_id}}/logs
   body: none
   auth: bearer
 }
 
 params:query {
   tail: 100
+  ~start_time: 
+  ~end_time: 
 }
 
 auth:bearer {
@@ -19,11 +21,13 @@ auth:bearer {
 }
 
 docs {
-  Get logs from a Docker container.
-
+  Get logs from a Docker/Podman container with optional time filtering.
+  
   Parameters:
-  - container_id: Docker container ID or name
-  - tail: Number of lines to return from the end (default: 100)
-
-  Returns both stdout and stderr logs.
+  - container_id: Container ID or name
+  - start_time: (optional) Start time as epoch ms
+  - end_time: (optional) End time as epoch ms
+  - tail: Number of lines from end (default: 100)
+  
+  Note: Timestamps are always included in log output.
 }

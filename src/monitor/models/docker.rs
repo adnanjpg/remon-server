@@ -10,6 +10,8 @@ pub struct GetDockerStatsRequest {
 /// Request for getting container logs
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GetContainerLogsRequest {
+    pub start_time: Option<i64>, // ms epoch
+    pub end_time: Option<i64>,   // ms epoch
     pub tail: Option<usize>,
 }
 
@@ -54,6 +56,9 @@ pub struct ContainerStats {
     pub memory_limit: i64,
     pub network_rx_bytes: i64,
     pub network_tx_bytes: i64,
+    pub block_read_bytes: i64,
+    pub block_write_bytes: i64,
+    pub pids: i64,
 }
 
 /// Docker stats frame (timestamp + all container stats)
@@ -87,6 +92,22 @@ pub struct GetDockerStatsResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GetContainerLogsResponse {
     pub logs: String,
+}
+
+/// Real-time container stats (single snapshot)
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContainerRealtimeStats {
+    pub container_id: String,
+    pub cpu_percent: f64,
+    pub memory_usage: i64,
+    pub memory_limit: i64,
+    pub memory_percent: f64,
+    pub network_rx_bytes: i64,
+    pub network_tx_bytes: i64,
+    pub block_read_bytes: i64,
+    pub block_write_bytes: i64,
+    pub pids: i64,
+    pub timestamp: i64,
 }
 
 /// Docker action result

@@ -39,8 +39,8 @@ async fn insert_docker_stats_container(stats: &ContainerStats) -> Result<(), sql
     let conn = get_default_sql_connection().await?;
 
     let statement = format!(
-        "INSERT INTO {} (frame_id, container_id, cpu_percent, memory_usage, memory_limit, network_rx_bytes, network_tx_bytes)
-        VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO {} (frame_id, container_id, cpu_percent, memory_usage, memory_limit, network_rx_bytes, network_tx_bytes, block_read_bytes, block_write_bytes, pids)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         DOCKER_STATS_CONTAINER_TABLE_NAME
     );
 
@@ -52,6 +52,9 @@ async fn insert_docker_stats_container(stats: &ContainerStats) -> Result<(), sql
         .bind(&stats.memory_limit)
         .bind(&stats.network_rx_bytes)
         .bind(&stats.network_tx_bytes)
+        .bind(&stats.block_read_bytes)
+        .bind(&stats.block_write_bytes)
+        .bind(&stats.pids)
         .execute(&conn)
         .await?;
 
@@ -144,6 +147,9 @@ pub(super) async fn create_docker_stats_container_table(
         memory_limit INTEGER NOT NULL,
         network_rx_bytes INTEGER NOT NULL,
         network_tx_bytes INTEGER NOT NULL,
+        block_read_bytes INTEGER NOT NULL DEFAULT 0,
+        block_write_bytes INTEGER NOT NULL DEFAULT 0,
+        pids INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY (frame_id)
             REFERENCES {} (id)
     )",

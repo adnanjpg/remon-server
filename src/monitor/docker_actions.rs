@@ -2,16 +2,20 @@ use bollard::models::{ContainerInspectResponse, ContainerSummary, ImageSummary};
 use bollard::query_parameters::{
     InspectContainerOptions, ListContainersOptionsBuilder, ListImagesOptions, LogsOptionsBuilder,
     PruneContainersOptions, PruneImagesOptions, RemoveContainerOptions, RemoveImageOptions,
-    RestartContainerOptionsBuilder, StartContainerOptions, StopContainerOptionsBuilder,
+    RestartContainerOptionsBuilder, StartContainerOptions, StatsOptionsBuilder,
+    StopContainerOptionsBuilder,
 };
 use bollard::Docker;
+use chrono::Utc;
+use futures_util::StreamExt;
 use log::{debug, info, warn};
 use thiserror::Error;
 
 use crate::config::Config;
 use crate::monitor::models::docker::{
-    ContainerInfo, ContainerInspectDetails, ContainerNetworkSettings, ContainerState,
-    HealthDetails, HealthLogEntry, ImageInfo, PortBinding, PruneResult, RestartPolicy, VolumeMount,
+    ContainerInfo, ContainerInspectDetails, ContainerNetworkSettings, ContainerRealtimeStats,
+    ContainerState, GetContainerLogsRequest, HealthDetails, HealthLogEntry, ImageInfo, PortBinding,
+    PruneResult, RestartPolicy, VolumeMount,
 };
 
 #[derive(Debug, Error)]
@@ -251,13 +255,11 @@ pub async fn prune_containers() -> Result<PruneResult, DockerActionError> {
     })
 }
 
-/// Get container logs
+/// Get container logs with optional time filtering
 pub async fn get_container_logs(
     container_id: &str,
-    tail: Option<usize>,
+    params: &GetContainerLogsRequest,
 ) -> Result<String, DockerActionError> {
-    use futures_util::StreamExt;
-
     let docker = get_docker_client().await?;
 
     // Check if container exists
@@ -271,16 +273,26 @@ pub async fn get_container_logs(
             _ => DockerActionError::ApiError(e),
         })?;
 
-    let tail_str = tail
+    let tail_str = params
+        .tail
         .map(|t| t.to_string())
         .unwrap_or_else(|| "100".to_string());
 
-    let options = LogsOptionsBuilder::new()
+    let mut builder = LogsOptionsBuilder::new()
         .stdout(true)
         .stderr(true)
-        .tail(&tail_str)
-        .build();
+        .timestamps(true)
+        .tail(&tail_str);
 
+    // Convert ms epoch to seconds for bollard
+    if let Some(start) = params.start_time {
+        builder = builder.since((start / 1000) as i32);
+    }
+    if let Some(end) = params.end_time {
+        builder = builder.until((end / 1000) as i32);
+    }
+
+    let options = builder.build();
     let mut logs_stream = docker.logs(container_id, Some(options));
     let mut logs = String::new();
 
@@ -302,6 +314,188 @@ pub async fn get_container_logs(
         container_id
     );
     Ok(logs)
+}
+
+/// Stream container logs (for SSE)
+/// Returns a stream of log lines
+pub async fn stream_container_logs(
+    container_id: &str,
+    tail: Option<usize>,
+) -> Result<impl futures_util::Stream<Item = Result<String, DockerActionError>>, DockerActionError>
+{
+    let docker = get_docker_client().await?;
+
+    // Check if container exists
+    docker
+        .inspect_container(container_id, Some(InspectContainerOptions::default()))
+        .await
+        .map_err(|e| match e {
+            bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            } => DockerActionError::ContainerNotFound(container_id.to_string()),
+            _ => DockerActionError::ApiError(e),
+        })?;
+
+    let tail_str = tail
+        .map(|t| t.to_string())
+        .unwrap_or_else(|| "50".to_string());
+
+    let options = LogsOptionsBuilder::new()
+        .follow(true) // Stream logs
+        .stdout(true)
+        .stderr(true)
+        .timestamps(true)
+        .tail(&tail_str)
+        .build();
+
+    let container_id_owned = container_id.to_string();
+    let logs_stream = docker.logs(&container_id_owned, Some(options));
+
+    // Map the stream to return log lines
+    let mapped_stream = logs_stream.map(move |result| match result {
+        Ok(log_output) => Ok(log_output.to_string()),
+        Err(e) => {
+            warn!("Error reading log stream: {}", e);
+            Err(DockerActionError::ApiError(e))
+        }
+    });
+
+    Ok(mapped_stream)
+}
+
+/// Get real-time stats for a specific container
+pub async fn get_realtime_stats(
+    container_id: &str,
+) -> Result<ContainerRealtimeStats, DockerActionError> {
+    let docker = get_docker_client().await?;
+
+    // Check if container exists
+    docker
+        .inspect_container(container_id, Some(InspectContainerOptions::default()))
+        .await
+        .map_err(|e| match e {
+            bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            } => DockerActionError::ContainerNotFound(container_id.to_string()),
+            _ => DockerActionError::ApiError(e),
+        })?;
+
+    let options = StatsOptionsBuilder::new()
+        .stream(false)
+        .one_shot(true)
+        .build();
+    let mut stats_stream = docker.stats(container_id, Some(options));
+
+    if let Some(stats_result) = stats_stream.next().await {
+        let stats = stats_result?;
+
+        // Calculate CPU percentage
+        let cpu_percent = calculate_cpu_percent(&stats);
+
+        // Memory stats
+        let memory_usage = stats
+            .memory_stats
+            .as_ref()
+            .and_then(|m| m.usage)
+            .unwrap_or(0) as i64;
+        let memory_limit = stats
+            .memory_stats
+            .as_ref()
+            .and_then(|m| m.limit)
+            .unwrap_or(0) as i64;
+        let memory_percent = if memory_limit > 0 {
+            (memory_usage as f64 / memory_limit as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        // Network stats
+        let (network_rx, network_tx) = stats
+            .networks
+            .as_ref()
+            .map(|networks| {
+                networks.values().fold((0i64, 0i64), |(rx, tx), net| {
+                    let rx_bytes = net.rx_bytes.unwrap_or(0) as i64;
+                    let tx_bytes = net.tx_bytes.unwrap_or(0) as i64;
+                    (rx + rx_bytes, tx + tx_bytes)
+                })
+            })
+            .unwrap_or((0, 0));
+
+        // Block I/O stats
+        let (block_read, block_write) = stats
+            .blkio_stats
+            .as_ref()
+            .and_then(|blkio| blkio.io_service_bytes_recursive.as_ref())
+            .map(|io_stats| {
+                io_stats.iter().fold((0i64, 0i64), |(read, write), entry| {
+                    match entry.op.as_deref() {
+                        Some("read") | Some("Read") => {
+                            (read + entry.value.unwrap_or(0) as i64, write)
+                        }
+                        Some("write") | Some("Write") => {
+                            (read, write + entry.value.unwrap_or(0) as i64)
+                        }
+                        _ => (read, write),
+                    }
+                })
+            })
+            .unwrap_or((0, 0));
+
+        // PIDs count
+        let pids = stats
+            .pids_stats
+            .as_ref()
+            .and_then(|p| p.current)
+            .unwrap_or(0) as i64;
+
+        Ok(ContainerRealtimeStats {
+            container_id: container_id.to_string(),
+            cpu_percent,
+            memory_usage,
+            memory_limit,
+            memory_percent,
+            network_rx_bytes: network_rx,
+            network_tx_bytes: network_tx,
+            block_read_bytes: block_read,
+            block_write_bytes: block_write,
+            pids,
+            timestamp: Utc::now().timestamp_millis(),
+        })
+    } else {
+        Err(DockerActionError::ApiError(
+            bollard::errors::Error::IOError {
+                err: std::io::Error::new(std::io::ErrorKind::Other, "No stats received"),
+            },
+        ))
+    }
+}
+
+fn calculate_cpu_percent(stats: &bollard::models::ContainerStatsResponse) -> f64 {
+    let cpu_stats = match &stats.cpu_stats {
+        Some(s) => s,
+        None => return 0.0,
+    };
+    let precpu_stats = match &stats.precpu_stats {
+        Some(s) => s,
+        None => return 0.0,
+    };
+
+    let cpu_usage = cpu_stats.cpu_usage.as_ref();
+    let precpu_usage = precpu_stats.cpu_usage.as_ref();
+
+    let cpu_delta = cpu_usage.and_then(|u| u.total_usage).unwrap_or(0) as f64
+        - precpu_usage.and_then(|u| u.total_usage).unwrap_or(0) as f64;
+
+    let system_delta = cpu_stats.system_cpu_usage.unwrap_or(0) as f64
+        - precpu_stats.system_cpu_usage.unwrap_or(0) as f64;
+
+    if system_delta > 0.0 && cpu_delta > 0.0 {
+        let num_cpus = cpu_stats.online_cpus.unwrap_or(1) as f64;
+        (cpu_delta / system_delta) * num_cpus * 100.0
+    } else {
+        0.0
+    }
 }
 
 /// List all containers (running and stopped)

@@ -15,7 +15,7 @@ auth:bearer {
 }
 
 docs {
-  Get detailed information about a specific container.
+  Get full inspect details for a specific container.
   
   Parameters:
   - container_id: Docker container ID or name
@@ -23,4 +23,11 @@ docs {
   Returns:
   - Container info (ID, name, image, created_at)
   - Container state (running, paused, exit_code, started_at, finished_at)
+  - Ports (host:container bindings)
+  - Volumes and mounts
+  - Environment variables
+  - Networks (IP, gateway, MAC)
+  - Restart policy
+  - Health check status
+  - Labels
 }
