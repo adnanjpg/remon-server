@@ -113,7 +113,7 @@ impl SystemMonitor {
 
                 // Refresh system information
                 system.refresh_specifics(
-                    RefreshKind::new()
+                    RefreshKind::nothing()
                         // TODO(isaidsari): check if we need to refresh all of them
                         .with_cpu(CpuRefreshKind::everything())
                         .with_memory(MemoryRefreshKind::everything()),
@@ -121,7 +121,8 @@ impl SystemMonitor {
 
                 // Refresh disks information, since with sysinfo v0.30 it's not refreshed with the System
                 // NOTE: if a disk is added or removed, this method won't take it into account
-                disks.refresh();
+                // Todo(): check this
+                disks.refresh(true);
 
                 // disks
                 let mut disk_usage: DiskFrameStatus = DiskFrameStatus {

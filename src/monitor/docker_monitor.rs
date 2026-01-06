@@ -6,7 +6,7 @@ use super::{
 
 use bollard::models::{ContainerInspectResponse, ContainerSummary, ContainerSummaryStateEnum};
 use bollard::query_parameters::StatsOptionsBuilder;
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use futures_util::StreamExt;
 use log::{debug, error, info, warn};
 use std::{
@@ -113,7 +113,8 @@ async fn collect_docker_stats() -> Result<(), Box<dyn std::error::Error + Send +
             .unwrap_or_else(|| "unknown".to_string());
 
         // Extract created timestamp
-        let created_at = container.created.unwrap_or(0);
+        let created_at = Utc.timestamp_millis_opt(container.created.unwrap_or(0)).unwrap().timestamp_micros(); // container.created.unwrap_or(0);
+        // it returns ms epoch, we use us ?
 
         // Upsert container info
         let container_info = ContainerInfo {

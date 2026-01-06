@@ -1,15 +1,15 @@
 use log::{debug, error, info};
 use std::error::Error;
-use sysinfo::{CpuRefreshKind, Pid, ProcessRefreshKind, RefreshKind, System};
+use sysinfo::{CpuRefreshKind, Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
 use self::models::{ProcessInfo, ServerDescription};
 
 mod config_exceeds;
+pub mod docker_actions;
+pub mod docker_monitor;
 pub mod models;
 pub mod persistence;
 pub mod system_monitor;
-pub mod docker_actions;
-pub mod docker_monitor;
 
 pub async fn init() -> Result<(), Box<dyn Error>> {
     // Start system monitor
@@ -29,7 +29,7 @@ pub async fn init() -> Result<(), Box<dyn Error>> {
 
 pub fn get_default_server_desc() -> ServerDescription {
     let mut system = System::new_all();
-    system.refresh_specifics(RefreshKind::new().with_cpu(CpuRefreshKind::everything()));
+    system.refresh_specifics(RefreshKind::nothing().with_cpu(CpuRefreshKind::everything()));
 
     let cpu = system.cpus().first().unwrap().brand();
     let mem = (system.total_memory() as f64) / 1024.0 / 1024.0 / 1024.0;
@@ -37,7 +37,7 @@ pub fn get_default_server_desc() -> ServerDescription {
 
     let description = System::long_os_version().unwrap_or("Unknown".to_string())
         + " • "
-        + System::cpu_arch().unwrap_or_default().as_str()
+        + &System::cpu_arch()
         + " • "
         + cpu
         + " • "
@@ -48,28 +48,32 @@ pub fn get_default_server_desc() -> ServerDescription {
 
 pub async fn get_process_list() -> Vec<ProcessInfo> {
     let mut system = System::new_with_specifics(
-        RefreshKind::new().with_processes(
-            ProcessRefreshKind::new()
+        RefreshKind::nothing().with_processes(
+            ProcessRefreshKind::nothing()
                 .with_cpu()
                 .with_memory()
                 .with_cmd(sysinfo::UpdateKind::Always),
         ),
     );
 
-    system.refresh_processes();
+    system.refresh_processes(ProcessesToUpdate::All, true);
     // wait for a while to get the updated process list
     tokio::time::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL).await;
-    system.refresh_processes();
+    system.refresh_processes(ProcessesToUpdate::All, true);
 
     let mut processes = Vec::new();
     for (pid, process) in system.processes() {
         processes.push(models::ProcessInfo {
             pid: pid.as_u32(),
-            name: process.name().to_string(),
+            name: process.name().to_string_lossy().into_owned(),
             cpu: process.cpu_usage(),
             mem: process.memory(),
             status: process.status().to_string(),
-            cmd: process.cmd().to_vec(),
+            cmd: process
+                .cmd()
+                .iter()
+                .map(|s| s.to_string_lossy().into_owned())
+                .collect(),
         });
     }
 
@@ -80,8 +84,9 @@ pub async fn get_process_list() -> Vec<ProcessInfo> {
 }
 
 pub async fn kill_process(pid: u32) -> Result<(), String> {
-    let system =
-        System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
+    let system = System::new_with_specifics(
+        RefreshKind::nothing().with_processes(ProcessRefreshKind::everything()),
+    );
 
     let process = system.process(Pid::from_u32(pid));
 
@@ -90,7 +95,7 @@ pub async fn kill_process(pid: u32) -> Result<(), String> {
             debug!(
                 "Killing process with pid {} , name {}",
                 process.pid(),
-                process.name()
+                process.name().to_string_lossy().into_owned(),
             );
             let success = process.kill();
             if success {

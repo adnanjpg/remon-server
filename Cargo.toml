@@ -19,10 +19,10 @@ reqwest = "0.13.1"
 ring = "0.17.14"
 serde = { version = "1.0.202", features = ["derive"] }
 serde_derive = "1.0.228"
-serde_json = "1.0.117"
+serde_json = "1.0.149"
 thiserror = "2.0.17"
 sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio"] }
-sysinfo = "0.30.12"
+sysinfo = "0.37.2"
 totp-rs = "5.5.1"
 env_logger = "0.11.3"
 log = "0.4.21"
