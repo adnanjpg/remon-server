@@ -1,0 +1,29 @@
+meta {
+  name: Delete Container
+  type: http
+  seq: 12
+}
+
+delete {
+  url: {{baseUrl}}/docker/containers/{{container_id}}?force={{force}}
+  body: none
+  auth: bearer
+}
+
+params:query {
+  force: false
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Delete a Docker container.
+  
+  Parameters:
+  - container_id: Docker container ID or name
+  - force: If true, force delete running container (default: false)
+
+  ⚠️ Warning: This will permanently delete the container and its volumes.
+}

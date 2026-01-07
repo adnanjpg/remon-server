@@ -576,6 +576,8 @@ mod tests {
                             id: -1,
                             frame_id: -1,
                             mem_id: mem1id.to_string(),
+                            total: 280,
+                            used: 200,
                             // usage: 200
                             available: 80,
                         },
@@ -583,6 +585,8 @@ mod tests {
                             id: -1,
                             frame_id: -1,
                             mem_id: mem2id.to_string(),
+                            total: 120,
+                            used: 10,
                             // usage: 10
                             available: 110,
                         },
@@ -596,6 +600,8 @@ mod tests {
                             id: -1,
                             frame_id: -1,
                             mem_id: mem1id.to_string(),
+                            total: 280,
+                            used: 60,
                             // usage: 60
                             available: 220,
                         },
@@ -603,6 +609,8 @@ mod tests {
                             id: -1,
                             frame_id: -1,
                             mem_id: mem2id.to_string(),
+                            total: 120,
+                            used: 90,
                             // usage: 90
                             available: 30,
                         },

@@ -33,3 +33,23 @@ format = "compact"
 [fcm]
 # Firebase Cloud Messaging settings
 credentials_path = "./.remon-mobile-fcm-creds.json"
+
+[docker]
+# Enable/disable Docker/Podman monitoring
+enabled = true
+# Container runtime socket path
+# Leave empty for default: unix:///var/run/docker.sock (Linux/Mac) or npipe:////./pipe/docker_engine (Windows)
+# 
+# Docker examples:
+#   Linux/Mac: socket_path = "" (uses default)
+#   Windows:   socket_path = "" (uses default npipe)
+#   TCP:       socket_path = "tcp://localhost:2375"
+#
+# Podman examples:
+#   Rootless: socket_path = "/run/user/1000/podman/podman.sock"
+#   Rootful:  socket_path = "/run/podman/podman.sock"
+#   macOS:    socket_path = "/var/run/docker.sock" (podman machine)
+#
+socket_path = ""
+# Stats collection interval in milliseconds
+check_interval_ms = 10000

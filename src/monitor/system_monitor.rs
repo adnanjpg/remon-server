@@ -5,10 +5,12 @@ use super::{
         get_disk_status::{DiskFrameStatus, DiskStatusData, SingleDiskInfo},
         get_hardware_info::{HardwareCpuInfo, HardwareDiskInfo, HardwareInfo, HardwareMemInfo},
         get_mem_status::{MemFrameStatus, MemStatusData, SingleMemInfo},
+        get_network_status::{NetworkFrameStatus, SingleNetworkInfo},
+        system_info::{LoadAverage, MemoryInfo, NetworkInfo, ProcessStats, SwapInfo, SystemInfo},
     },
     persistence::{
         insert_cpu_status_frame, insert_disk_status_frame, insert_hardware_info,
-        insert_mem_status_frame,
+        insert_mem_status_frame, insert_network_status_frame,
     },
 };
 
@@ -21,7 +23,10 @@ use std::{
     time::{Duration, Instant},
     vec,
 };
-use sysinfo::{Cpu, CpuRefreshKind, Disk, Disks, MemoryRefreshKind, RefreshKind, System};
+use sysinfo::{
+    Cpu, CpuRefreshKind, Disk, Disks, MemoryRefreshKind, Networks, ProcessRefreshKind,
+    ProcessStatus, ProcessesToUpdate, RefreshKind, System,
+};
 use tokio::time;
 
 // TODO(isaidsari): make it configurable
@@ -113,7 +118,7 @@ impl SystemMonitor {
 
                 // Refresh system information
                 system.refresh_specifics(
-                    RefreshKind::new()
+                    RefreshKind::nothing()
                         // TODO(isaidsari): check if we need to refresh all of them
                         .with_cpu(CpuRefreshKind::everything())
                         .with_memory(MemoryRefreshKind::everything()),
@@ -121,7 +126,8 @@ impl SystemMonitor {
 
                 // Refresh disks information, since with sysinfo v0.30 it's not refreshed with the System
                 // NOTE: if a disk is added or removed, this method won't take it into account
-                disks.refresh();
+                // Todo(): check this
+                disks.refresh(true);
 
                 // disks
                 let mut disk_usage: DiskFrameStatus = DiskFrameStatus {
@@ -228,8 +234,9 @@ impl SystemMonitor {
                         frame_id: -1,
                         // constant, as there's only one mem
                         mem_id: "1".to_string(),
-                        // sqlx doesn't support u64
-                        available: system.free_memory() as i64,
+                        total: system.total_memory() as i64,
+                        used: system.used_memory() as i64,
+                        available: system.available_memory() as i64,
                     }],
                 };
 
@@ -256,6 +263,29 @@ impl SystemMonitor {
                 }
                 if let Err(e) = insert_mem_status_frame(&mem_usage).await {
                     error!("failed to insert mem status: {}", e);
+                }
+
+                // Collect network stats
+                let mut networks = Networks::new_with_refreshed_list();
+                networks.refresh(true);
+                let network_frame = NetworkFrameStatus {
+                    id: -1,
+                    last_check: get_last_check(),
+                    interfaces: networks
+                        .iter()
+                        .map(|(name, data)| SingleNetworkInfo {
+                            id: -1,
+                            frame_id: -1,
+                            interface_name: name.to_string(),
+                            rx_bytes: data.total_received() as i64,
+                            tx_bytes: data.total_transmitted() as i64,
+                            rx_packets: data.total_packets_received() as i64,
+                            tx_packets: data.total_packets_transmitted() as i64,
+                        })
+                        .collect(),
+                };
+                if let Err(e) = insert_network_status_frame(&network_frame).await {
+                    error!("failed to insert network status: {}", e);
                 }
 
                 let cpu_status = &CpuStatusData {
@@ -312,5 +342,83 @@ pub async fn check_connectivity(url: &str) -> bool {
             error!("failed to ping the url: {}", e);
             false
         }
+    }
+}
+
+/// Get current system information (htop-like snapshot)
+pub fn get_system_info() -> SystemInfo {
+    // Create system with all needed data
+    let mut system = System::new();
+    system.refresh_specifics(
+        RefreshKind::nothing()
+            .with_memory(MemoryRefreshKind::everything())
+            .with_processes(ProcessRefreshKind::nothing()),
+    );
+    system.refresh_processes(ProcessesToUpdate::All, false);
+
+    // Networks - need to refresh and use total_* methods
+    let mut networks = Networks::new_with_refreshed_list();
+    networks.refresh(true);
+    let network_list: Vec<NetworkInfo> = networks
+        .iter()
+        .map(|(name, data)| NetworkInfo {
+            name: name.clone(),
+            rx_bytes: data.total_received() as i64,
+            tx_bytes: data.total_transmitted() as i64,
+            rx_packets: data.total_packets_received() as i64,
+            tx_packets: data.total_packets_transmitted() as i64,
+        })
+        .collect();
+
+    // Load average
+    let load_avg = System::load_average();
+    let load_average = LoadAverage {
+        one: load_avg.one,
+        five: load_avg.five,
+        fifteen: load_avg.fifteen,
+    };
+
+    // Memory
+    let memory = MemoryInfo {
+        total: system.total_memory() as i64,
+        used: system.used_memory() as i64,
+        free: system.free_memory() as i64,
+        available: system.available_memory() as i64,
+    };
+
+    // Swap
+    let swap = SwapInfo {
+        total: system.total_swap() as i64,
+        used: system.used_swap() as i64,
+        free: system.free_swap() as i64,
+    };
+
+    // Process stats
+    let mut process_stats = ProcessStats {
+        total: 0,
+        running: 0,
+        sleeping: 0,
+        stopped: 0,
+        zombie: 0,
+    };
+    for (_pid, process) in system.processes() {
+        process_stats.total += 1;
+        match process.status() {
+            ProcessStatus::Run => process_stats.running += 1,
+            ProcessStatus::Sleep => process_stats.sleeping += 1,
+            ProcessStatus::Stop => process_stats.stopped += 1,
+            ProcessStatus::Zombie => process_stats.zombie += 1,
+            _ => {} // Other states (Idle, etc.)
+        }
+    }
+
+    SystemInfo {
+        boot_time: System::boot_time() as i64,
+        uptime_seconds: System::uptime() as i64,
+        load_average,
+        memory,
+        swap,
+        networks: network_list,
+        process_stats,
     }
 }

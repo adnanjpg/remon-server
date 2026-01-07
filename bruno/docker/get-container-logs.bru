@@ -1,0 +1,33 @@
+meta {
+  name: Get Container Logs
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/docker/containers/{{container_id}}/logs
+  body: none
+  auth: bearer
+}
+
+params:query {
+  tail: 100
+  ~start_time: 
+  ~end_time: 
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Get logs from a Docker/Podman container with optional time filtering.
+  
+  Parameters:
+  - container_id: Container ID or name
+  - start_time: (optional) Start time as epoch ms
+  - end_time: (optional) End time as epoch ms
+  - tail: Number of lines from end (default: 100)
+  
+  Note: Timestamps are always included in log output.
+}

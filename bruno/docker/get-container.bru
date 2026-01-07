@@ -1,0 +1,33 @@
+meta {
+  name: Get Container
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/docker/containers/{{container_id}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Get full inspect details for a specific container.
+  
+  Parameters:
+  - container_id: Docker container ID or name
+  
+  Returns:
+  - Container info (ID, name, image, created_at)
+  - Container state (running, paused, exit_code, started_at, finished_at)
+  - Ports (host:container bindings)
+  - Volumes and mounts
+  - Environment variables
+  - Networks (IP, gateway, MAC)
+  - Restart policy
+  - Health check status
+  - Labels
+}

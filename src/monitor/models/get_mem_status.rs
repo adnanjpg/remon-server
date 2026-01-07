@@ -8,10 +8,11 @@ pub struct GetCpuStatusRequest {
     pub end_time: i64,
 }
 
+/// Request for Mem status - if no params, returns latest frame
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GetMemStatusRequest {
-    pub start_time: i64,
-    pub end_time: i64,
+    pub start_time: Option<i64>,
+    pub end_time: Option<i64>,
 }
 
 // we actually only fetch a single mem data, but we're cloning this into 2 structs for convenience, so it would be read the same as the cpu and disk
@@ -21,6 +22,11 @@ pub struct SingleMemInfo {
     pub frame_id: i64,
     // the id of the mem, currently we only have a single mem so this is going to be a constant
     pub mem_id: String,
+    /// Total memory in bytes
+    pub total: i64,
+    /// Used memory in bytes
+    pub used: i64,
+    /// Available memory in bytes (can be more than free due to caching)
     pub available: i64,
 }
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
@@ -127,12 +133,16 @@ mod tests {
                             id: -1,
                             mem_id: mem1id.to_string(),
                             frame_id: -1,
+                            total: 200,
+                            used: 170,
                             available: 30,
                         },
                         SingleMemInfo {
                             id: -1,
                             mem_id: mem3id.to_string(),
                             frame_id: -1,
+                            total: 70,
+                            used: 30,
                             available: 40,
                         },
                     ],
@@ -145,12 +155,16 @@ mod tests {
                             id: -1,
                             mem_id: mem1id.to_string(),
                             frame_id: -1,
+                            total: 200,
+                            used: 180,
                             available: 20,
                         },
                         SingleMemInfo {
                             id: -1,
                             mem_id: mem2id.to_string(),
                             frame_id: -1,
+                            total: 150,
+                            used: 85,
                             available: 65,
                         },
                     ],
@@ -163,12 +177,16 @@ mod tests {
                             id: -1,
                             mem_id: mem2id.to_string(),
                             frame_id: -1,
+                            total: 150,
+                            used: 60,
                             available: 90,
                         },
                         SingleMemInfo {
                             id: -1,
                             mem_id: mem3id.to_string(),
                             frame_id: -1,
+                            total: 70,
+                            used: 60,
                             available: 10,
                         },
                     ],

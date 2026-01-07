@@ -1,0 +1,30 @@
+meta {
+  name: Get CPU Status
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/get-cpu-status
+  body: none
+  auth: bearer
+}
+
+params:query {
+  ~start_time: 
+  ~end_time: 
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Get CPU usage statistics.
+  
+  Parameters (all optional):
+  - start_time: Unix timestamp in milliseconds
+  - end_time: Unix timestamp in milliseconds
+  
+  If no params provided, returns the latest frame.
+}

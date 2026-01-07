@@ -1,11 +1,11 @@
 meta {
-  name: Get Memory Status
+  name: Get Docker Stats
   type: http
   seq: 4
 }
 
 get {
-  url: {{baseUrl}}/get-mem-status?start_time={{start_time}}&end_time={{end_time}}
+  url: {{baseUrl}}/docker/stats?start_time={{start_time}}&end_time={{end_time}}
   body: none
   auth: bearer
 }
@@ -20,8 +20,8 @@ auth:bearer {
 }
 
 docs {
-  Get memory usage statistics between specified timestamps.
-  Returns memory usage frames with available memory information.
+  Get Docker container statistics between specified timestamps.
+  Returns stats frames with CPU, memory, and network I/O for each container.
 
   Parameters:
   - start_time: Unix timestamp in milliseconds

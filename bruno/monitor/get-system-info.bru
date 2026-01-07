@@ -1,0 +1,32 @@
+meta {
+  name: Get System Info
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/get-system-info
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Get current system information snapshot (htop-like).
+
+  Returns:
+  - boot_time: System boot time (UNIX timestamp)
+  - uptime_seconds: System uptime in seconds
+  - load_average: { one, five, fifteen } - 1/5/15 min averages
+  - memory: { total, used, free, available } in bytes
+  - swap: { total, used, free } in bytes
+  - networks: [ { name, rx_bytes, tx_bytes, rx_packets, tx_packets } ]
+  - process_stats: { total, running, sleeping, stopped, zombie }
+
+  Note:
+  - load_average returns 0 on Windows
+  - Network bytes are cumulative (calculate delta for rate)
+}

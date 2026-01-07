@@ -11,6 +11,7 @@ pub struct Config {
     pub grpc: GrpcConfig,
     pub logging: LoggingConfig,
     pub fcm: FcmConfig,
+    pub docker: DockerConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -52,6 +53,13 @@ pub struct LoggingConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct FcmConfig {
     pub credentials_path: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct DockerConfig {
+    pub enabled: bool,
+    pub socket_path: String,
+    pub check_interval_ms: u64,
 }
 
 impl Config {

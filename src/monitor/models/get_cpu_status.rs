@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+/// Request for CPU status - if no params, returns latest frame
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GetCpuStatusRequest {
-    pub start_time: i64,
-    pub end_time: i64,
+    pub start_time: Option<i64>,
+    pub end_time: Option<i64>,
 }
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
 pub struct CpuCoreInfo {
