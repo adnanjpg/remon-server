@@ -1,10 +1,12 @@
 pub mod get_cpu_status;
 pub mod get_disk_status;
 pub mod get_mem_status;
+pub mod get_network_status;
 
 pub mod get_hardware_info;
 
 pub mod docker;
+pub mod system_info;
 
 use serde::{Deserialize, Serialize};
 

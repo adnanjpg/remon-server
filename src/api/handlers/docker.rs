@@ -37,13 +37,36 @@ pub async fn get_docker_status(
     _claims: Claims,
 ) -> Result<Json<DockerStatusResponse>, (StatusCode, Json<ResponseBody>)> {
     let available = is_docker_available().await;
-    let version = if available {
-        get_docker_version().await.ok()
-    } else {
-        None
-    };
 
-    Ok(Json(DockerStatusResponse { available, version }))
+    if available {
+        match get_docker_version().await {
+            Ok(info) => Ok(Json(DockerStatusResponse {
+                available: true,
+                version: Some(info.version),
+                backend: Some(info.backend),
+                api_version: Some(info.api_version),
+                os: Some(info.os),
+                arch: Some(info.arch),
+            })),
+            Err(_) => Ok(Json(DockerStatusResponse {
+                available: true,
+                version: None,
+                backend: None,
+                api_version: None,
+                os: None,
+                arch: None,
+            })),
+        }
+    } else {
+        Ok(Json(DockerStatusResponse {
+            available: false,
+            version: None,
+            backend: None,
+            api_version: None,
+            os: None,
+            arch: None,
+        }))
+    }
 }
 
 /// GET /docker/containers - List all containers

@@ -5,7 +5,7 @@ meta {
 }
 
 get {
-  url: {{baseUrl}}/logs/get-app-ids?start_time={{start_time}}&end_time={{end_time}}
+  url: {{baseUrl}}/logs/get-app-ids?start_time=0&end_time=9999999999999
   body: none
   auth: bearer
 }
@@ -13,8 +13,6 @@ get {
 params:query {
   start_time: 0
   end_time: 9999999999999
-  ~start_time:
-  ~end_time:
 }
 
 auth:bearer {
@@ -23,7 +21,7 @@ auth:bearer {
 
 docs {
   Get list of application IDs that have logged entries.
-
+  
   Parameters (all optional):
   - start_time: Unix timestamp in milliseconds - filter logs from this time
   - end_time: Unix timestamp in milliseconds - filter logs until this time

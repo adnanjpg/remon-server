@@ -16,19 +16,35 @@ pub use self::hardware_info::{fetch_latest_hardware_info, insert_hardware_info};
 
 mod status_cpu;
 use self::status_cpu::{create_cpu_status_frame_cores_table, create_cpu_status_frames_table};
-pub use self::status_cpu::{get_cpu_status_between_dates, insert_cpu_status_frame};
+pub use self::status_cpu::{
+    get_cpu_status_between_dates, get_latest_cpu_status, insert_cpu_status_frame,
+};
 
 mod status_disk;
 use self::status_disk::{create_disk_status_frame_singles_table, create_disk_status_frames_table};
-pub use self::status_disk::{get_disk_status_between_dates, insert_disk_status_frame};
+pub use self::status_disk::{
+    get_disk_status_between_dates, get_latest_disk_status, insert_disk_status_frame,
+};
 
 mod status_mem;
 use self::status_mem::{create_mem_status_frame_singles_table, create_mem_status_frames_table};
-pub use self::status_mem::{get_mem_status_between_dates, insert_mem_status_frame};
+pub use self::status_mem::{
+    get_latest_mem_status, get_mem_status_between_dates, insert_mem_status_frame,
+};
+
+mod status_network;
+use self::status_network::{
+    create_network_status_frame_singles_table, create_network_status_frames_table,
+};
+pub use self::status_network::{
+    get_latest_network_status, get_network_status_between_dates, insert_network_status_frame,
+};
 
 mod docker_container;
 use self::docker_container::create_docker_containers_table;
-pub use self::docker_container::{fetch_all_containers, fetch_container_by_id, upsert_container_info};
+pub use self::docker_container::{
+    fetch_all_containers, fetch_container_by_id, upsert_container_info,
+};
 
 mod docker_stats;
 use self::docker_stats::{create_docker_stats_container_table, create_docker_stats_frames_table};
@@ -53,10 +69,12 @@ pub async fn init_db(conn: &SQLConnection) -> Result<(), sqlx::Error> {
     create_mem_status_frames_table(conn).await?;
     create_mem_status_frame_singles_table(conn).await?;
 
+    create_network_status_frames_table(conn).await?;
+    create_network_status_frame_singles_table(conn).await?;
+
     create_docker_containers_table(conn).await?;
     create_docker_stats_frames_table(conn).await?;
     create_docker_stats_container_table(conn).await?;
 
     Ok(())
 }
-

@@ -174,6 +174,14 @@ async fn main() {
             "/get-disk-status",
             get(api::handlers::monitor::get_disk_status),
         )
+        .route(
+            "/get-system-info",
+            get(api::handlers::monitor::get_system_info),
+        )
+        .route(
+            "/get-network-status",
+            get(api::handlers::monitor::get_network_status),
+        )
         .route("/get-processes", get(api::handlers::process::get_processes))
         .route("/kill-process", get(api::handlers::process::kill_process))
         .route("/update-info", post(api::handlers::monitor::update_info))

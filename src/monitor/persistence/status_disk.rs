@@ -104,6 +104,42 @@ pub async fn get_disk_status_between_dates(
     Ok(frames)
 }
 
+/// Get the latest disk status frame (most recent)
+pub async fn get_latest_disk_status() -> Result<Option<DiskFrameStatus>, sqlx::Error> {
+    let conn = get_default_sql_connection().await?;
+
+    let frame_statement = format!(
+        "SELECT id, last_check FROM {} ORDER BY last_check DESC LIMIT 1",
+        DISK_STATUS_FRAME_TABLE_NAME
+    );
+    let frame_query = sqlx::query_as::<_, (i64, i64)>(&frame_statement)
+        .fetch_optional(&conn)
+        .await?;
+
+    match frame_query {
+        Some(frame) => {
+            let id = frame.0;
+            let last_check = frame.1;
+
+            let singles_statement = format!(
+                "SELECT * FROM {} WHERE frame_id = ?",
+                DISK_STATUS_FRAME_SINGLE_TABLE_NAME
+            );
+            let singles_query = sqlx::query_as::<_, SingleDiskInfo>(&singles_statement)
+                .bind(id)
+                .fetch_all(&conn)
+                .await?;
+
+            Ok(Some(DiskFrameStatus {
+                id,
+                last_check,
+                disks_usage: singles_query,
+            }))
+        }
+        None => Ok(None),
+    }
+}
+
 pub(super) async fn create_disk_status_frames_table(
     conn: &SQLConnection,
 ) -> Result<(), sqlx::Error> {

@@ -5,14 +5,14 @@ meta {
 }
 
 get {
-  url: {{baseUrl}}/get-disk-status?start_time={{start_time}}&end_time={{end_time}}
+  url: {{baseUrl}}/get-disk-status
   body: none
   auth: bearer
 }
 
 params:query {
-  start_time: 0
-  end_time: 9999999999999
+  ~start_time: 
+  ~end_time: 
 }
 
 auth:bearer {
@@ -20,10 +20,11 @@ auth:bearer {
 }
 
 docs {
-  Get disk usage statistics between specified timestamps.
-  Returns disk usage frames with available space per disk.
-
-  Parameters:
+  Get disk usage statistics.
+  
+  Parameters (all optional):
   - start_time: Unix timestamp in milliseconds
   - end_time: Unix timestamp in milliseconds
+  
+  If no params provided, returns the latest frame.
 }

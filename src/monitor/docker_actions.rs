@@ -86,11 +86,48 @@ pub async fn is_docker_available() -> bool {
     }
 }
 
+/// Docker version info with backend detection
+pub struct DockerVersionInfo {
+    pub version: String,
+    pub api_version: String,
+    pub os: String,
+    pub arch: String,
+    pub backend: String,
+}
+
 /// Get Docker version info
-pub async fn get_docker_version() -> Result<String, DockerActionError> {
+pub async fn get_docker_version() -> Result<DockerVersionInfo, DockerActionError> {
     let docker = get_docker_client().await?;
     let version = docker.version().await?;
-    Ok(version.version.unwrap_or_else(|| "unknown".to_string()))
+
+    let version_str = version.version.unwrap_or_else(|| "unknown".to_string());
+    let api_version = version.api_version.unwrap_or_else(|| "unknown".to_string());
+    let os = version.os.unwrap_or_else(|| "unknown".to_string());
+    let arch = version.arch.unwrap_or_else(|| "unknown".to_string());
+
+    // Detect backend: Podman usually has "podman" in api_version or os_type
+    let backend = if api_version.to_lowercase().contains("podman")
+        || version
+            .components
+            .as_ref()
+            .map(|c| {
+                c.iter()
+                    .any(|comp| comp.name.to_lowercase().contains("podman"))
+            })
+            .unwrap_or(false)
+    {
+        "podman".to_string()
+    } else {
+        "docker".to_string()
+    };
+
+    Ok(DockerVersionInfo {
+        version: version_str,
+        api_version,
+        os,
+        arch,
+        backend,
+    })
 }
 
 /// Start a container

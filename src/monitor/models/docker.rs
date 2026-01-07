@@ -122,6 +122,14 @@ pub struct DockerActionResponse {
 pub struct DockerStatusResponse {
     pub available: bool,
     pub version: Option<String>,
+    /// Container runtime backend: "docker" or "podman"
+    pub backend: Option<String>,
+    /// API version
+    pub api_version: Option<String>,
+    /// Host operating system
+    pub os: Option<String>,
+    /// Host architecture
+    pub arch: Option<String>,
 }
 
 // ============ New models for extended Docker features ============

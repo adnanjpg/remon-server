@@ -16,7 +16,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - CPU, memory (usage/limit/percent), network I/O, block I/O, pids
 - **Block I/O Metrics**: Added `block_read_bytes`, `block_write_bytes`, `pids` to container stats
 - **Podman Support**: Works with Podman via socket path configuration
-- **Bruno Collection**: Added `get-container-stats.bru`, `stream-container-logs.bru`
+- **Docker Status Enhancement**: Added `backend` (docker/podman), `api_version`, `os`, `arch`
+- **System Info Endpoint**: New `GET /get-system-info` for htop-like monitoring
+  - boot_time, uptime, load_average (1/5/15 min)
+  - Memory details (total, used, free, available)
+  - Swap usage (total, used, free)
+  - Network I/O per interface
+  - Process stats (total, running, sleeping, stopped, zombie)
+- **Network Historical**: New `GET /get-network-status` for network I/O history
+  - Per-interface rx/tx bytes and packets (cumulative)
+  - Optional time range filtering
+- **Memory Details**: Added `total` and `used` to `GET /get-mem-status`
+- **Optional Time Params**: CPU/Mem/Disk/Network status endpoints now return latest frame if no params
+- **Bruno Collection**: Added `get-container-stats.bru`, `stream-container-logs.bru`, `get-system-info.bru`, `get-network-status.bru`
 
 ### Changed
 
