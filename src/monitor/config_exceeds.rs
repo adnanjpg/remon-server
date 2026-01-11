@@ -80,9 +80,14 @@ pub(super) async fn check_thresholds(
     }
 }
 
-// TODO(adnanjpg): make it configurable
+/// Get the interval between sending threshold exceeded notifications.
+/// Reads from config, falls back to 300 seconds (5 minutes) if config unavailable.
 fn get_send_notification_interval() -> Duration {
-    Duration::try_seconds(60 * 5).expect("failed to create duration")
+    match crate::config::Config::new() {
+        Ok(config) => Duration::try_seconds(config.monitoring.notification_interval_seconds as i64)
+            .expect("failed to create duration"),
+        Err(_) => Duration::try_seconds(300).expect("failed to create duration"),
+    }
 }
 
 async fn should_send_notification_to_exceeding_device(config: &MonitorConfig) -> bool {
@@ -157,8 +162,10 @@ async fn send_notification_to_exceeding_device(
     }
 
     let result = exceeding_msgs.join(", ");
-    // TODO(adnanjpg): include server ip
-    let body = format!("the thresholds exceeded for: {}", result);
+    let hostname = hostname::get()
+        .map(|h| h.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    let body = format!("[{}] Thresholds exceeded: {}", hostname, result);
 
     let message = NotificationMessage {
         title: title.to_string(),

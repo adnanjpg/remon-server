@@ -42,9 +42,7 @@ pub use self::status_network::{
 
 mod docker_container;
 use self::docker_container::create_docker_containers_table;
-pub use self::docker_container::{
-    fetch_all_containers, fetch_container_by_id, upsert_container_info,
-};
+pub use self::docker_container::{fetch_all_containers, upsert_container_info};
 
 mod docker_stats;
 use self::docker_stats::{create_docker_stats_container_table, create_docker_stats_frames_table};

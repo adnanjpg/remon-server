@@ -40,8 +40,9 @@ impl NotificationServiceImpl for NotificationService {
             request.title, request.body
         );
 
-        // TODO(@isaidsari): this part is not complete
-        // it needs to think more about it
+        // NOTE: Currently sends notification to the last registered device only.
+        // Future improvement: implement device targeting via request.target_device_id
+        // or broadcast to all registered devices.
         let configs = fetch_monitor_configs().await.unwrap_or_else(|e| {
             error!("failed to fetch monitor configs: {}", e);
             vec![]
@@ -115,7 +116,8 @@ impl NotificationServiceImpl for NotificationService {
         let app_log = AppLog {
             id: -1,
             log_level: LogLevel::from_string(&log.level),
-            app_id: "gRPC".to_string(), // TODO(isaidsari):
+            // Derive app_id from target (e.g., "myapp::module" -> "myapp")
+            app_id: log.target.split("::").next().unwrap_or("gRPC").to_string(),
             logged_at: chrono::Utc::now().timestamp(),
             message: log.message,
             target: log.target,

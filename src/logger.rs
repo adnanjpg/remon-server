@@ -91,13 +91,13 @@ impl LogService {
             let target = record.target().bright_green();
             let msg = record.args();
 
-            // TODO(@isaidsari): AppLog instertion level should be configurable
-            const APP_LOG_THRESHOLD: log::Level = log::Level::Warn;
-            if record.level() <= APP_LOG_THRESHOLD {
+            // Log insertion level is configurable via config.monitoring.log_insertion_level
+            let app_log_threshold = get_log_insertion_level();
+            if record.level() <= app_log_threshold {
                 let app_log = AppLog {
                     id: -1,
                     log_level: LogLevel::from_string(record.level().as_str()),
-                    app_id: DEF_APP_NAME.to_owned(),
+                    app_id: get_app_name(),
                     logged_at: dt.timestamp(),
                     message: msg.to_string(),
                     target: record.target().to_owned(),
@@ -138,5 +138,30 @@ impl LogService {
     }
 }
 
-// TODO(adnanjpg): make this configurable
-const DEF_APP_NAME: &str = "remon";
+/// Get the app name from config, falls back to "remon" if unavailable.
+fn get_app_name() -> String {
+    match crate::config::Config::new() {
+        Ok(config) => config.monitoring.app_name,
+        Err(_) => "remon".to_string(),
+    }
+}
+
+/// Get the log insertion level from config, falls back to Warn if unavailable.
+fn get_log_insertion_level() -> log::Level {
+    match crate::config::Config::new() {
+        Ok(config) => match config
+            .monitoring
+            .log_insertion_level
+            .to_lowercase()
+            .as_str()
+        {
+            "error" => log::Level::Error,
+            "warn" => log::Level::Warn,
+            "info" => log::Level::Info,
+            "debug" => log::Level::Debug,
+            "trace" => log::Level::Trace,
+            _ => log::Level::Warn,
+        },
+        Err(_) => log::Level::Warn,
+    }
+}

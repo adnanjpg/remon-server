@@ -19,6 +19,12 @@ jwt_secret = "d3f4ult"
 # System monitoring intervals and thresholds
 update_interval_ms = 5000
 enable_notifications = true
+# Minimum interval between sending threshold exceeded notifications (in seconds)
+notification_interval_seconds = 300
+# Minimum log level to persist to database: "error", "warn", "info", "debug", "trace"
+log_insertion_level = "warn"
+# Application name used in logs
+app_name = "remon"
 
 [grpc]
 # gRPC server settings

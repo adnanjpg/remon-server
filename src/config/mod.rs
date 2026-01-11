@@ -36,6 +36,12 @@ pub struct AuthConfig {
 pub struct MonitoringConfig {
     pub update_interval_ms: u64,
     pub enable_notifications: bool,
+    /// Minimum interval between sending threshold exceeded notifications (in seconds)
+    pub notification_interval_seconds: u64,
+    /// Minimum log level to persist to database: "error", "warn", "info", "debug", "trace"
+    pub log_insertion_level: String,
+    /// Application name used in logs
+    pub app_name: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]

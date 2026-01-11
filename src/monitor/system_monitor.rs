@@ -29,9 +29,13 @@ use sysinfo::{
 };
 use tokio::time;
 
-// TODO(isaidsari): make it configurable
+/// Get the system monitoring check interval from config.
+/// Falls back to 5000ms if config cannot be loaded.
 pub fn get_check_interval() -> Duration {
-    Duration::from_millis(5000)
+    match crate::config::Config::new() {
+        Ok(config) => Duration::from_millis(config.monitoring.update_interval_ms),
+        Err(_) => Duration::from_millis(5000),
+    }
 }
 
 pub struct SystemMonitor {
@@ -119,7 +123,8 @@ impl SystemMonitor {
                 // Refresh system information
                 system.refresh_specifics(
                     RefreshKind::nothing()
-                        // TODO(isaidsari): check if we need to refresh all of them
+                        // NOTE: We refresh CPU and memory only for performance.
+                        // Process/disk refresh is handled separately.
                         .with_cpu(CpuRefreshKind::everything())
                         .with_memory(MemoryRefreshKind::everything()),
                 );
@@ -141,14 +146,13 @@ impl SystemMonitor {
                     let disk_name = match disk.name().to_os_string().into_string() {
                         Ok(name) => {
                             if name.is_empty() {
-                                // if the name is empty, it's probably a local disk
-                                // TODO(isaidsari): add C: etc
-                                "Local Disk".to_string()
+                                // Use mount point as fallback name (e.g., "C:\" on Windows)
+                                disk.mount_point().to_string_lossy().to_string()
                             } else {
                                 name
                             }
                         }
-                        Err(_) => "".to_string(),
+                        Err(_) => disk.mount_point().to_string_lossy().to_string(),
                     };
 
                     disk_usage.disks_usage.push(SingleDiskInfo {
@@ -301,7 +305,7 @@ impl SystemMonitor {
                 // TODO(adnanjpg): run on a different thread with a different interval
                 check_thresholds(cpu_status, mem_status, &mem_info, disk_status, &disks_info).await;
 
-                // TODO
+                // Check internet connectivity
                 match check_connectivity("").await {
                     true => debug!("connection is up"),
                     false => error!("connection is down"),
@@ -319,9 +323,11 @@ impl SystemMonitor {
         });
     }
 
-    // TODO(isaidsari): graceful shutdown
+    /// Stop the monitoring loop gracefully.
+    /// This signals the monitoring thread to exit after completing its current iteration.
     #[allow(dead_code)]
     pub fn stop_monitoring(&self) {
+        log::info!("Stopping system monitor...");
         *self.should_exit.lock().unwrap() = true;
     }
 }
