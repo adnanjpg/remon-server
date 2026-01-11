@@ -41,6 +41,10 @@ pub struct MemoryInfo {
     pub free: i64,
     /// Available memory in bytes (can be more than free due to caching)
     pub available: i64,
+    /// Cached memory in bytes (file system cache)
+    pub cached: i64,
+    /// Buffered memory in bytes (kernel buffers)
+    pub buffers: i64,
 }
 
 /// Swap usage information

@@ -21,7 +21,10 @@ docs {
   - boot_time: System boot time (UNIX timestamp)
   - uptime_seconds: System uptime in seconds
   - load_average: { one, five, fifteen } - 1/5/15 min averages
-  - memory: { total, used, free, available } in bytes
+  - memory: { total, used, free, available, cached, buffers } in bytes
+  - swap: { total, used, free } in bytes
+  - networks: [ { name, rx_bytes, tx_bytes, rx_packets, tx_packets } ]
+  - process_stats: { total, running, sleeping, stopped, zombie }
   - swap: { total, used, free } in bytes
   - networks: [ { name, rx_bytes, tx_bytes, rx_packets, tx_packets } ]
   - process_stats: { total, running, sleeping, stopped, zombie }

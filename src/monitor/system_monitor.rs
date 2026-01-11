@@ -345,6 +345,58 @@ pub async fn check_connectivity(url: &str) -> bool {
     }
 }
 
+/// Parse /proc/meminfo to get cached memory (Linux only)
+#[cfg(target_os = "linux")]
+fn get_memory_cached() -> i64 {
+    parse_proc_meminfo("Cached:")
+}
+
+/// Parse /proc/meminfo to get buffered memory (Linux only)
+#[cfg(target_os = "linux")]
+fn get_memory_buffers() -> i64 {
+    parse_proc_meminfo("Buffers:")
+}
+
+/// Parse a specific field from /proc/meminfo (Linux only)
+#[cfg(target_os = "linux")]
+fn parse_proc_meminfo(field: &str) -> i64 {
+    use std::fs;
+
+    match fs::read_to_string("/proc/meminfo") {
+        Ok(content) => {
+            for line in content.lines() {
+                if line.starts_with(field) {
+                    // Format: "Cached:         12345678 kB"
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        if let Ok(kb) = parts[1].parse::<i64>() {
+                            // Convert from KB to bytes
+                            return kb * 1024;
+                        }
+                    }
+                }
+            }
+            0
+        }
+        Err(e) => {
+            error!("Failed to read /proc/meminfo: {}", e);
+            0
+        }
+    }
+}
+
+/// Windows doesn't expose cached/buffers the same way
+#[cfg(not(target_os = "linux"))]
+fn get_memory_cached() -> i64 {
+    0
+}
+
+/// Windows doesn't expose cached/buffers the same way
+#[cfg(not(target_os = "linux"))]
+fn get_memory_buffers() -> i64 {
+    0
+}
+
 /// Get current system information (htop-like snapshot)
 pub fn get_system_info() -> SystemInfo {
     // Create system with all needed data
@@ -384,6 +436,8 @@ pub fn get_system_info() -> SystemInfo {
         used: system.used_memory() as i64,
         free: system.free_memory() as i64,
         available: system.available_memory() as i64,
+        cached: get_memory_cached(),
+        buffers: get_memory_buffers(),
     };
 
     // Swap

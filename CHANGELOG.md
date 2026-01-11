@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [0.2.3] - 2026-01-11
+
+### Added
+
+- **Memory Cached/Buffers**: Enhanced memory monitoring with detailed cache information
+  - Added `cached` field to memory info (file system cache)
+  - Added `buffers` field to memory info (kernel buffers)
+  - Linux: Parse `/proc/meminfo` for accurate cached/buffers values
+  - Windows: Return 0 for cached/buffers (not available via sysinfo)
+  - Automatic inclusion in `GET /get-system-info` endpoint response
+
 ## [0.2.2] - 2026-01-07
 
 ### Added
