@@ -217,7 +217,6 @@ pub struct ImageInfo {
     pub repo_digests: Vec<String>,
     pub created: i64,
     pub size: i64,
-    pub virtual_size: Option<i64>,
     pub labels: std::collections::HashMap<String, String>,
 }
 

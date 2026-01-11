@@ -852,7 +852,6 @@ pub async fn get_images() -> Result<Vec<ImageInfo>, DockerActionError> {
             repo_digests: img.repo_digests.clone(),
             created: img.created,
             size: img.size,
-            virtual_size: img.virtual_size,
             labels: img.labels.clone(),
         })
         .collect())
