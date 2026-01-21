@@ -356,20 +356,21 @@ pub async fn get_container_logs(
 /// Stream container logs (for SSE)
 /// Returns a stream of log lines
 pub async fn stream_container_logs(
-    container_id: &str,
+    container_id: String,
     tail: Option<usize>,
-) -> Result<impl futures_util::Stream<Item = Result<String, DockerActionError>>, DockerActionError>
-{
+) -> Result<
+    impl futures_util::Stream<Item = Result<String, DockerActionError>>,
+    DockerActionError,
+> {
     let docker = get_docker_client().await?;
 
-    // Check if container exists
     docker
-        .inspect_container(container_id, Some(InspectContainerOptions::default()))
+        .inspect_container(&container_id, Some(InspectContainerOptions::default()))
         .await
         .map_err(|e| match e {
             bollard::errors::Error::DockerResponseServerError {
                 status_code: 404, ..
-            } => DockerActionError::ContainerNotFound(container_id.to_string()),
+            } => DockerActionError::ContainerNotFound(container_id.clone()),
             _ => DockerActionError::ApiError(e),
         })?;
 
@@ -378,17 +379,15 @@ pub async fn stream_container_logs(
         .unwrap_or_else(|| "50".to_string());
 
     let options = LogsOptionsBuilder::new()
-        .follow(true) // Stream logs
+        .follow(true)
         .stdout(true)
         .stderr(true)
         .timestamps(true)
         .tail(&tail_str)
         .build();
 
-    let container_id_owned = container_id.to_string();
-    let logs_stream = docker.logs(&container_id_owned, Some(options));
+    let logs_stream = docker.logs(&container_id, Some(options));
 
-    // Map the stream to return log lines
     let mapped_stream = logs_stream.map(move |result| match result {
         Ok(log_output) => Ok(log_output.to_string()),
         Err(e) => {

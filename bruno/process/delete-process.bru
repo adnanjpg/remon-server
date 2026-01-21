@@ -4,15 +4,13 @@ meta {
   seq: 2
 }
 
-get {
-  url: {{baseUrl}}/kill-process?pid={{pid}}
+delete {
+  url: {{baseUrl}}/processes/{{pid}}
   body: none
   auth: bearer
 }
 
-params:query {
-  pid: 1234
-}
+
 
 auth:bearer {
   token: {{jwt_token}}

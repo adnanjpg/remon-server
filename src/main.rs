@@ -1,13 +1,9 @@
-use axum::{
-    middleware,
-    routing::{delete, get, post},
-    Router,
-};
+use axum::Router;
 use log::{error, info};
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
-use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tower_http::LatencyUnit;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
 mod api;
@@ -15,6 +11,7 @@ mod config;
 mod logger;
 mod notification_service;
 pub mod persistence;
+mod routes;
 
 mod auth;
 mod grpc;
@@ -146,134 +143,28 @@ async fn main() {
         }
     }
 
-    // Build the Axum router
-    // Public routes (no authentication)
-    let public_routes = Router::new()
-        .route("/hello", get(api::handlers::misc::hello))
-        .route("/teapot", get(api::handlers::misc::teapot))
-        .route("/healthcheck", get(api::handlers::misc::healthcheck))
-        .route("/get-otp-qr", post(api::handlers::auth::get_otp_qr))
-        .route("/login", post(api::handlers::auth::login));
-
-    // Protected routes (require authentication)
-    let protected_routes = Router::new()
-        .route("/get-desc", get(api::handlers::monitor::get_desc))
-        .route(
-            "/get-hardware-info",
-            get(api::handlers::monitor::get_hardware_info),
-        )
-        .route(
-            "/get-cpu-status",
-            get(api::handlers::monitor::get_cpu_status),
-        )
-        .route(
-            "/get-mem-status",
-            get(api::handlers::monitor::get_mem_status),
-        )
-        .route(
-            "/get-disk-status",
-            get(api::handlers::monitor::get_disk_status),
-        )
-        .route(
-            "/get-system-info",
-            get(api::handlers::monitor::get_system_info),
-        )
-        .route(
-            "/get-network-status",
-            get(api::handlers::monitor::get_network_status),
-        )
-        .route("/get-processes", get(api::handlers::process::get_processes))
-        .route("/kill-process", get(api::handlers::process::kill_process))
-        .route("/update-info", post(api::handlers::monitor::update_info))
-        .route(
-            "/validate-token-test",
-            get(api::handlers::monitor::validate_token_test),
-        )
-        .route(
-            "/logs/get-app-ids",
-            get(api::handlers::logs::get_app_ids_handler),
-        )
-        .route(
-            "/logs/get-app-logs",
-            get(api::handlers::logs::get_app_logs_handler),
-        )
-        // Docker routes
-        .route(
-            "/docker/status",
-            get(api::handlers::docker::get_docker_status),
-        )
-        .route(
-            "/docker/containers",
-            get(api::handlers::docker::list_containers),
-        )
-        .route(
-            "/docker/containers/prune",
-            post(api::handlers::docker::prune_containers),
-        )
-        .route(
-            "/docker/containers/{id}",
-            get(api::handlers::docker::inspect_container)
-                .delete(api::handlers::docker::delete_container),
-        )
-        .route("/docker/stats", get(api::handlers::docker::get_stats))
-        .route(
-            "/docker/containers/{id}/stats",
-            get(api::handlers::docker::get_container_stats),
-        )
-        .route(
-            "/docker/containers/{id}/start",
-            post(api::handlers::docker::start_container),
-        )
-        .route(
-            "/docker/containers/{id}/stop",
-            post(api::handlers::docker::stop_container),
-        )
-        .route(
-            "/docker/containers/{id}/restart",
-            post(api::handlers::docker::restart_container),
-        )
-        .route(
-            "/docker/containers/{id}/pause",
-            post(api::handlers::docker::pause_container),
-        )
-        .route(
-            "/docker/containers/{id}/unpause",
-            post(api::handlers::docker::unpause_container),
-        )
-        .route(
-            "/docker/containers/{id}/logs",
-            get(api::handlers::docker::get_logs),
-        )
-        .route(
-            "/docker/containers/{id}/logs/stream",
-            get(api::handlers::docker::stream_logs),
-        )
-        // Image routes
-        .route("/docker/images", get(api::handlers::docker::list_images))
-        .route(
-            "/docker/images/prune",
-            post(api::handlers::docker::prune_images),
-        )
-        .route(
-            "/docker/images/{id}",
-            delete(api::handlers::docker::delete_image),
-        )
-        .layer(middleware::from_fn(api::middleware::auth_middleware));
-
-    // Merge routes with HTTP request/response logging
-    let app = public_routes.merge(protected_routes).layer(
-        TraceLayer::new_for_http()
-            .make_span_with(
-                DefaultMakeSpan::new()
-                    .level(Level::INFO)
-                    .include_headers(true),
-            )
-            .on_response(
-                DefaultOnResponse::new()
-                    .level(Level::INFO)
-                    .latency_unit(LatencyUnit::Millis),
-            ),
-    );
+    // Build the Axum router using modular route registration
+    let app = Router::new()
+        // REST API routes (both public and protected)
+        .merge(routes::rest::create_routes())
+        // SSE routes (Server-Sent Events)
+        .nest("/sse", routes::sse::create_routes())
+        // WebSocket routes
+        .nest("/ws", routes::ws::create_routes())
+        // HTTP request/response logging
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(
+                    DefaultMakeSpan::new()
+                        .level(Level::INFO)
+                        .include_headers(true),
+                )
+                .on_response(
+                    DefaultOnResponse::new()
+                        .level(Level::INFO)
+                        .latency_unit(LatencyUnit::Millis),
+                ),
+        );
 
     if cfg!(debug_assertions) {
         // In debug mode, run two servers

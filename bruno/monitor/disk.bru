@@ -1,11 +1,11 @@
 meta {
-  name: Get CPU Status
+  name: Get Disk Status
   type: http
-  seq: 3
+  seq: 5
 }
 
 get {
-  url: {{baseUrl}}/get-cpu-status
+  url: {{baseUrl}}/monitor/disk
   body: none
   auth: bearer
 }
@@ -20,7 +20,7 @@ auth:bearer {
 }
 
 docs {
-  Get CPU usage statistics.
+  Get disk usage statistics.
   
   Parameters (all optional):
   - start_time: Unix timestamp in milliseconds

@@ -1,18 +1,18 @@
 [package]
 name = "remon-server"
-version = "0.2.3"
-edition = "2021"
+version = "0.3.0"
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 base32 = "0.5.0"
 base64 = "0.22.1"
-chrono = "0.4.38"
+chrono = "0.4.43"
 config = "0.15.19"
 fast_qr = "0.13.1"
-axum = "0.8.8"
-tower = "0.5.2"
+axum = { version = "0.8.8", features = ["ws"] }
+tower = "0.5.3"
 tower-http = { version = "0.6.8", features = ["trace", "compression-gzip"] }
 jsonwebtoken = { version = "10.2.0", features = ["rust_crypto"]}
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
@@ -20,13 +20,13 @@ ring = "0.17.14"
 serde = { version = "1.0.202", features = ["derive"] }
 serde_derive = "1.0.228"
 serde_json = "1.0.149"
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio"] }
 sysinfo = "0.37.2"
 totp-rs = "5.5.1"
 env_logger = "0.11.3"
 log = "0.4.21"
-local-ip-address = "0.6.1"
+local-ip-address = "0.6.9"
 blake3 = "1.5.1"
 maplit = "1.0.2"
 fcm = { git = "https://github.com/rj76/fcm-rust.git" , rev = "cd7323ce" }

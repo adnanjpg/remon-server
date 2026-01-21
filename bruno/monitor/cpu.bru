@@ -1,11 +1,11 @@
 meta {
-  name: Get Memory Status
+  name: Get CPU Status
   type: http
-  seq: 4
+  seq: 3
 }
 
 get {
-  url: {{baseUrl}}/get-mem-status
+  url: {{baseUrl}}/monitor/cpu
   body: none
   auth: bearer
 }
@@ -20,7 +20,7 @@ auth:bearer {
 }
 
 docs {
-  Get memory usage statistics.
+  Get CPU usage statistics.
   
   Parameters (all optional):
   - start_time: Unix timestamp in milliseconds

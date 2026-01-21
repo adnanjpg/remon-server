@@ -1,11 +1,11 @@
 meta {
-  name: Get Disk Status
+  name: Get Memory Status
   type: http
-  seq: 5
+  seq: 4
 }
 
 get {
-  url: {{baseUrl}}/get-disk-status
+  url: {{baseUrl}}/monitor/memory
   body: none
   auth: bearer
 }
@@ -20,7 +20,7 @@ auth:bearer {
 }
 
 docs {
-  Get disk usage statistics.
+  Get memory usage statistics.
   
   Parameters (all optional):
   - start_time: Unix timestamp in milliseconds

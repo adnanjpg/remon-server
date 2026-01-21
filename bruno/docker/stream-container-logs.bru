@@ -5,7 +5,7 @@ meta {
 }
 
 get {
-  url: {{baseUrl}}/docker/containers/{{container_id}}/logs/stream
+  url: {{baseUrl}}/sse/docker/containers/{{container_id}}/logs/stream
   body: none
   auth: bearer
 }
