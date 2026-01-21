@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [0.3.0] - 2026-01-22
+
+### Added
+
+- **WebSocket Docker Exec**: Interactive container execution via WebSocket
+  - New endpoint: `WS /ws/docker/containers/{id}/exec`
+  - Bidirectional real-time communication between client and container
+  - Support for custom commands, PTY allocation, and stdin/stdout/stderr streams
+  - Graceful error handling and disconnect management
+
+### Changed
+
+- **API Restructuring**: Complete reorganization into protocol-based architecture
+  - Modular route system: `routes/rest/`, `routes/sse/`, `routes/ws/`
+  - Removed monolithic `api/handlers/` directory
+  - Reduced `main.rs` from 309 to 202 lines (-35%)
+- **Endpoint Standardization**: RESTful naming and HTTP method corrections
+  - Monitor: `/get-cpu-status` → `/monitor/cpu` (and 7 more endpoints)
+  - Process: `GET /kill-process?pid=X` → `DELETE /processes/{pid}`
+  - Auth: `/get-otp-qr` → `/auth/otp/qr`, `/login` → `/auth/login`
+  - Logs: `/logs/get-app-ids` → `/logs/apps`, `/logs/get-app-logs` → `/logs`
+  - Misc: `/healthcheck` → `/health`
+  - All endpoints now follow resource-based, pluralized naming conventions
+- **SSE Separation**: Server-Sent Events endpoints moved to dedicated namespace
+  - `/docker/containers/{id}/logs/stream` → `/sse/docker/containers/{id}/logs/stream`
+- **Bruno Collection**: Updated all request files
+  - URLs updated to new RESTful endpoints
+  - File names updated to match endpoint structure
+  - Changed `kill-process` from GET to DELETE method
+
+### Removed
+
+- **Deprecated Endpoints**: Removed all old-style verb-based/rpc-like endpoints
+- **Old Handler Module**: Removed `src/api/handlers/` directory
+
 ## [0.2.3] - 2026-01-11
 
 ### Added
