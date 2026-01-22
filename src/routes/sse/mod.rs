@@ -11,5 +11,5 @@ pub fn create_routes() -> Router {
             "/docker/containers/{id}/logs/stream",
             get(docker::stream_logs),
         )
-        .layer(middleware::from_fn(crate::api::middleware::auth_middleware))
+        .layer(middleware::from_fn(crate::routes::middleware::auth_middleware))
 }

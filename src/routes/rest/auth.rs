@@ -1,18 +1,6 @@
 use axum::{http::StatusCode, Json};
-use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ResponseBody {
-    Success(bool),
-    Error(String),
-    Token(String),
-}
-
-#[derive(Deserialize)]
-pub struct GetOtpQrRequest {
-    pub device_id: String,
-}
+use crate::routes::dtos::{auth::GetOtpQrRequest, common::ResponseBody};
 
 pub async fn get_otp_qr(
     Json(payload): Json<GetOtpQrRequest>,

@@ -71,7 +71,7 @@ pub fn create_routes() -> Router {
         .route("/docker/images", get(docker::list_images))
         .route("/docker/images/prune", post(docker::prune_images))
         .route("/docker/images/{id}", delete(docker::delete_image))
-        .layer(middleware::from_fn(crate::api::middleware::auth_middleware));
+        .layer(middleware::from_fn(crate::routes::middleware::auth_middleware));
 
     public_routes.merge(protected_routes)
 }

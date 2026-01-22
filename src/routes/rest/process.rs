@@ -1,23 +1,13 @@
 use axum::{Json, extract::Path, http::StatusCode};
 use log::debug;
-use serde::{Deserialize, Serialize};
 
 use crate::{
-    api::extractors::Claims,
-    monitor::{get_process_list, models::ProcessInfo},
+    monitor::get_process_list,
+    routes::{
+        dtos::{common::ResponseBody, process::GetProcessesResponse},
+        extractors::Claims,
+    },
 };
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ResponseBody {
-    Success(bool),
-    Error(String),
-}
-
-#[derive(Serialize)]
-pub struct GetProcessesResponse {
-    pub processes: Vec<ProcessInfo>,
-}
 
 pub async fn get_processes(_claims: Claims) -> Json<GetProcessesResponse> {
     let start = std::time::Instant::now();

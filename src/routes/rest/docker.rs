@@ -5,10 +5,8 @@ use axum::{
 };
 use chrono::Utc;
 use log::error;
-use serde::{Deserialize, Serialize};
 
 use crate::{
-    api::extractors::Claims,
     monitor::{
         docker_actions::{self, get_docker_version, is_docker_available, DockerActionError},
         docker_monitor::get_container_state_from_summary,
@@ -20,14 +18,8 @@ use crate::{
         },
         persistence::{fetch_all_containers, get_docker_stats_between_dates},
     },
+    routes::{dtos::common::ResponseBody, extractors::Claims},
 };
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ResponseBody {
-    Success(bool),
-    Error(String),
-}
 
 /// GET /docker/status - Check if Docker is available
 pub async fn get_docker_status(

@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 
 use crate::{
-    api::extractors::Claims,
     monitor::docker_actions::{self, is_docker_available, DockerActionError},
+    routes::extractors::Claims,
 };
 
 #[derive(Serialize, Deserialize)]

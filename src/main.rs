@@ -6,7 +6,6 @@ use tower_http::LatencyUnit;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
-mod api;
 mod config;
 mod logger;
 mod notification_service;

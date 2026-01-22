@@ -8,5 +8,5 @@ pub fn create_routes() -> Router {
     Router::new()
         // Docker container exec via WebSocket
         .route("/docker/containers/{id}/exec", get(docker::docker_exec))
-        .layer(middleware::from_fn(crate::api::middleware::auth_middleware))
+        .layer(middleware::from_fn(crate::routes::middleware::auth_middleware))
 }

@@ -14,7 +14,7 @@ use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 
-use crate::api::extractors::Claims;
+use crate::routes::extractors::Claims;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ExecParams {

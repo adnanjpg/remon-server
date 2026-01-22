@@ -5,7 +5,7 @@ use axum::{
     response::Response,
 };
 
-use crate::api::extractors::Claims;
+use crate::routes::extractors::Claims;
 
 pub async fn auth_middleware(mut req: Request, next: Next) -> Result<Response, StatusCode> {
     let auth_header = req

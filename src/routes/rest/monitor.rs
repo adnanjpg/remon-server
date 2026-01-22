@@ -1,15 +1,12 @@
 use axum::{extract::Query, http::StatusCode, Json};
 use log::debug;
-use serde::{Deserialize, Serialize};
 
 use crate::{
-    api::extractors::Claims,
     monitor::{
         models::{
-            get_cpu_status::{CpuFrameStatus, GetCpuStatusRequest},
-            get_disk_status::DiskFrameStatus,
-            get_mem_status::{GetMemStatusRequest, MemFrameStatus},
-            get_network_status::{GetNetworkStatusRequest, NetworkFrameStatus},
+            get_cpu_status::GetCpuStatusRequest,
+            get_mem_status::GetMemStatusRequest,
+            get_network_status::GetNetworkStatusRequest,
             system_info::SystemInfo,
             MonitorConfig, UpdateInfoRequest,
         },
@@ -21,35 +18,17 @@ use crate::{
         },
         system_monitor,
     },
+    routes::{
+        dtos::{
+            common::ResponseBody,
+            monitor::{
+                GetCpuStatusResponse, GetDiskStatusResponse, GetMemStatusResponse,
+                GetNetworkStatusResponse,
+            },
+        },
+        extractors::Claims,
+    },
 };
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ResponseBody {
-    Success(bool),
-    Error(String),
-}
-
-// Response types
-#[derive(Serialize)]
-pub struct GetCpuStatusResponse {
-    pub frames: Vec<CpuFrameStatus>,
-}
-
-#[derive(Serialize)]
-pub struct GetMemStatusResponse {
-    pub frames: Vec<MemFrameStatus>,
-}
-
-#[derive(Serialize)]
-pub struct GetDiskStatusResponse {
-    pub frames: Vec<DiskFrameStatus>,
-}
-
-#[derive(Serialize)]
-pub struct GetNetworkStatusResponse {
-    pub frames: Vec<NetworkFrameStatus>,
-}
 
 // Handlers
 pub async fn get_desc() -> Result<Json<serde_json::Value>, StatusCode> {
