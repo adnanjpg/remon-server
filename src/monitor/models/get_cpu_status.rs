@@ -15,7 +15,7 @@ pub struct CpuCoreInfo {
     pub freq: i64,
     pub usage: i64,
 }
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct CpuFrameStatus {
     pub id: i64,
     pub last_check: i64,
@@ -42,7 +42,7 @@ impl CpuFrameStatusTrait for CpuFrameStatus {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct CpuStatusData {
     pub frames: Vec<CpuFrameStatus>,
 }

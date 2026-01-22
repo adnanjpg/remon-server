@@ -31,7 +31,7 @@ impl SingleDiskInfoUsage for SingleDiskInfo {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct DiskFrameStatus {
     pub id: i64,
     pub last_check: i64,
@@ -109,7 +109,7 @@ impl DiskStatusDataTrait for DiskStatusData {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct DiskStatusData {
     // usage for each frame, the size
     // of the frame is defined in the config

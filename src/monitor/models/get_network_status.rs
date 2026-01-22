@@ -8,7 +8,7 @@ pub struct GetNetworkStatusRequest {
 }
 
 /// Single network interface info
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct SingleNetworkInfo {
     pub id: i64,
     pub frame_id: i64,
@@ -25,7 +25,7 @@ pub struct SingleNetworkInfo {
 }
 
 /// Network status frame
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct NetworkFrameStatus {
     pub id: i64,
     pub last_check: i64,
@@ -33,7 +33,7 @@ pub struct NetworkFrameStatus {
 }
 
 /// Network status data (multiple frames)
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct NetworkStatusData {
     pub frames: Vec<NetworkFrameStatus>,
 }

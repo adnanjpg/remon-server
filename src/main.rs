@@ -11,6 +11,7 @@ mod logger;
 mod notification_service;
 pub mod persistence;
 mod routes;
+mod state;
 
 mod auth;
 mod grpc;
@@ -49,9 +50,27 @@ fn get_socket_addr(config: &config::Config) -> Option<SocketAddr> {
 }
 
 async fn shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("failed to install CTRL+C signal handler");
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => info!("Received Ctrl+C, shutting down..."),
+        _ = terminate => info!("Received SIGTERM, shutting down..."),
+    }
 }
 
 #[cfg(test)]
@@ -126,6 +145,19 @@ async fn main() {
         }
     };
 
+    // Get database pool for AppState
+    let db_pool = match crate::persistence::get_sql_connection().await {
+        Ok(pool) => pool,
+        Err(e) => {
+            error!("Failed to get database connection: {:?}", e);
+            return;
+        }
+    };
+
+    // Initialize AppState with database pool and broadcast channels
+    let state = state::AppState::new(db_pool);
+    info!("AppState initialized with broadcast channels");
+
     match monitor::init().await {
         Ok(_) => {}
         Err(_) => {
@@ -150,6 +182,8 @@ async fn main() {
         .nest("/sse", routes::sse::create_routes())
         // WebSocket routes
         .nest("/ws", routes::ws::create_routes())
+        // Compression layer (gzip for JSON/text responses)
+        .layer(tower_http::compression::CompressionLayer::new())
         // HTTP request/response logging
         .layer(
             TraceLayer::new_for_http()
@@ -163,35 +197,27 @@ async fn main() {
                         .level(Level::INFO)
                         .latency_unit(LatencyUnit::Millis),
                 ),
-        );
+        )
+        // Inject AppState into all routes
+        .with_state((state));
 
-    if cfg!(debug_assertions) {
-        // In debug mode, run two servers
-        let debug_socket_addr = SocketAddr::from(([127, 0, 0, 1], config.server.port));
-
-        info!("Listening on http://{}", socket_addr);
-        info!("Listening on http://{}", debug_socket_addr);
-
-        let listener_main = TcpListener::bind(socket_addr).await.unwrap();
-        let listener_debug = TcpListener::bind(debug_socket_addr).await.unwrap();
-
-        let app_main = app.clone();
-        let app_debug = app;
-
-        tokio::select! {
-            _ = axum::serve(listener_main, app_main).with_graceful_shutdown(shutdown_signal()) => {},
-            _ = axum::serve(listener_debug, app_debug).with_graceful_shutdown(shutdown_signal()) => {},
-        }
+    // Determine bind address
+    let bind_addr = if cfg!(debug_assertions) {
+        // Debug: bind to 0.0.0.0 (accessible from both localhost and network)
+        SocketAddr::from(([0, 0, 0, 0], config.server.port))
     } else {
-        info!("Listening on http://{}", socket_addr);
+        // Production: bind to specific IP or 0.0.0.0
+        socket_addr
+    };
 
-        let listener = TcpListener::bind(socket_addr).await.unwrap();
+    info!("Listening on http://{}", bind_addr);
 
-        if let Err(e) = axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
-            .await
-        {
-            error!("server error: {}", e);
-        }
+    let listener = TcpListener::bind(bind_addr).await.unwrap();
+
+    if let Err(e) = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+    {
+        error!("server error: {}", e);
     }
 }

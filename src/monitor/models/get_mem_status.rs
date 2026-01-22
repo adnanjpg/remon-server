@@ -29,7 +29,7 @@ pub struct SingleMemInfo {
     /// Available memory in bytes (can be more than free due to caching)
     pub available: i64,
 }
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct MemFrameStatus {
     pub id: i64,
     pub last_check: i64,
@@ -107,7 +107,7 @@ impl MemStatusDataTrait for MemStatusData {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
 pub struct MemStatusData {
     pub frames: Vec<MemFrameStatus>,
 }
