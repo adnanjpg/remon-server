@@ -33,6 +33,7 @@ fcm = { git = "https://github.com/rj76/fcm-rust.git" , rev = "cd7323ce" }
 strum = "0.27.2"
 strum_macros = "0.27.2"
 tokio = { version = "1.49.0", features = ["full"] }
+tokio-stream = { version = "0.1.18", features = ["sync"] }
 tonic = "0.11.0"
 tonic-reflection = "0.11.0"
 prost = "0.12.6"
@@ -41,7 +42,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 bollard = "0.20.0"
 futures-util = "0.3"
-tokio-stream = "0.1"
 hostname = "0.4.2"
 
 [build-dependencies]

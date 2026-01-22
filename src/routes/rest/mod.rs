@@ -5,14 +5,17 @@ pub mod misc;
 pub mod monitor;
 pub mod process;
 
+use crate::state::AppState;
+
 use axum::{
     Router, middleware,
     routing::{delete, get, post},
 };
+use std::sync::Arc;
 
 /// Creates and returns the REST API routes
 /// This includes both public (no auth) and protected (auth required) routes
-pub fn create_routes() -> Router {
+pub fn create_routes() -> Router<Arc<AppState>> {
     let public_routes = Router::new()
         .route("/hello", get(misc::hello))
         .route("/teapot", get(misc::teapot))
@@ -71,7 +74,9 @@ pub fn create_routes() -> Router {
         .route("/docker/images", get(docker::list_images))
         .route("/docker/images/prune", post(docker::prune_images))
         .route("/docker/images/{id}", delete(docker::delete_image))
-        .layer(middleware::from_fn(crate::routes::middleware::auth_middleware));
+        .layer(middleware::from_fn(
+            crate::routes::middleware::auth_middleware,
+        ));
 
     public_routes.merge(protected_routes)
 }

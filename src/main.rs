@@ -1,6 +1,7 @@
 use axum::Router;
 use log::{error, info};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::LatencyUnit;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
@@ -155,10 +156,10 @@ async fn main() {
     };
 
     // Initialize AppState with database pool and broadcast channels
-    let state = state::AppState::new(db_pool);
+    let state = Arc::new(state::AppState::new(db_pool));
     info!("AppState initialized with broadcast channels");
 
-    match monitor::init().await {
+    match monitor::init(state.clone()).await {
         Ok(_) => {}
         Err(_) => {
             error!("Failed to initialize monitor.");
@@ -182,6 +183,8 @@ async fn main() {
         .nest("/sse", routes::sse::create_routes())
         // WebSocket routes
         .nest("/ws", routes::ws::create_routes())
+        // Inject AppState into all routes
+        .with_state(state)
         // Compression layer (gzip for JSON/text responses)
         .layer(tower_http::compression::CompressionLayer::new())
         // HTTP request/response logging
@@ -197,9 +200,7 @@ async fn main() {
                         .level(Level::INFO)
                         .latency_unit(LatencyUnit::Millis),
                 ),
-        )
-        // Inject AppState into all routes
-        .with_state((state));
+        );
 
     // Determine bind address
     let bind_addr = if cfg!(debug_assertions) {

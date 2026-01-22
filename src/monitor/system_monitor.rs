@@ -41,6 +41,7 @@ pub fn get_check_interval() -> Duration {
 pub struct SystemMonitor {
     should_exit: Arc<Mutex<bool>>,
     check_interval: Duration,
+    state: Arc<crate::state::AppState>,
 }
 
 trait CpuId {
@@ -92,11 +93,12 @@ impl DiskId for Disk {
 }
 
 impl SystemMonitor {
-    pub fn new() -> Self {
+    pub fn new(state: Arc<crate::state::AppState>) -> Self {
         let should_exit = Arc::new(Mutex::new(false));
         Self {
             should_exit,
             check_interval: get_check_interval(),
+            state,
         }
     }
 
@@ -106,6 +108,7 @@ impl SystemMonitor {
         }
 
         let should_exit_clone = Arc::clone(&self.should_exit);
+        let state_clone = Arc::clone(&self.state);
         // rust doesn't allow us to move self into the closure, so we have to clone it
         let check_interval = self.check_interval;
 
@@ -291,6 +294,24 @@ impl SystemMonitor {
                 if let Err(e) = insert_network_status_frame(&network_frame).await {
                     error!("failed to insert network status: {}", e);
                 }
+
+                // Broadcast metrics to SSE subscribers
+                let cpu_data = CpuStatusData {
+                    frames: vec![cpu_usage.clone()],
+                };
+                let mem_data = MemStatusData {
+                    frames: vec![mem_usage.clone()],
+                };
+                let disk_data = DiskStatusData {
+                    frames: vec![disk_usage.clone()],
+                };
+                let network_data = crate::monitor::models::get_network_status::NetworkStatusData {
+                    frames: vec![network_frame.clone()],
+                };
+                let _ = state_clone.cpu_stats_tx.send(cpu_data);
+                let _ = state_clone.mem_stats_tx.send(mem_data);
+                let _ = state_clone.disk_stats_tx.send(disk_data);
+                let _ = state_clone.network_stats_tx.send(network_data);
 
                 let cpu_status = &CpuStatusData {
                     frames: vec![cpu_usage],

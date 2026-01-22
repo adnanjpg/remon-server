@@ -1,6 +1,8 @@
 use log::{debug, error, info};
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 use sysinfo::{CpuRefreshKind, Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+
+use crate::state::AppState;
 
 use self::models::{ProcessInfo, ServerDescription};
 
@@ -11,9 +13,9 @@ pub mod models;
 pub mod persistence;
 pub mod system_monitor;
 
-pub async fn init() -> Result<(), Box<dyn Error>> {
+pub async fn init(state: Arc<AppState>) -> Result<(), Box<dyn Error>> {
     // Start system monitor
-    let monitor = system_monitor::SystemMonitor::new();
+    let monitor = system_monitor::SystemMonitor::new(state);
     monitor.start_monitoring().await;
 
     // Start Docker monitor (will gracefully skip if Docker is not available)
