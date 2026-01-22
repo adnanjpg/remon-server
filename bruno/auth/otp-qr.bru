@@ -1,7 +1,7 @@
 meta {
-  name: Get OTP QR
+  name: Get OTP QR (Legacy)
   type: http
-  seq: 1
+  seq: 11
 }
 
 post {
@@ -17,6 +17,12 @@ body:json {
 }
 
 docs {
-  Generate a QR code for TOTP authentication setup.
-  The QR code will be printed in the server console.
+  [DEPRECATED] Generate a QR code for TOTP authentication setup.
+  
+  Use the new pairing flow instead:
+  1. POST /auth/pair/initiate
+  2. POST /auth/pair/complete
+  3. POST /auth/login
+  
+  This endpoint is kept for backward compatibility.
 }

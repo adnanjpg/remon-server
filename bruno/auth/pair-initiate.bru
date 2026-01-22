@@ -1,0 +1,25 @@
+meta {
+  name: Pair Initiate
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/pair/initiate
+  body: none
+  auth: none
+}
+
+docs {
+  Start device pairing process.
+  
+  A 6-digit pairing code will be displayed in the SERVER TERMINAL (not in API response).
+  This is a security feature - you need physical access to see the code.
+  
+  Response: { "message": "Pairing code displayed in server terminal", "expires_at": 1234567890 }
+  
+  Steps:
+  1. Call this endpoint
+  2. Look at the server terminal for the 6-digit code
+  3. Use this code in "Pair Complete" request within 5 minutes
+}

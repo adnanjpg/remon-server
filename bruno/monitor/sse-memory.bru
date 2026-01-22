@@ -1,0 +1,24 @@
+meta {
+  name: Stream Memory Stats (SSE)
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/sse/monitor/memory
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Real-time memory stats via Server-Sent Events.
+  
+  ```bash
+  curl -N -H "Authorization: Bearer $JWT_TOKEN" \
+    "http://localhost:8080/sse/monitor/memory"
+  ```
+}

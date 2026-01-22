@@ -1,0 +1,30 @@
+meta {
+  name: Stream Container Logs (SSE)
+  type: http
+  seq: 20
+}
+
+get {
+  url: {{baseUrl}}/sse/docker/containers/:id/logs/stream
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+params:path {
+  id: container-id-here
+}
+
+docs {
+  Stream container logs in real-time using Server-Sent Events (SSE).
+  
+  Note: Bruno doesn't fully support SSE. Use curl for testing:
+  
+  ```bash
+  curl -N -H "Authorization: Bearer $JWT_TOKEN" \
+    "http://localhost:8080/sse/docker/containers/CONTAINER_ID/logs/stream"
+  ```
+}

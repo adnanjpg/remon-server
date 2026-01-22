@@ -1,0 +1,26 @@
+meta {
+  name: Stream CPU Stats (SSE)
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/sse/monitor/cpu
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Real-time CPU stats via Server-Sent Events.
+  
+  Streams CPU usage data as it's collected from the system.
+  
+  ```bash
+  curl -N -H "Authorization: Bearer $JWT_TOKEN" \
+    "http://localhost:8080/sse/monitor/cpu"
+  ```
+}

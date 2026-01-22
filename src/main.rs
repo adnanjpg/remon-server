@@ -155,8 +155,8 @@ async fn main() {
         }
     };
 
-    // Initialize AppState with database pool and broadcast channels
-    let state = Arc::new(state::AppState::new(db_pool));
+    // Initialize AppState with database pool, auth config, and broadcast channels
+    let state = Arc::new(state::AppState::new(db_pool, config.auth.clone()));
     info!("AppState initialized with broadcast channels");
 
     match monitor::init(state.clone()).await {
@@ -215,9 +215,12 @@ async fn main() {
 
     let listener = TcpListener::bind(bind_addr).await.unwrap();
 
-    if let Err(e) = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
+    if let Err(e) = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
     {
         error!("server error: {}", e);
     }

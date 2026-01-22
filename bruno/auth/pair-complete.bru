@@ -1,0 +1,39 @@
+meta {
+  name: Pair Complete
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/auth/pair/complete
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "pairing_code": "{{pairing_code}}",
+    "device_name": "{{device_name}}"
+  }
+}
+
+script:post-response {
+  const body = res.getBody();
+  if (body && body.device_id && body.device_token) {
+    bru.setEnvVar("device_id", body.device_id);
+    bru.setEnvVar("device_token", body.device_token);
+  }
+}
+
+docs {
+  Complete device pairing with the code from server terminal.
+  
+  Request:
+  - pairing_code: 6-digit code displayed on server terminal
+  - device_name: Human-readable name for this device
+  
+  Response: { "device_id": "uuid", "device_token": "64-char-hex" }
+  
+  IMPORTANT: Save device_id and device_token securely!
+  These credentials will be used for all future logins.
+}

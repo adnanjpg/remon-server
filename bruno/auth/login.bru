@@ -1,7 +1,7 @@
 meta {
   name: Login
   type: http
-  seq: 2
+  seq: 3
 }
 
 post {
@@ -13,23 +13,29 @@ post {
 body:json {
   {
     "device_id": "{{device_id}}",
-    "otp": "123456"
+    "device_token": "{{device_token}}"
   }
 }
 
 script:post-response {
   const body = res.getBody();
-  if (body && body.token) {
-    bru.setEnvVar("jwt_token", body.token);
+  if (body && body.access_token) {
+    bru.setEnvVar("jwt_token", body.access_token);
+    bru.setEnvVar("refresh_token", body.refresh_token);
   }
 }
 
 docs {
-  Login with device ID and TOTP code.
-  Returns a JWT token that will be automatically saved to environment.
-
-  Steps:
-  1. First call "Get OTP QR" to generate QR code
-  2. Scan QR code with authenticator app (Google Authenticator, Authy, etc.)
-  3. Use the 6-digit code from authenticator app as OTP
+  Login with device credentials obtained from pairing.
+  
+  Request:
+  - device_id: UUID from pair complete response
+  - device_token: 64-char hex token from pair complete response
+  
+  Response:
+  - access_token: Short-lived JWT for API requests (1 hour)
+  - refresh_token: Long-lived JWT for token refresh (30 days)
+  - expires_in: Access token TTL in seconds
+  
+  The access_token is automatically saved as jwt_token for other requests.
 }

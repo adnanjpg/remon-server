@@ -3,6 +3,7 @@ pub mod docker;
 pub mod logs;
 pub mod misc;
 pub mod monitor;
+pub mod pairing;
 pub mod process;
 
 use crate::state::AppState;
@@ -20,8 +21,14 @@ pub fn create_routes() -> Router<Arc<AppState>> {
         .route("/hello", get(misc::hello))
         .route("/teapot", get(misc::teapot))
         .route("/health", get(misc::healthcheck))
+        // New auth endpoints (pairing flow)
+        .route("/auth/pair/initiate", post(pairing::initiate_pairing))
+        .route("/auth/pair/complete", post(pairing::complete_pairing))
+        .route("/auth/login", post(auth::login))
+        .route("/auth/refresh", post(auth::refresh))
+        // Legacy OTP endpoints (deprecated but functional)
         .route("/auth/otp/qr", post(auth::get_otp_qr))
-        .route("/auth/login", post(auth::login));
+        .route("/auth/login/otp", post(auth::login_otp));
 
     let protected_routes = Router::new()
         // Monitor

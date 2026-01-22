@@ -30,6 +30,27 @@ pub struct DatabaseConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct AuthConfig {
     pub jwt_secret: String,
+    /// Access token TTL in seconds (default: 3600 = 1 hour)
+    #[serde(default = "default_access_token_ttl")]
+    pub access_token_ttl_secs: u64,
+    /// Refresh token TTL in seconds (default: 2592000 = 30 days)
+    #[serde(default = "default_refresh_token_ttl")]
+    pub refresh_token_ttl_secs: u64,
+    /// Pairing code TTL in seconds (default: 300 = 5 minutes)
+    #[serde(default = "default_pairing_code_ttl")]
+    pub pairing_code_ttl_secs: u64,
+}
+
+fn default_access_token_ttl() -> u64 {
+    3600 // 1 hour
+}
+
+fn default_refresh_token_ttl() -> u64 {
+    2592000 // 30 days
+}
+
+fn default_pairing_code_ttl() -> u64 {
+    300 // 5 minutes
 }
 
 #[derive(Debug, Deserialize, Clone)]

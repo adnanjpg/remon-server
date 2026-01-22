@@ -1,0 +1,34 @@
+meta {
+  name: Refresh Token
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/auth/refresh
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "refresh_token": "{{refresh_token}}"
+  }
+}
+
+script:post-response {
+  const body = res.getBody();
+  if (body && body.access_token) {
+    bru.setEnvVar("jwt_token", body.access_token);
+    bru.setEnvVar("refresh_token", body.refresh_token);
+  }
+}
+
+docs {
+  Refresh access token using the refresh token.
+  
+  Use this when access_token expires (after ~1 hour).
+  The refresh_token is valid for 30 days.
+  
+  Response: New access_token and refresh_token pair.
+}

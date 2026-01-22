@@ -1,0 +1,36 @@
+meta {
+  name: Login (OTP - Legacy)
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{baseUrl}}/auth/login/otp
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "device_id": "{{device_id}}",
+    "otp": "123456"
+  }
+}
+
+script:post-response {
+  const body = res.getBody();
+  if (body && body.token) {
+    bru.setEnvVar("jwt_token", body.token);
+  }
+}
+
+docs {
+  [DEPRECATED] Legacy OTP-based login.
+  
+  Use the new pairing flow instead:
+  1. POST /auth/pair/initiate
+  2. POST /auth/pair/complete
+  3. POST /auth/login
+  
+  This endpoint is kept for backward compatibility.
+}

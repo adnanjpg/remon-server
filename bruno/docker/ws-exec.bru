@@ -1,0 +1,30 @@
+meta {
+  name: Docker Exec (WebSocket)
+  type: http
+  seq: 21
+}
+
+get {
+  url: {{baseUrl}}/ws/docker/containers/:id/exec
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+params:path {
+  id: container-id-here
+}
+
+docs {
+  Interactive container shell via WebSocket.
+  
+  Note: Bruno doesn't support WebSocket. Use wscat:
+  
+  ```bash
+  wscat -c "ws://localhost:8080/ws/docker/containers/CONTAINER_ID/exec" \
+    -H "Authorization: Bearer $JWT_TOKEN"
+  ```
+}

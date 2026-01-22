@@ -6,6 +6,8 @@ use crate::config::Config;
 use crate::logs::persistence::app_logs::create_app_logs_table;
 use crate::logs::persistence::create_notification_logs_table;
 
+pub mod devices;
+
 #[derive(Debug, sqlx::FromRow)]
 pub struct FetchId {
     pub id: i64,
@@ -57,6 +59,9 @@ pub async fn init_db() -> Result<(), sqlx::Error> {
 
     create_notification_logs_table(&conn).await?;
     create_app_logs_table(&conn).await?;
+
+    // Initialize device tables
+    devices::init_db(&conn).await?;
 
     Ok(())
 }

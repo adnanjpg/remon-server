@@ -1,5 +1,7 @@
 use sqlx::SqlitePool;
-use tokio::sync::broadcast;
+use tokio::sync::{RwLock, broadcast};
+
+use crate::config::AuthConfig;
 
 // Re-export monitor types for broadcast
 pub use crate::monitor::models::get_cpu_status::CpuStatusData;
@@ -7,12 +9,25 @@ pub use crate::monitor::models::get_disk_status::DiskStatusData;
 pub use crate::monitor::models::get_mem_status::MemStatusData;
 pub use crate::monitor::models::get_network_status::NetworkStatusData;
 
+/// Active pairing code state
+#[derive(Debug, Clone)]
+pub struct PairingState {
+    pub code: String,
+    pub expires_at: i64,
+}
+
 /// Shared application state
 /// Contains database connection and broadcast channels for real-time data distribution
 
 pub struct AppState {
     /// Database connection pool
     pub db: SqlitePool,
+
+    /// Auth configuration
+    pub auth_config: AuthConfig,
+
+    /// Active pairing state (if any)
+    pub pairing_state: RwLock<Option<PairingState>>,
 
     /// Broadcast channels for real-time system metrics
     /// Collectors publish to these, SSE endpoints subscribe
@@ -28,7 +43,7 @@ impl AppState {
     /// Channel buffer sizes:
     /// - CPU/Memory/Disk: 64 (system metrics update ~1/sec)
     /// - Network: 64 (network stats update ~1/sec)
-    pub fn new(db: SqlitePool) -> Self {
+    pub fn new(db: SqlitePool, auth_config: AuthConfig) -> Self {
         let (cpu_stats_tx, _) = broadcast::channel(64);
         let (mem_stats_tx, _) = broadcast::channel(64);
         let (disk_stats_tx, _) = broadcast::channel(64);
@@ -36,6 +51,8 @@ impl AppState {
 
         Self {
             db,
+            auth_config,
+            pairing_state: RwLock::new(None),
             cpu_stats_tx,
             mem_stats_tx,
             disk_stats_tx,

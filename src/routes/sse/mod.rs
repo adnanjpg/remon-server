@@ -10,6 +10,11 @@ use std::sync::Arc;
 /// All SSE routes require authentication
 pub fn create_routes() -> Router<Arc<AppState>> {
     Router::new()
+        // System metrics streaming
+        .route("/monitor/cpu", get(system::stream_cpu_stats))
+        .route("/monitor/memory", get(system::stream_memory_stats))
+        .route("/monitor/disk", get(system::stream_disk_stats))
+        .route("/monitor/network", get(system::stream_network_stats))
         // Docker log streaming
         .route(
             "/docker/containers/{id}/logs/stream",
