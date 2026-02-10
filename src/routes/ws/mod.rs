@@ -12,6 +12,6 @@ pub fn create_routes() -> Router<Arc<AppState>> {
         // Docker container exec via WebSocket
         .route("/docker/containers/{id}/exec", get(docker::docker_exec))
         .layer(middleware::from_fn(
-            crate::routes::middleware::auth_middleware,
+            crate::middleware::auth_middleware,
         ))
 }

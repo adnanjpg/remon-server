@@ -8,16 +8,17 @@ use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
 mod config;
-mod logger;
-mod notification_service;
-pub mod persistence;
 mod routes;
 mod state;
 
 mod auth;
-mod grpc;
-mod logs;
-mod monitor;
+
+mod collectors;
+mod error;
+mod middleware;
+mod models;
+mod services;
+mod storage;
 
 use local_ip_address::local_ip;
 use std::convert::TryInto;
@@ -122,7 +123,7 @@ async fn main() {
         _ => log::LevelFilter::Info,
     };
 
-    logger::LogService::new().set_level(log_filter).build();
+    services::logging::LogService::new().set_level(log_filter).build();
 
     // Validate JWT secret strength at startup
     if let Err(e) = auth::token::validate() {
@@ -138,42 +139,30 @@ async fn main() {
         }
     };
 
-    match crate::persistence::init_db().await {
-        Ok(val) => val,
+    // Initialize storage layer
+    let db_url = format!("sqlite:{}", config.database.path);
+    let db = match storage::Database::connect(&db_url).await {
+        Ok(db) => db,
         Err(e) => {
-            error!("Database initialization failed: {:?}", e);
+            error!("Database connection failed: {:?}", e);
             return;
         }
     };
 
-    // Get database pool for AppState
-    let db_pool = match crate::persistence::get_sql_connection().await {
-        Ok(pool) => pool,
-        Err(e) => {
-            error!("Failed to get database connection: {:?}", e);
-            return;
-        }
-    };
+    // Run migrations
+    if let Err(e) = db.migrate().await {
+        error!("Database migration failed: {:?}", e);
+        return;
+    }
+    info!("Database initialized successfully");
 
     // Initialize AppState with database pool, auth config, and broadcast channels
-    let state = Arc::new(state::AppState::new(db_pool, config.auth.clone()));
+    let state = Arc::new(state::AppState::new(db.pool().clone(), config.auth.clone()));
     info!("AppState initialized with broadcast channels");
 
-    match monitor::init(state.clone()).await {
-        Ok(_) => {}
-        Err(_) => {
-            error!("Failed to initialize monitor.");
-            return;
-        }
-    }
-
-    match grpc::grpc_service::init().await {
-        Ok(_) => {}
-        Err(_) => {
-            error!("Failed to initialize gRPC.");
-            return;
-        }
-    }
+    // Start background collectors
+    collectors::spawn_all(state.clone());
+    info!("Background collectors spawned");
 
     // Build the Axum router using modular route registration
     let app = Router::new()

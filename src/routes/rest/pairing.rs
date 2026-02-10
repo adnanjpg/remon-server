@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::auth::service::AuthService;
-use crate::persistence::devices::{self, StoredDevice};
+use crate::models::auth::StoredDevice;
 use crate::state::{AppState, PairingState};
+use crate::storage::repositories::DeviceRepository;
 
 /// Pairing initiate response (code is shown in terminal only, NOT in API response)
 #[derive(Debug, Clone, Serialize)]
@@ -142,7 +143,9 @@ pub async fn complete_pairing(
     };
 
     // Save device to database
-    devices::create_device(&state.db, &device)
+    let device_repo = DeviceRepository::new(state.db.clone());
+    device_repo
+        .create(&device)
         .await
         .map_err(|e| {
             (

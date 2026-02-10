@@ -11,9 +11,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::auth::service::AuthService;
-use crate::persistence::devices;
 use crate::routes::dtos::{auth::GetOtpQrRequest, common::ResponseBody};
 use crate::state::AppState;
+use crate::storage::repositories::DeviceRepository;
 
 // ==================== New Token-Based Auth ====================
 
@@ -52,7 +52,9 @@ pub async fn login(
     Json(req): Json<DeviceLoginRequest>,
 ) -> Result<Json<TokenResponse>, (StatusCode, Json<AuthErrorResponse>)> {
     // Get device from database
-    let device = devices::get_device_by_id(&state.db, &req.device_id)
+    let device_repo = DeviceRepository::new(state.db.clone());
+    let device = device_repo
+        .get_by_id(&req.device_id)
         .await
         .map_err(|e| {
             (
@@ -93,7 +95,7 @@ pub async fn login(
 
     // Update last seen
     let client_ip = addr.ip().to_string();
-    let _ = devices::update_last_seen(&state.db, &req.device_id, Some(&client_ip)).await;
+    let _ = device_repo.update_last_seen(&req.device_id, Some(&client_ip)).await;
 
     // Create JWT tokens
     let auth_service = AuthService::new(state.auth_config.clone());
@@ -136,7 +138,9 @@ pub async fn refresh(
         })?;
 
     // Verify device still exists and is active
-    let device = devices::get_device_by_id(&state.db, &claims.sub)
+    let device_repo = DeviceRepository::new(state.db.clone());
+    let device = device_repo
+        .get_by_id(&claims.sub)
         .await
         .map_err(|e| {
             (

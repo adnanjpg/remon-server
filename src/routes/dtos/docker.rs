@@ -1,2 +1,3 @@
-// Docker-specific DTOs are located in crate::monitor::models::docker
-// This module is reserved for future REST-specific Docker DTOs if needed
+// REST-specific Docker DTOs
+// Docker service types (bollard) are used directly in route handlers.
+// Add any request/response wrapper types here as needed.

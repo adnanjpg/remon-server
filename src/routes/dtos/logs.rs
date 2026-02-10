@@ -1,5 +1,14 @@
-use crate::logs::persistence::AppLog;
 use serde::{Deserialize, Serialize};
+
+#[derive(Serialize)]
+pub struct AppLog {
+    pub id: i32,
+    pub log_level: String,
+    pub app_id: String,
+    pub logged_at: i64,
+    pub message: String,
+    pub target: String,
+}
 
 #[derive(Serialize)]
 pub struct GetAppIdsResponse {

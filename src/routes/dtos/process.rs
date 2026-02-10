@@ -1,4 +1,4 @@
-use crate::monitor::models::ProcessInfo;
+use crate::models::process::ProcessInfo;
 use serde::Serialize;
 
 #[derive(Serialize)]

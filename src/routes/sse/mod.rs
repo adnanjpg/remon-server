@@ -1,5 +1,5 @@
 pub mod docker;
-pub mod system;
+pub mod stats;
 
 use crate::state::AppState;
 
@@ -10,17 +10,18 @@ use std::sync::Arc;
 /// All SSE routes require authentication
 pub fn create_routes() -> Router<Arc<AppState>> {
     Router::new()
-        // System metrics streaming
-        .route("/monitor/cpu", get(system::stream_cpu_stats))
-        .route("/monitor/memory", get(system::stream_memory_stats))
-        .route("/monitor/disk", get(system::stream_disk_stats))
-        .route("/monitor/network", get(system::stream_network_stats))
+        // Unified stats stream
+        .route("/stats", get(stats::stream_stats))
+        .route("/stats/cpu", get(stats::stream_cpu_stats))
+        .route("/stats/memory", get(stats::stream_memory_stats))
+        .route("/stats/disk", get(stats::stream_disk_stats))
+        .route("/stats/network", get(stats::stream_network_stats))
         // Docker log streaming
         .route(
-            "/docker/containers/{id}/logs/stream",
+            "/docker/containers/:id/logs/stream",
             get(docker::stream_logs),
         )
         .layer(middleware::from_fn(
-            crate::routes::middleware::auth_middleware,
+            crate::middleware::auth_middleware,
         ))
 }
