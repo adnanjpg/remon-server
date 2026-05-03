@@ -1,7 +1,9 @@
 use sqlx::SqlitePool;
 
 use crate::error::AppResult;
-use crate::models::stats::{CpuStats, MemoryStats, DiskStats, NetworkStats, LoadAverage};
+use crate::models::stats::{
+    ComponentsSnapshot, CpuStats, DiskStats, MemoryStats, NetworkStats, PressureSnapshot,
+};
 
 pub struct MetricsRepository {
     pool: SqlitePool,
@@ -12,185 +14,510 @@ impl MetricsRepository {
         Self { pool }
     }
 
-    // ==================== CPU ====================
+    /// Persist one collector tick (CPU host-level + per-core, memory, disks,
+    /// networks) inside a single transaction. All goes into `resolution = 'raw'`.
+    /// Failure rolls everything back so partial frames don't leak into the
+    /// rollup pipeline.
+    pub async fn insert_raw_tick(
+        &self,
+        cpu: &CpuStats,
+        memory: &MemoryStats,
+        disks: &[DiskStats],
+        networks: &[NetworkStats],
+        pressure: Option<&PressureSnapshot>,
+        components: Option<&ComponentsSnapshot>,
+    ) -> AppResult<()> {
+        let mut tx = self.pool.begin().await?;
 
-    pub async fn insert_cpu(&self, stats: &CpuStats) -> AppResult<()> {
         sqlx::query(
             r#"
-            INSERT INTO metrics_cpu (timestamp, usage_percent, load_1m, load_5m, load_15m)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO metrics_cpu
+              (resolution, timestamp, usage_percent, load_1m, load_5m, load_15m,
+               steal_percent, iowait_percent, guest_percent,
+               context_switches_per_sec, process_forks_per_sec)
+            VALUES ('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
-        .bind(stats.timestamp)
-        .bind(stats.usage_percent)
-        .bind(stats.load_avg.one)
-        .bind(stats.load_avg.five)
-        .bind(stats.load_avg.fifteen)
-        .execute(&self.pool)
+        .bind(cpu.timestamp)
+        .bind(cpu.usage_percent)
+        .bind(cpu.load_avg.one)
+        .bind(cpu.load_avg.five)
+        .bind(cpu.load_avg.fifteen)
+        .bind(cpu.steal_percent)
+        .bind(cpu.iowait_percent)
+        .bind(cpu.guest_percent)
+        .bind(cpu.context_switches_per_sec.map(|v| v as i64))
+        .bind(cpu.process_forks_per_sec.map(|v| v as i64))
+        .execute(&mut *tx)
         .await?;
 
-        // Insert per-core stats
-        for core in &stats.per_core {
-            sqlx::query(
-                r#"
-                INSERT INTO metrics_cpu_cores (timestamp, core_index, usage_percent, freq_mhz)
-                VALUES (?, ?, ?, ?)
-                "#,
-            )
-            .bind(stats.timestamp)
-            .bind(core.core_index as i32)
-            .bind(core.usage_percent)
-            .bind(core.freq_mhz as i64)
-            .execute(&self.pool)
-            .await?;
+        if !cpu.per_core.is_empty() {
+            let mut sql = String::with_capacity(120 + 14 * cpu.per_core.len());
+            sql.push_str(
+                "INSERT OR REPLACE INTO metrics_cpu_cores \
+                 (timestamp, core_index, usage_percent, freq_mhz) VALUES ",
+            );
+            for i in 0..cpu.per_core.len() {
+                if i > 0 {
+                    sql.push_str(", ");
+                }
+                sql.push_str("(?, ?, ?, ?)");
+            }
+            let mut q = sqlx::query(&sql);
+            for core in &cpu.per_core {
+                q = q
+                    .bind(cpu.timestamp)
+                    .bind(core.core_index as i64)
+                    .bind(core.usage_percent)
+                    .bind(core.freq_mhz as i64);
+            }
+            q.execute(&mut *tx).await?;
         }
 
-        Ok(())
-    }
-
-    pub async fn get_cpu_history(&self, since: i64, limit: u32) -> AppResult<Vec<CpuStats>> {
-        let rows = sqlx::query_as::<_, (i64, f64, f64, f64, f64)>(
-            r#"
-            SELECT timestamp, usage_percent, load_1m, load_5m, load_15m
-            FROM metrics_cpu
-            WHERE timestamp >= ?
-            ORDER BY timestamp DESC
-            LIMIT ?
-            "#,
-        )
-        .bind(since)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let mut results = Vec::with_capacity(rows.len());
-        for row in rows {
-            results.push(CpuStats {
-                usage_percent: row.1,
-                per_core: vec![], // Could load separately if needed
-                load_avg: LoadAverage {
-                    one: row.2,
-                    five: row.3,
-                    fifteen: row.4,
-                },
-                timestamp: row.0,
-            });
-        }
-
-        Ok(results)
-    }
-
-    // ==================== Memory ====================
-
-    pub async fn insert_memory(&self, stats: &MemoryStats) -> AppResult<()> {
         sqlx::query(
             r#"
-            INSERT INTO metrics_memory (timestamp, used_bytes, available_bytes, cached_bytes, swap_used_bytes)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO metrics_memory
+              (resolution, timestamp, used_bytes, available_bytes,
+               cached_bytes, swap_used_bytes,
+               page_faults_minor_per_sec, page_faults_major_per_sec,
+               swap_in_pages_per_sec, swap_out_pages_per_sec)
+            VALUES ('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
-        .bind(stats.timestamp)
-        .bind(stats.used_bytes as i64)
-        .bind(stats.available_bytes as i64)
-        .bind(stats.cached_bytes as i64)
-        .bind(stats.swap_used_bytes as i64)
-        .execute(&self.pool)
+        .bind(memory.timestamp)
+        .bind(memory.used_bytes as i64)
+        .bind(memory.available_bytes as i64)
+        .bind(memory.cached_bytes as i64)
+        .bind(memory.swap_used_bytes as i64)
+        .bind(memory.page_faults_minor_per_sec.map(|v| v as i64))
+        .bind(memory.page_faults_major_per_sec.map(|v| v as i64))
+        .bind(memory.swap_in_pages_per_sec.map(|v| v as i64))
+        .bind(memory.swap_out_pages_per_sec.map(|v| v as i64))
+        .execute(&mut *tx)
         .await?;
 
+        if !disks.is_empty() {
+            let mut sql = String::with_capacity(180 + 20 * disks.len());
+            sql.push_str(
+                "INSERT OR REPLACE INTO metrics_disk \
+                 (resolution, timestamp, mount_point, \
+                  used_bytes, available_bytes, read_bytes_per_sec, write_bytes_per_sec, \
+                  inode_used_percent) VALUES ",
+            );
+            for i in 0..disks.len() {
+                if i > 0 {
+                    sql.push_str(", ");
+                }
+                sql.push_str("('raw', ?, ?, ?, ?, ?, ?, ?)");
+            }
+            let mut q = sqlx::query(&sql);
+            for d in disks {
+                q = q
+                    .bind(d.timestamp)
+                    .bind(&d.mount_point)
+                    .bind(d.used_bytes as i64)
+                    .bind(d.available_bytes as i64)
+                    .bind(d.read_bytes_per_sec as i64)
+                    .bind(d.write_bytes_per_sec as i64)
+                    .bind(d.inode_used_percent);
+            }
+            q.execute(&mut *tx).await?;
+        }
+
+        if !networks.is_empty() {
+            let mut sql = String::with_capacity(200 + 22 * networks.len());
+            sql.push_str(
+                "INSERT OR REPLACE INTO metrics_network \
+                 (resolution, timestamp, interface_name, \
+                  rx_bytes_per_sec, tx_bytes_per_sec, \
+                  rx_packets_per_sec, tx_packets_per_sec, \
+                  errors_in_per_sec, errors_out_per_sec) VALUES ",
+            );
+            for i in 0..networks.len() {
+                if i > 0 {
+                    sql.push_str(", ");
+                }
+                sql.push_str("('raw', ?, ?, ?, ?, ?, ?, ?, ?)");
+            }
+            let mut q = sqlx::query(&sql);
+            for n in networks {
+                q = q
+                    .bind(n.timestamp)
+                    .bind(&n.interface)
+                    .bind(n.rx_bytes_per_sec as i64)
+                    .bind(n.tx_bytes_per_sec as i64)
+                    .bind(n.rx_packets_per_sec as i64)
+                    .bind(n.tx_packets_per_sec as i64)
+                    .bind(n.errors_in_per_sec as i64)
+                    .bind(n.errors_out_per_sec as i64);
+            }
+            q.execute(&mut *tx).await?;
+        }
+
+        if let Some(c) = components {
+            if !c.components.is_empty() {
+                let mut sql = String::with_capacity(160 + 20 * c.components.len());
+                sql.push_str(
+                    "INSERT OR REPLACE INTO metrics_components \
+                     (resolution, timestamp, label, \
+                      temperature_c, max_c, critical_c) VALUES ",
+                );
+                for i in 0..c.components.len() {
+                    if i > 0 {
+                        sql.push_str(", ");
+                    }
+                    sql.push_str("('raw', ?, ?, ?, ?, ?)");
+                }
+                let mut q = sqlx::query(&sql);
+                for comp in &c.components {
+                    q = q
+                        .bind(c.timestamp)
+                        .bind(&comp.label)
+                        .bind(comp.temperature_c)
+                        .bind(comp.max_c)
+                        .bind(comp.critical_c);
+                }
+                q.execute(&mut *tx).await?;
+            }
+        }
+
+        if let Some(p) = pressure {
+            let resources: [(&str, Option<&_>); 3] = [
+                ("cpu", p.cpu.as_ref()),
+                ("memory", p.memory.as_ref()),
+                ("io", p.io.as_ref()),
+            ];
+            let present: Vec<(&str, &_)> = resources
+                .iter()
+                .filter_map(|(name, ps)| ps.map(|ps| (*name, ps)))
+                .collect();
+            if !present.is_empty() {
+                let mut sql = String::with_capacity(200 + 28 * present.len());
+                sql.push_str(
+                    "INSERT OR REPLACE INTO metrics_pressure \
+                     (resolution, timestamp, resource, \
+                      some_avg10, some_avg60, some_avg300, \
+                      full_avg10, full_avg60, full_avg300) VALUES ",
+                );
+                for i in 0..present.len() {
+                    if i > 0 {
+                        sql.push_str(", ");
+                    }
+                    sql.push_str("('raw', ?, ?, ?, ?, ?, ?, ?, ?)");
+                }
+                let mut q = sqlx::query(&sql);
+                for (resource, ps) in &present {
+                    q = q
+                        .bind(p.timestamp)
+                        .bind(*resource)
+                        .bind(ps.some_avg10)
+                        .bind(ps.some_avg60)
+                        .bind(ps.some_avg300)
+                        .bind(ps.full_avg10)
+                        .bind(ps.full_avg60)
+                        .bind(ps.full_avg300);
+                }
+                q.execute(&mut *tx).await?;
+            }
+        }
+
+        tx.commit().await?;
         Ok(())
     }
 
-    pub async fn get_memory_history(&self, since: i64, limit: u32) -> AppResult<Vec<MemoryStats>> {
-        let rows = sqlx::query_as::<_, (i64, i64, i64, i64, i64)>(
+    // ===== Reads (history endpoints) =====
+
+    pub async fn read_cpu(
+        &self,
+        resolution: &str,
+        start: i64,
+        end: i64,
+        limit: u32,
+    ) -> AppResult<
+        Vec<(
+            i64,
+            f64,
+            f64,
+            f64,
+            f64,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+            Option<i64>,
+            Option<i64>,
+        )>,
+    > {
+        let rows = sqlx::query_as::<
+            _,
+            (
+                i64,
+                f64,
+                f64,
+                f64,
+                f64,
+                Option<f64>,
+                Option<f64>,
+                Option<f64>,
+                Option<i64>,
+                Option<i64>,
+            ),
+        >(
             r#"
-            SELECT timestamp, used_bytes, available_bytes, cached_bytes, swap_used_bytes
-            FROM metrics_memory
-            WHERE timestamp >= ?
-            ORDER BY timestamp DESC
-            LIMIT ?
+            SELECT timestamp, usage_percent, load_1m, load_5m, load_15m,
+                   steal_percent, iowait_percent, guest_percent,
+                   context_switches_per_sec, process_forks_per_sec
+              FROM metrics_cpu
+             WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
+             ORDER BY timestamp ASC
+             LIMIT ?
             "#,
         )
-        .bind(since)
-        .bind(limit)
+        .bind(resolution)
+        .bind(start)
+        .bind(end)
+        .bind(limit as i64)
         .fetch_all(&self.pool)
         .await?;
-
-        Ok(rows
-            .into_iter()
-            .map(|r| MemoryStats {
-                total_bytes: 0, // Not stored, from hardware info
-                used_bytes: r.1 as u64,
-                available_bytes: r.2 as u64,
-                cached_bytes: r.3 as u64,
-                swap_total_bytes: 0,
-                swap_used_bytes: r.4 as u64,
-                timestamp: r.0,
-            })
-            .collect())
+        Ok(rows)
     }
 
-    // ==================== Disk ====================
-
-    pub async fn insert_disk(&self, stats: &[DiskStats]) -> AppResult<()> {
-        for stat in stats {
-            sqlx::query(
-                r#"
-                INSERT INTO metrics_disk (timestamp, mount_point, used_bytes, available_bytes, read_bytes_per_sec, write_bytes_per_sec)
-                VALUES (?, ?, ?, ?, ?, ?)
-                "#,
-            )
-            .bind(stat.timestamp)
-            .bind(&stat.mount_point)
-            .bind(stat.used_bytes as i64)
-            .bind(stat.available_bytes as i64)
-            .bind(stat.read_bytes_per_sec as i64)
-            .bind(stat.write_bytes_per_sec as i64)
-            .execute(&self.pool)
-            .await?;
-        }
-
-        Ok(())
+    pub async fn read_cpu_cores(
+        &self,
+        start: i64,
+        end: i64,
+        limit: u32,
+    ) -> AppResult<Vec<(i64, i64, f64, i64)>> {
+        let rows = sqlx::query_as::<_, (i64, i64, f64, i64)>(
+            r#"
+            SELECT timestamp, core_index, usage_percent, freq_mhz
+              FROM metrics_cpu_cores
+             WHERE timestamp >= ? AND timestamp <= ?
+             ORDER BY timestamp ASC, core_index ASC
+             LIMIT ?
+            "#,
+        )
+        .bind(start)
+        .bind(end)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
-    // ==================== Network ====================
-
-    pub async fn insert_network(&self, stats: &[NetworkStats]) -> AppResult<()> {
-        for stat in stats {
-            sqlx::query(
-                r#"
-                INSERT INTO metrics_network (timestamp, interface_name, rx_bytes_per_sec, tx_bytes_per_sec, rx_packets_per_sec, tx_packets_per_sec)
-                VALUES (?, ?, ?, ?, ?, ?)
-                "#,
-            )
-            .bind(stat.timestamp)
-            .bind(&stat.interface)
-            .bind(stat.rx_bytes_per_sec as i64)
-            .bind(stat.tx_bytes_per_sec as i64)
-            .bind(stat.rx_packets_per_sec as i64)
-            .bind(stat.tx_packets_per_sec as i64)
-            .execute(&self.pool)
-            .await?;
-        }
-
-        Ok(())
+    pub async fn read_memory(
+        &self,
+        resolution: &str,
+        start: i64,
+        end: i64,
+        limit: u32,
+    ) -> AppResult<
+        Vec<(
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+        )>,
+    > {
+        let rows = sqlx::query_as::<
+            _,
+            (
+                i64,
+                i64,
+                i64,
+                i64,
+                i64,
+                Option<i64>,
+                Option<i64>,
+                Option<i64>,
+                Option<i64>,
+            ),
+        >(
+            r#"
+            SELECT timestamp, used_bytes, available_bytes, cached_bytes, swap_used_bytes,
+                   page_faults_minor_per_sec, page_faults_major_per_sec,
+                   swap_in_pages_per_sec, swap_out_pages_per_sec
+              FROM metrics_memory
+             WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
+             ORDER BY timestamp ASC
+             LIMIT ?
+            "#,
+        )
+        .bind(resolution)
+        .bind(start)
+        .bind(end)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
-    // ==================== Cleanup ====================
+    pub async fn read_disk(
+        &self,
+        resolution: &str,
+        start: i64,
+        end: i64,
+        limit: u32,
+    ) -> AppResult<Vec<(i64, String, i64, i64, i64, i64, Option<f64>)>> {
+        let rows = sqlx::query_as::<_, (i64, String, i64, i64, i64, i64, Option<f64>)>(
+            r#"
+            SELECT timestamp, mount_point, used_bytes, available_bytes,
+                   read_bytes_per_sec, write_bytes_per_sec, inode_used_percent
+              FROM metrics_disk
+             WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
+             ORDER BY timestamp ASC, mount_point ASC
+             LIMIT ?
+            "#,
+        )
+        .bind(resolution)
+        .bind(start)
+        .bind(end)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
 
-    pub async fn cleanup_old_metrics(&self, retention_days: u32) -> AppResult<u64> {
-        let cutoff = chrono::Utc::now().timestamp() - (retention_days as i64 * 24 * 3600);
-        let mut total = 0u64;
+    pub async fn read_pressure(
+        &self,
+        resource: &str,
+        resolution: &str,
+        start: i64,
+        end: i64,
+        limit: u32,
+    ) -> AppResult<Vec<(i64, f64, f64, f64, f64, f64, f64)>> {
+        let rows = sqlx::query_as::<_, (i64, f64, f64, f64, f64, f64, f64)>(
+            r#"
+            SELECT timestamp,
+                   some_avg10, some_avg60, some_avg300,
+                   full_avg10, full_avg60, full_avg300
+              FROM metrics_pressure
+             WHERE resource = ? AND resolution = ?
+               AND timestamp >= ? AND timestamp <= ?
+             ORDER BY timestamp ASC
+             LIMIT ?
+            "#,
+        )
+        .bind(resource)
+        .bind(resolution)
+        .bind(start)
+        .bind(end)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
 
-        let tables = ["metrics_cpu", "metrics_cpu_cores", "metrics_memory", "metrics_disk", "metrics_network", "metrics_docker"];
+    pub async fn read_network(
+        &self,
+        resolution: &str,
+        start: i64,
+        end: i64,
+        limit: u32,
+    ) -> AppResult<Vec<(i64, String, i64, i64, i64, i64, i64, i64)>> {
+        let rows = sqlx::query_as::<_, (i64, String, i64, i64, i64, i64, i64, i64)>(
+            r#"
+            SELECT timestamp, interface_name, rx_bytes_per_sec, tx_bytes_per_sec,
+                   rx_packets_per_sec, tx_packets_per_sec,
+                   errors_in_per_sec, errors_out_per_sec
+              FROM metrics_network
+             WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
+             ORDER BY timestamp ASC, interface_name ASC
+             LIMIT ?
+            "#,
+        )
+        .bind(resolution)
+        .bind(start)
+        .bind(end)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
 
-        for table in tables {
-            let result = sqlx::query(&format!("DELETE FROM {} WHERE timestamp < ?", table))
-                .bind(cutoff)
+    pub async fn read_components(
+        &self,
+        resolution: &str,
+        start: i64,
+        end: i64,
+        limit: u32,
+    ) -> AppResult<Vec<(i64, String, Option<f64>, Option<f64>, Option<f64>)>> {
+        let rows = sqlx::query_as::<_, (i64, String, Option<f64>, Option<f64>, Option<f64>)>(
+            r#"
+            SELECT timestamp, label, temperature_c, max_c, critical_c
+              FROM metrics_components
+             WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
+             ORDER BY timestamp ASC, label ASC
+             LIMIT ?
+            "#,
+        )
+        .bind(resolution)
+        .bind(start)
+        .bind(end)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn delete_older_than(
+        &self,
+        resource: &str,
+        resolution: &str,
+        cutoff_ts: i64,
+    ) -> AppResult<u64> {
+        let result = match resource {
+            "cpu_cores" => {
+                if resolution != "raw" {
+                    return Ok(0);
+                }
+                sqlx::query("DELETE FROM metrics_cpu_cores WHERE timestamp < ?")
+                    .bind(cutoff_ts)
+                    .execute(&self.pool)
+                    .await?
+            }
+            "logs" => sqlx::query("DELETE FROM logs WHERE timestamp < ?")
+                .bind(cutoff_ts)
                 .execute(&self.pool)
-                .await?;
-            total += result.rows_affected();
-        }
+                .await?,
+            "probe_runs" => {
+                if resolution != "raw" {
+                    return Ok(0);
+                }
+                sqlx::query("DELETE FROM probe_runs WHERE timestamp < ?")
+                    .bind(cutoff_ts)
+                    .execute(&self.pool)
+                    .await?
+            }
+            "alert_events" => {
+                if resolution != "raw" {
+                    return Ok(0);
+                }
+                sqlx::query("DELETE FROM alert_events WHERE occurred_at < ?")
+                    .bind(cutoff_ts)
+                    .execute(&self.pool)
+                    .await?
+            }
+            "cpu" | "memory" | "disk" | "network" | "docker" | "pressure" | "components"
+            | "probe" => {
+                let table = format!("metrics_{}", resource);
+                let sql = format!(
+                    "DELETE FROM {} WHERE resolution = ? AND timestamp < ?",
+                    table
+                );
+                sqlx::query(&sql)
+                    .bind(resolution)
+                    .bind(cutoff_ts)
+                    .execute(&self.pool)
+                    .await?
+            }
+            _ => return Ok(0),
+        };
 
-        Ok(total)
+        Ok(result.rows_affected())
     }
 }

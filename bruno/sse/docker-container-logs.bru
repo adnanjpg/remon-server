@@ -1,0 +1,36 @@
+meta {
+  name: Stream Docker Container Logs
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/sse/docker/containers/{{container_id}}/logs/stream?tail={{tail}}
+  body: none
+  auth: bearer
+}
+
+params:query {
+  tail: {{tail}}
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Real-time container log stream via SSE. Backed by bollard's log iterator;
+  stays open until the client disconnects or the container exits.
+
+  Query:
+    tail — number of historical lines to replay before going live (default 50)
+
+  Failures:
+    401 UNAUTHORIZED          → no/expired/revoked token
+    503 DOCKER_UNAVAILABLE    → daemon socket unreachable
+    422 DOCKER_ERROR / 404    → container not found / API error
+
+  Note: Bruno's SSE rendering is limited; for sustained streaming use curl:
+    curl -N -H "Authorization: Bearer $JWT" \
+      "http://localhost:8080/sse/docker/containers/$CID/logs/stream?tail=100"
+}

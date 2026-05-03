@@ -1,0 +1,34 @@
+meta {
+  name: Network History
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/metrics/network?start={{metrics_start}}&end={{metrics_end}}&resolution={{metrics_resolution}}&limit={{metrics_limit}}
+  body: none
+  auth: bearer
+}
+
+params:query {
+  ~start: {{metrics_start}}
+  ~end: {{metrics_end}}
+  ~resolution: {{metrics_resolution}}
+  ~limit: {{metrics_limit}}
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Network history per interface. Flat row per (timestamp, interface_name);
+  group client-side by `interface_name`.
+
+  Loopback (`lo*`) is filtered out at collection time — won't show up here.
+
+  Note: rx/tx _bytes_per_sec_ is currently the sysinfo "delta since last
+  refresh" (NOT divided by the collector tick interval). Treat as a
+  relative magnitude, not an absolute rate, until that's fixed
+  (tracked under collector formula cleanup).
+}

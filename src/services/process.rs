@@ -1,5 +1,4 @@
-use sysinfo::{System, Pid, Signal};
-use log::error;
+use sysinfo::{Pid, System};
 
 use crate::models::process::{ProcessInfo, ProcessList, ProcessState};
 
@@ -72,29 +71,88 @@ pub fn get_process(sys: &System, pid: u32) -> Option<ProcessInfo> {
     })
 }
 
-/// Kill a process
-pub fn kill_process(sys: &System, pid: u32, signal: i32) -> Result<(), String> {
-    let process = sys
-        .process(Pid::from_u32(pid))
-        .ok_or_else(|| format!("Process {} not found", pid))?;
+/// Kill a process by PID, cross-platform.
+///
+/// Hits the OS directly instead of going through sysinfo — the prior path
+/// did `System::new_all() + refresh_all()` (10–50 ms inventorying every
+/// process on the box) just to obtain a `Process` handle whose `kill_with`
+/// translates to the same syscall we issue here.
+///
+/// Platform behavior:
+/// - **Unix** (Linux/macOS): `kill(2)`. The `signal` argument is honored;
+///   1=SIGHUP, 2=SIGINT, 9=SIGKILL, 15=SIGTERM, anything else = SIGTERM.
+/// - **Windows**: no POSIX signals exist; we open the target with
+///   `PROCESS_TERMINATE` and call `TerminateProcess`, the closest
+///   equivalent to SIGKILL. The `signal` argument is ignored. Same
+///   semantics sysinfo had on this platform.
+///
+/// `pid == 0` is rejected explicitly — on Unix that targets the caller's
+/// entire process group; on Windows that's the System Idle Process,
+/// which can't be terminated. Either way it isn't something we want a
+/// request handler to do.
+pub fn kill_process(pid: u32, signal: i32) -> Result<(), String> {
+    if pid == 0 {
+        return Err("refusing to signal pid 0".to_string());
+    }
+    kill_process_native(pid, signal)
+}
 
+#[cfg(unix)]
+fn kill_process_native(pid: u32, signal: i32) -> Result<(), String> {
     let sig = match signal {
-        1 => Signal::Hangup,
-        2 => Signal::Interrupt,
-        9 => Signal::Kill,
-        15 => Signal::Term,
-        _ => Signal::Term,
+        1 => libc::SIGHUP,
+        2 => libc::SIGINT,
+        9 => libc::SIGKILL,
+        15 => libc::SIGTERM,
+        _ => libc::SIGTERM,
+    };
+    // SAFETY: `pid` is non-zero (checked by caller) and `sig` is one of
+    // the values above. `kill(2)` is well-defined for those.
+    let r = unsafe { libc::kill(pid as libc::pid_t, sig) };
+    if r == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "kill({}, {}) failed: {}",
+            pid,
+            signal,
+            std::io::Error::last_os_error()
+        ))
+    }
+}
+
+#[cfg(windows)]
+fn kill_process_native(pid: u32, _signal: i32) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_TERMINATE, TerminateProcess,
     };
 
-    if process.kill_with(sig).is_none() {
-        error!("Failed to send signal {} to process {}", signal, pid);
+    // SAFETY: `OpenProcess` returns a null handle on failure, which we
+    // check before any further use. `TerminateProcess`/`CloseHandle` are
+    // called on a handle we just verified is non-null. Exit code 1 is a
+    // conventional "killed externally" marker.
+    let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, pid) };
+    if handle.is_null() {
         return Err(format!(
-            "Failed to send signal {} to process {}",
-            signal, pid
+            "OpenProcess({}) failed: {}",
+            pid,
+            std::io::Error::last_os_error()
         ));
     }
 
-    Ok(())
+    let ok = unsafe { TerminateProcess(handle, 1) } != 0;
+    let term_err = if !ok {
+        Some(std::io::Error::last_os_error())
+    } else {
+        None
+    };
+    unsafe { CloseHandle(handle) };
+
+    match term_err {
+        None => Ok(()),
+        Some(e) => Err(format!("TerminateProcess({}) failed: {}", pid, e)),
+    }
 }
 
 fn process_state(status: sysinfo::ProcessStatus) -> ProcessState {

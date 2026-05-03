@@ -1,10 +1,11 @@
-use sysinfo::{System, Disks, Networks};
+use sysinfo::{Components, Disks, Networks, System};
 
-use crate::models::system::{
-    DiskInfo, HardwareInfo, NetworkInterfaceInfo, SystemDescription, SystemInfo,
-};
 use crate::models::stats::{
-    AllStats, CoreStats, CpuStats, DiskStats, LoadAverage, MemoryStats, NetworkStats,
+    AllStats, ComponentInfo, ComponentsSnapshot, CoreStats, CpuStats, DiskStats, LoadAverage,
+    MemoryStats, NetworkStats,
+};
+use crate::models::system::{
+    DiskInfo, HardwareInfo, NetworkInterfaceInfo, SystemDescription,
 };
 
 /// Collect system description
@@ -72,14 +73,6 @@ pub fn get_hardware_info() -> HardwareInfo {
     }
 }
 
-/// Collect combined system info
-pub fn get_system_info() -> SystemInfo {
-    SystemInfo {
-        description: get_description(),
-        hardware: get_hardware_info(),
-    }
-}
-
 /// Collect CPU stats
 pub fn get_cpu_stats(sys: &System) -> CpuStats {
     let load_avg = System::load_average();
@@ -110,25 +103,79 @@ pub fn get_cpu_stats(sys: &System) -> CpuStats {
             fifteen: load_avg.fifteen,
         },
         timestamp: chrono::Utc::now().timestamp(),
+        // Linux-only extras filled in by the collector; default to None
+        // so a Windows/macOS build returns a well-formed CpuStats.
+        steal_percent: None,
+        iowait_percent: None,
+        guest_percent: None,
+        context_switches_per_sec: None,
+        process_forks_per_sec: None,
     }
 }
 
-/// Collect memory stats
+/// Collect memory stats.
+///
+/// `cached_bytes` semantics:
+/// - On Linux we read `/proc/meminfo` and sum `Cached + Buffers + SReclaimable`,
+///   matching what `free`/`htop` call "cached" / "buff/cache".
+/// - On other platforms sysinfo doesn't expose a cached counter and we
+///   return 0 rather than guessing with arithmetic that would be wrong
+///   on a NUMA system.
 pub fn get_memory_stats(sys: &System) -> MemoryStats {
     MemoryStats {
         total_bytes: sys.total_memory(),
         used_bytes: sys.used_memory(),
         available_bytes: sys.available_memory(),
-        cached_bytes: sys.total_memory().saturating_sub(sys.used_memory()).saturating_sub(sys.available_memory()),
+        cached_bytes: read_cached_bytes(),
         swap_total_bytes: sys.total_swap(),
         swap_used_bytes: sys.used_swap(),
         timestamp: chrono::Utc::now().timestamp(),
+        // Linux-only extras filled in by the collector.
+        page_faults_minor_per_sec: None,
+        page_faults_major_per_sec: None,
+        swap_in_pages_per_sec: None,
+        swap_out_pages_per_sec: None,
     }
 }
 
-/// Collect disk stats
-pub fn get_disk_stats(disks: &Disks) -> Vec<DiskStats> {
+#[cfg(target_os = "linux")]
+fn read_cached_bytes() -> u64 {
+    let content = match std::fs::read_to_string("/proc/meminfo") {
+        Ok(c) => c,
+        Err(_) => return 0,
+    };
+    let mut cached_kib = 0u64;
+    let mut buffers_kib = 0u64;
+    let mut sreclaim_kib = 0u64;
+    for line in content.lines() {
+        let mut parts = line.split_whitespace();
+        let key = parts.next().unwrap_or("");
+        let value: u64 = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+        match key {
+            "Cached:" => cached_kib = value,
+            "Buffers:" => buffers_kib = value,
+            "SReclaimable:" => sreclaim_kib = value,
+            _ => {}
+        }
+    }
+    (cached_kib + buffers_kib + sreclaim_kib).saturating_mul(1024)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn read_cached_bytes() -> u64 {
+    0
+}
+
+/// Collect disk stats.
+///
+/// `read_bytes_per_sec` and `write_bytes_per_sec` are derived from
+/// `Disk::usage()`, which on sysinfo 0.38 returns "bytes since last refresh".
+/// We divide that by `interval_secs` to land on a real per-second rate.
+/// First-tick `interval_secs` is near-zero, so we floor at 0 to avoid
+/// nonsensical infinities.
+pub fn get_disk_stats(disks: &Disks, interval_secs: f64) -> Vec<DiskStats> {
     let timestamp = chrono::Utc::now().timestamp();
+    let safe_div = if interval_secs > 0.0 { interval_secs } else { 1.0 };
 
     disks
         .iter()
@@ -136,44 +183,130 @@ pub fn get_disk_stats(disks: &Disks) -> Vec<DiskStats> {
             let total = d.total_space();
             let available = d.available_space();
             let used = total.saturating_sub(available);
+            let usage = d.usage();
+
+            let read_per_sec = if interval_secs > 0.0 {
+                (usage.read_bytes as f64 / safe_div) as u64
+            } else {
+                0
+            };
+            let write_per_sec = if interval_secs > 0.0 {
+                (usage.written_bytes as f64 / safe_div) as u64
+            } else {
+                0
+            };
 
             DiskStats {
                 mount_point: d.mount_point().to_string_lossy().to_string(),
                 total_bytes: total,
                 used_bytes: used,
                 available_bytes: available,
-                read_bytes_per_sec: 0,  // Would need tracking over time
-                write_bytes_per_sec: 0,
+                read_bytes_per_sec: read_per_sec,
+                write_bytes_per_sec: write_per_sec,
+                timestamp,
+                inode_used_percent: None, // patched by the collector on Linux
+            }
+        })
+        .collect()
+}
+
+/// Collect network stats.
+///
+/// sysinfo's `received()` / `transmitted()` / `packets_*()` return "delta
+/// since last refresh" (NOT a rate, NOT cumulative — the docs are easy to
+/// misread). We divide by `interval_secs` to convert into a true per-second
+/// rate. Loopback is excluded with an exact prefix match (`lo` followed by
+/// nothing or a digit) to avoid eating real interfaces with names that
+/// happen to start with "lo" (e.g. "long0", "logical0").
+pub fn get_network_stats(networks: &Networks, interval_secs: f64) -> Vec<NetworkStats> {
+    let timestamp = chrono::Utc::now().timestamp();
+    let safe_div = if interval_secs > 0.0 { interval_secs } else { 1.0 };
+
+    networks
+        .iter()
+        .filter(|(name, _)| !is_loopback(name))
+        .map(|(name, data)| {
+            let (rxb, txb, rxp, txp) = if interval_secs > 0.0 {
+                (
+                    (data.received() as f64 / safe_div) as u64,
+                    (data.transmitted() as f64 / safe_div) as u64,
+                    (data.packets_received() as f64 / safe_div) as u64,
+                    (data.packets_transmitted() as f64 / safe_div) as u64,
+                )
+            } else {
+                (0, 0, 0, 0)
+            };
+            // sysinfo's errors_on_received() / errors_on_transmitted() are
+            // also "since last refresh"; same /interval normalization as
+            // the byte counters.
+            let (errs_in, errs_out) = if interval_secs > 0.0 {
+                (
+                    (data.errors_on_received() as f64 / safe_div) as u64,
+                    (data.errors_on_transmitted() as f64 / safe_div) as u64,
+                )
+            } else {
+                (0, 0)
+            };
+            NetworkStats {
+                interface: name.clone(),
+                rx_bytes_per_sec: rxb,
+                tx_bytes_per_sec: txb,
+                rx_packets_per_sec: rxp,
+                tx_packets_per_sec: txp,
+                errors_in_per_sec: errs_in,
+                errors_out_per_sec: errs_out,
                 timestamp,
             }
         })
         .collect()
 }
 
-/// Collect network stats
-pub fn get_network_stats(networks: &Networks) -> Vec<NetworkStats> {
+/// Snapshot the available hardware sensors. The caller is expected to keep
+/// a `Components` handle around and refresh it once per tick — repeatedly
+/// constructing one is more expensive than reading temperatures.
+pub fn get_components(components: &Components) -> ComponentsSnapshot {
     let timestamp = chrono::Utc::now().timestamp();
-
-    networks
+    let list: Vec<ComponentInfo> = components
         .iter()
-        .filter(|(name, _)| !name.starts_with("lo")) // Filter loopback
-        .map(|(name, data)| NetworkStats {
-            interface: name.clone(),
-            rx_bytes_per_sec: data.received(), // Cumulative, would need delta calc
-            tx_bytes_per_sec: data.transmitted(),
-            rx_packets_per_sec: data.packets_received(),
-            tx_packets_per_sec: data.packets_transmitted(),
-            timestamp,
+        .map(|c| ComponentInfo {
+            label: c.label().to_string(),
+            temperature_c: c.temperature().map(|v| v as f64),
+            max_c: c.max().map(|v| v as f64),
+            critical_c: c.critical().map(|v| v as f64),
         })
-        .collect()
+        .collect();
+    ComponentsSnapshot {
+        components: list,
+        timestamp,
+    }
 }
 
-/// Collect all stats at once
-pub fn get_all_stats(sys: &System, disks: &Disks, networks: &Networks) -> AllStats {
+fn is_loopback(name: &str) -> bool {
+    if name == "lo" {
+        return true;
+    }
+    // Match `lo` followed only by digits ("lo0", "lo1", …); reject "long0",
+    // "logical0", "loopback-fake", anything alphanumeric after the prefix
+    // that isn't pure digits.
+    if let Some(rest) = name.strip_prefix("lo") {
+        return !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit());
+    }
+    false
+}
+
+/// Collect all stats at once.
+pub fn get_all_stats(
+    sys: &System,
+    disks: &Disks,
+    networks: &Networks,
+    interval_secs: f64,
+) -> AllStats {
     AllStats {
         cpu: get_cpu_stats(sys),
         memory: get_memory_stats(sys),
-        disks: get_disk_stats(disks),
-        network: get_network_stats(networks),
+        pressure: None,
+        components: None,
+        disks: get_disk_stats(disks, interval_secs),
+        network: get_network_stats(networks, interval_secs),
     }
 }

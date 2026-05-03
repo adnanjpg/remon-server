@@ -1,5 +1,6 @@
 mod stats;
 mod processes;
+#[cfg(feature = "docker")]
 mod docker;
 
 use std::sync::Arc;
@@ -17,6 +18,7 @@ pub fn spawn_all(state: Arc<AppState>) {
     tokio::spawn(processes::run(Arc::clone(&state)));
 
     // Docker stats collector
+    #[cfg(feature = "docker")]
     tokio::spawn(docker::run(Arc::clone(&state)));
 
     info!("All collectors started");

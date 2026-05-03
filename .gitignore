@@ -7,8 +7,11 @@ Cargo.toml.orig
 Cargo.lock.orig
 
 .DS_Store
+.vscode/
+.idea/
 
 .env
+.claude/
 .remon-mobile-fcm-creds.json
 
 # DB files

@@ -1,0 +1,26 @@
+meta {
+  name: Start Service
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/services/{{service_name}}/start
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Start a service unit (systemctl start).
+
+  Parameters:
+    service_name — "nginx" or "nginx.service"
+
+  Failures:
+    403 FORBIDDEN  → remon process lacks privileges (needs root or PolicyKit rules)
+    404 NOT_FOUND  → unit not found
+}

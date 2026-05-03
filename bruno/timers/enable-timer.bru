@@ -1,0 +1,22 @@
+meta {
+  name: Enable Timer
+  type: http
+  seq: 2
+}
+
+put {
+  url: {{baseUrl}}/timers/{{service_name}}/enable
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Enable a systemd timer unit at boot (systemctl enable).
+
+  Parameters:
+    service_name — timer name with or without suffix: "logrotate" or "logrotate.timer"
+}

@@ -1,0 +1,45 @@
+meta {
+  name: Update Alert Rule
+  type: http
+  seq: 4
+}
+
+put {
+  url: {{baseUrl}}/alerts/{{alert_id}}
+  body: json
+  auth: bearer
+}
+
+body:json {
+  {
+    "enabled": false,
+    "expression": "cpu.usage_percent > 90",
+    "for_duration_secs": 600
+  }
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Partial update — every field is optional, omitted fields keep their
+  current value. `description: null` explicitly clears the description.
+
+  Body fields (all optional):
+    name, description, enabled, expression, severity,
+    for_duration_secs, eval_interval_secs, cooldown_secs
+
+  Server re-runs full validation against the merged result, so an
+  invalid expression or out-of-range duration after the merge fails
+  the request without partially mutating the row.
+
+  ⚠ Hot-reload note: changing the expression / interval / for_duration
+  on an already-running rule does NOT re-bounce the evaluator task
+  today — the change only takes effect on next server restart. Coming
+  in a follow-up; flagged here so you don't think a rule went stale.
+
+  Errors:
+    400 BAD_REQUEST — invalid expression or range
+    404 NOT_FOUND   — id doesn't exist
+}

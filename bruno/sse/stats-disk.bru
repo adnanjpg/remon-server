@@ -1,0 +1,19 @@
+meta {
+  name: Stream Disk Stats
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/sse/stats/disk
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Disk-only filter on the unified stats broadcast.
+}

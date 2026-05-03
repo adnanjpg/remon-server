@@ -1,33 +1,37 @@
-use axum::{extract::State, http::StatusCode, Json, extract::Path};
+use axum::{Json, extract::Path, extract::State, http::StatusCode};
 use log::debug;
 use std::sync::Arc;
-use sysinfo::System;
+use sysinfo::{MINIMUM_CPU_UPDATE_INTERVAL, System};
 
-use crate::{
-    routes::{
-        dtos::{common::ResponseBody, process::GetProcessesResponse},
-        extractors::Claims,
-    },
-    services::process,
-    state::AppState,
-};
+use crate::error::{AppError, AppResult};
+use crate::routes::{dtos::process::GetProcessesResponse, extractors::Claims};
+use crate::services::process;
+use crate::state::AppState;
 
-/// GET /processes - Get all running processes
+/// GET /processes — return the latest process snapshot.
+///
+/// Reads from `state.processes_latest`, populated by the processes
+/// collector after each refresh. The collector's first publish is gated
+/// behind a `MINIMUM_CPU_UPDATE_INTERVAL` warm-up so the cache only ever
+/// holds frames with valid `cpu_percent` deltas.
+///
+/// Cold-start fallback (cache empty — request landed in the first ~200 ms
+/// of server life): pay the warm-up here too. Two refreshes spaced one
+/// `MINIMUM_CPU_UPDATE_INTERVAL` apart give sysinfo enough delta to
+/// compute meaningful CPU%; doing them back-to-back would zero everything
+/// out — that was the prior bug.
 pub async fn get_processes(
     _claims: Claims,
     State(state): State<Arc<AppState>>,
 ) -> Json<GetProcessesResponse> {
     let start = std::time::Instant::now();
 
-    // Subscribe to the processes broadcast to get the latest snapshot
-    let mut rx = state.processes_tx.subscribe();
-
-    // Try to receive the latest process list, or fetch it directly if channel is empty
-    let process_list = match rx.try_recv() {
-        Ok(processes) => processes,
-        Err(_) => {
-            // Fallback: fetch processes directly
+    let cached = state.processes_latest.read().await.clone();
+    let process_list = match cached {
+        Some(p) => p,
+        None => {
             let mut sys = System::new_all();
+            tokio::time::sleep(MINIMUM_CPU_UPDATE_INTERVAL).await;
             sys.refresh_all();
             process::get_processes(&sys)
         }
@@ -44,23 +48,14 @@ pub async fn get_processes(
     })
 }
 
-/// DELETE /processes/:pid - Kill a process
-pub async fn delete_process(
-    _claims: Claims,
-    Path(pid): Path<u32>,
-) -> Result<Json<ResponseBody>, (StatusCode, Json<ResponseBody>)> {
-    let mut sys = System::new_all();
-    sys.refresh_all();
-
-    process::kill_process(&sys, pid, 15) // SIGTERM
-        .map_err(|e| {
-            debug!("Error killing process: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ResponseBody::Error(e)),
-            )
-        })?;
+/// DELETE /processes/{pid} — kill a process by PID.
+///
+/// Goes through the OS directly (Unix `kill(2)` / Windows `TerminateProcess`),
+/// no sysinfo full-system inventory. SIGTERM on Unix; signal arg is ignored
+/// on Windows (no POSIX signals there).
+pub async fn delete_process(_claims: Claims, Path(pid): Path<u32>) -> AppResult<StatusCode> {
+    process::kill_process(pid, 15).map_err(AppError::ProcessKillFailed)?;
 
     debug!("Process {} killed successfully", pid);
-    Ok(Json(ResponseBody::Success(true)))
+    Ok(StatusCode::NO_CONTENT)
 }

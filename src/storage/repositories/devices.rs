@@ -160,6 +160,19 @@ impl DeviceRepository {
         Ok(())
     }
 
+    /// Returns true if a non-expired session row exists for the given jti.
+    /// Used by the auth middleware to enforce revocation.
+    pub async fn session_exists(&self, jti: &str) -> AppResult<bool> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM sessions WHERE id = ? AND expires_at > unixepoch()",
+        )
+        .bind(jti)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.is_some())
+    }
+
     pub async fn delete_session(&self, session_id: &str) -> AppResult<()> {
         sqlx::query("DELETE FROM sessions WHERE id = ?")
             .bind(session_id)
@@ -184,5 +197,31 @@ impl DeviceRepository {
             .await?;
 
         Ok(result.rows_affected())
+    }
+
+    /// All active devices that have an FCM push token registered. The
+    /// notification fan-out targets exactly this set.
+    pub async fn list_active_fcm_targets(&self) -> AppResult<Vec<(String, String)>> {
+        // (device_id, fcm_token)
+        let rows = sqlx::query_as::<_, (String, String)>(
+            "SELECT id, fcm_token FROM devices
+              WHERE is_active = 1 AND fcm_token IS NOT NULL AND fcm_token != ''",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn set_fcm_token(&self, device_id: &str, fcm_token: Option<&str>) -> AppResult<()> {
+        let result = sqlx::query("UPDATE devices SET fcm_token = ? WHERE id = ?")
+            .bind(fcm_token)
+            .bind(device_id)
+            .execute(&self.pool)
+            .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(AppError::NotFound("Device".into()));
+        }
+        Ok(())
     }
 }

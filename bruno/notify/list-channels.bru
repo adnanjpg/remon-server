@@ -1,0 +1,21 @@
+meta {
+  name: List Channels
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/notifications/channels
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  List all notification channels.
+
+  Response: { channels: [ { id, name, type, enabled, config, min_severity, created_at, updated_at } ] }
+}

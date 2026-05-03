@@ -26,16 +26,27 @@ script:post-response {
 }
 
 docs {
-  Login with device credentials obtained from pairing.
-  
+  Exchange device credentials for a JWT access+refresh pair.
+
   Request:
-  - device_id: UUID from pair complete response
-  - device_token: 64-char hex token from pair complete response
-  
-  Response:
-  - access_token: Short-lived JWT for API requests (1 hour)
-  - refresh_token: Long-lived JWT for token refresh (30 days)
-  - expires_in: Access token TTL in seconds
-  
-  The access_token is automatically saved as jwt_token for other requests.
+    device_id     — UUID from /auth/pair/complete
+    device_token  — 64-hex token from /auth/pair/complete
+
+  Success (200):
+    {
+      "access_token":  "<jwt>",   // HS256, ~1h TTL
+      "refresh_token": "<jwt>",   // HS256, ~30d TTL
+      "expires_in":    3600        // access TTL in seconds
+    }
+  Both jti's are written into the `sessions` table. Auth middleware checks
+  every protected request against that table — revocation works in real time.
+
+  Failures:
+    401 DEVICE_NOT_FOUND  → device_id unknown
+    401 DEVICE_INACTIVE   → device exists but disabled
+    401 INVALID_TOKEN     → device_token mismatch (Argon2 verify)
+    429                   → rate limit (5 burst, ~1/12s replenish per IP)
+
+  The access token is auto-saved as `jwt_token` and used by all bearer-auth
+  requests in this collection.
 }

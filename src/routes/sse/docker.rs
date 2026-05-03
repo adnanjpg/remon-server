@@ -1,24 +1,16 @@
+#![cfg(feature = "docker")]
+
 use axum::{
-    extract::Path,
-    http::StatusCode,
+    extract::{Path, Query},
     response::sse::{Event, KeepAlive, Sse},
-    Json,
 };
-use axum::extract::Query;
-use futures_util::stream::Stream;
+use futures_util::stream::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 
-use crate::{
-    routes::extractors::Claims,
-    services::docker,
-};
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ResponseBody {
-    Error(String),
-}
+use crate::error::{AppError, AppResult};
+use crate::routes::extractors::Claims;
+use crate::services::docker;
 
 /// Query params for stream logs
 #[derive(Debug, Deserialize, Serialize)]
@@ -26,41 +18,21 @@ pub struct StreamLogsQuery {
     pub tail: Option<usize>,
 }
 
-/// GET /sse/docker/containers/{id}/logs/stream - Stream container logs via SSE
+/// GET /sse/docker/containers/{id}/logs/stream — stream container logs via SSE.
 pub async fn stream_logs(
     _claims: Claims,
     Path(container_id): Path<String>,
     Query(params): Query<StreamLogsQuery>,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<ResponseBody>)> {
-    use futures_util::StreamExt;
-
+) -> AppResult<Sse<impl Stream<Item = Result<Event, Infallible>>>> {
     if !docker::is_docker_available().await {
-        return Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ResponseBody::Error("Docker is not available".to_string())),
-        ));
+        return Err(AppError::DockerUnavailable("daemon unreachable".to_string()));
     }
 
-    let log_stream = docker::stream_container_logs(container_id, params.tail)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ResponseBody::Error(e.to_string())),
-            )
-        })?;
+    let log_stream = docker::stream_container_logs(container_id, params.tail).await?;
 
-    // Map log stream to SSE events
-    let sse_stream = log_stream.map(|result| {
-        match result {
-            Ok(log_line) => Ok(Event::default().data(log_line)),
-            Err(e) => {
-                // On error, send an error event and continue
-                Ok(Event::default()
-                    .event("error")
-                    .data(format!("Error: {}", e)))
-            }
-        }
+    let sse_stream = log_stream.map(|result| match result {
+        Ok(log_line) => Ok(Event::default().data(log_line)),
+        Err(e) => Ok(Event::default().event("error").data(format!("Error: {}", e))),
     });
 
     Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))

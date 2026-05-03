@@ -1,0 +1,22 @@
+meta {
+  name: Disable Timer
+  type: http
+  seq: 3
+}
+
+put {
+  url: {{baseUrl}}/timers/{{service_name}}/disable
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Disable a systemd timer unit from running at boot (systemctl disable).
+
+  Parameters:
+    service_name — timer name with or without suffix: "logrotate" or "logrotate.timer"
+}

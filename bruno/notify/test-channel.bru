@@ -1,0 +1,22 @@
+meta {
+  name: Test Channel
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/notifications/channels/{{channel_id}}/test
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Send a test notification through the channel.
+
+  Response: { "delivered": 1 } on success, { "delivered": 0 } if the
+  send failed (check server logs for the underlying error).
+}

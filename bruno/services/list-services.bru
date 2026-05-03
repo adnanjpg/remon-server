@@ -1,0 +1,33 @@
+meta {
+  name: List Services
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/services
+  body: none
+  auth: bearer
+}
+
+params:query {
+  state: {{service_state}}
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  List all systemd service units.
+
+  Query:
+    state — optional filter: running | stopped | failed | starting | stopping | reloading | unknown
+            omit to return all services regardless of state
+
+  Response: { services: [ { name, description, state, raw_state, enabled_at_boot, backend } ] }
+
+  Failures:
+    401 UNAUTHORIZED   → no/expired token
+    501 NOT_SUPPORTED  → init system not yet implemented (OpenRC, Windows SCM)
+}

@@ -2,21 +2,18 @@ use config::{Config as ConfigBuilder, ConfigError, Environment, File};
 use serde::Deserialize;
 use std::env;
 
-pub mod defaults;
-pub mod runtime;
-
-pub use runtime::RuntimeConfig;
-
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub auth: AuthConfig,
     pub monitoring: MonitoringConfig,
-    pub grpc: GrpcConfig,
     pub logging: LoggingConfig,
-    pub fcm: FcmConfig,
+    #[serde(default)]
+    pub notifications: NotificationsConfig,
     pub docker: DockerConfig,
+    #[serde(default)]
+    pub cors: CorsConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -60,20 +57,10 @@ fn default_pairing_code_ttl() -> u64 {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct MonitoringConfig {
-    pub update_interval_ms: u64,
-    pub enable_notifications: bool,
-    /// Minimum interval between sending threshold exceeded notifications (in seconds)
-    pub notification_interval_seconds: u64,
     /// Minimum log level to persist to database: "error", "warn", "info", "debug", "trace"
     pub log_insertion_level: String,
     /// Application name used in logs
     pub app_name: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct GrpcConfig {
-    pub address: String,
-    pub enable_reflection: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -82,16 +69,73 @@ pub struct LoggingConfig {
     pub format: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct FcmConfig {
-    pub credentials_path: String,
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct NotificationsConfig {
+    #[serde(default)]
+    pub fcm: FcmCredentials,
+    #[serde(default)]
+    pub telegram: TelegramCredentials,
+    #[serde(default)]
+    pub ntfy: NtfyCredentials,
+    #[serde(default)]
+    pub webhook: WebhookCredentials,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct FcmCredentials {
+    /// Path to the Firebase service account JSON file.
+    #[serde(default)]
+    pub service_account_path: String,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct TelegramCredentials {
+    /// Telegram Bot API token (from @BotFather).
+    #[serde(default)]
+    pub bot_token: String,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct NtfyCredentials {
+    /// Optional Bearer token for authenticated ntfy servers.
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct WebhookCredentials {
+    /// Optional secret sent as `Authorization: Bearer <secret>`.
+    #[serde(default)]
+    pub secret: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct DockerConfig {
-    pub enabled: bool,
     pub socket_path: String,
-    pub check_interval_ms: u64,
+    /// Master kill-switch for the WebSocket /docker/.../exec endpoint.
+    /// When false the upgrade refuses with 503 — handy for production where
+    /// exec is operationally too risky regardless of token possession.
+    #[serde(default = "default_true")]
+    pub exec_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// CORS policy.
+///
+/// `allow_any_origin = true` is fine for local development (browser running
+/// on localhost:5173 hitting the API on localhost:8080). For production,
+/// flip it to false and put the real frontend origin(s) in
+/// `allowed_origins` — wildcard with credentialed requests would be a
+/// browser-rejected misconfiguration anyway.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct CorsConfig {
+    #[serde(default)]
+    pub allow_any_origin: bool,
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
 }
 
 impl Config {

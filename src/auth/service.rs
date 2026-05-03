@@ -4,11 +4,28 @@ use argon2::{
     Argon2,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
-use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use crate::config::AuthConfig;
+
+/// Build the strict validation profile used for both access and refresh tokens.
+///
+/// - Locks the algorithm to HS256 (refuses the `alg=none` confusion attack).
+/// - Requires `exp`, `sub`, and `iat` claims to be present.
+/// - Audience validation is left off because we don't issue an `aud` claim yet;
+///   if/when we add one, set `validate_aud = true` and `set_audience` here.
+fn strict_validation() -> Validation {
+    let mut v = Validation::new(Algorithm::HS256);
+    v.validate_exp = true;
+    v.validate_aud = false;
+    v.required_spec_claims = HashSet::from_iter(
+        ["exp", "sub", "iat"].iter().map(|s| s.to_string()),
+    );
+    v
+}
 
 /// Access token claims (short-lived)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,12 +57,22 @@ pub struct RefreshTokenClaims {
     pub typ: String,
 }
 
-/// Login response with access and refresh tokens
+/// Result of issuing a new access+refresh pair. Also exposes both jti's and
+/// their expiry timestamps so the caller can persist them in the `sessions`
+/// table for revocation tracking.
 #[derive(Debug, Serialize)]
-pub struct LoginResponse {
+pub struct CreatedTokens {
     pub access_token: String,
     pub refresh_token: String,
     pub expires_in: u64,
+    #[serde(skip)]
+    pub access_jti: String,
+    #[serde(skip)]
+    pub access_expires_at: i64,
+    #[serde(skip)]
+    pub refresh_jti: String,
+    #[serde(skip)]
+    pub refresh_expires_at: i64,
 }
 
 /// Auth service for token generation and validation
@@ -58,15 +85,17 @@ impl AuthService {
         Self { config }
     }
 
-    /// Generate a 6-digit pairing code
+    /// Generate an 8-digit pairing code (~26-bit entropy).
+    /// Combined with `PAIRING_MAX_ATTEMPTS` and the TTL window this is well
+    /// out of online brute-force range.
     pub fn generate_pairing_code() -> String {
-        format!("{:06}", rand::rng().random_range(0..1000000))
+        format!("{:08}", rand::random_range(0..100_000_000u32))
     }
 
     /// Generate a secure device token (64 hex characters)
     pub fn generate_device_token() -> String {
         let mut bytes = [0u8; 32];
-        rand::rng().fill(&mut bytes);
+        rand::rng().fill_bytes(&mut bytes);
         hex::encode(bytes)
     }
 
@@ -96,62 +125,66 @@ impl AuthService {
 
     // ==================== JWT Token Management ====================
 
-    /// Create access and refresh tokens for a device
+    /// Issue a new access+refresh pair for a device. The caller is expected
+    /// to persist both jti's into the `sessions` table so middleware can
+    /// reject revoked tokens.
     pub fn create_tokens(
         &self,
         device_id: &str,
-    ) -> Result<LoginResponse, jsonwebtoken::errors::Error> {
+    ) -> Result<CreatedTokens, jsonwebtoken::errors::Error> {
         let now = chrono::Utc::now().timestamp();
 
-        // Access token (short-lived)
+        let access_jti = uuid::Uuid::new_v4().to_string();
+        let access_exp = now + self.config.access_token_ttl_secs as i64;
         let access_claims = AccessTokenClaims {
             sub: device_id.to_string(),
-            exp: now + self.config.access_token_ttl_secs as i64,
+            exp: access_exp,
             iat: now,
-            jti: uuid::Uuid::new_v4().to_string(),
+            jti: access_jti.clone(),
             typ: "access".to_string(),
         };
-
         let access_token = encode(
             &Header::default(),
             &access_claims,
             &EncodingKey::from_secret(self.config.jwt_secret.as_bytes()),
         )?;
 
-        // Refresh token (long-lived)
+        let refresh_jti = uuid::Uuid::new_v4().to_string();
+        let refresh_exp = now + self.config.refresh_token_ttl_secs as i64;
         let refresh_claims = RefreshTokenClaims {
             sub: device_id.to_string(),
-            exp: now + self.config.refresh_token_ttl_secs as i64,
+            exp: refresh_exp,
             iat: now,
-            jti: uuid::Uuid::new_v4().to_string(),
+            jti: refresh_jti.clone(),
             typ: "refresh".to_string(),
         };
-
         let refresh_token = encode(
             &Header::default(),
             &refresh_claims,
             &EncodingKey::from_secret(self.config.jwt_secret.as_bytes()),
         )?;
 
-        Ok(LoginResponse {
+        Ok(CreatedTokens {
             access_token,
             refresh_token,
             expires_in: self.config.access_token_ttl_secs,
+            access_jti,
+            access_expires_at: access_exp,
+            refresh_jti,
+            refresh_expires_at: refresh_exp,
         })
     }
 
-    /// Validate access token and return claims
+    /// Validate an access token. Verifies HS256 signature, expiry, required
+    /// claims, and that `typ == "access"`.
     pub fn validate_access_token(
         &self,
         token: &str,
     ) -> Result<AccessTokenClaims, jsonwebtoken::errors::Error> {
-        let mut validation = Validation::default();
-        validation.validate_exp = true;
-
         let data = decode::<AccessTokenClaims>(
             token,
             &DecodingKey::from_secret(self.config.jwt_secret.as_bytes()),
-            &validation,
+            &strict_validation(),
         )?;
 
         if data.claims.typ != "access" {
@@ -163,18 +196,16 @@ impl AuthService {
         Ok(data.claims)
     }
 
-    /// Validate refresh token and return claims
+    /// Validate a refresh token. Same checks as `validate_access_token` but
+    /// requires `typ == "refresh"`.
     pub fn validate_refresh_token(
         &self,
         token: &str,
     ) -> Result<RefreshTokenClaims, jsonwebtoken::errors::Error> {
-        let mut validation = Validation::default();
-        validation.validate_exp = true;
-
         let data = decode::<RefreshTokenClaims>(
             token,
             &DecodingKey::from_secret(self.config.jwt_secret.as_bytes()),
-            &validation,
+            &strict_validation(),
         )?;
 
         if data.claims.typ != "refresh" {

@@ -1,0 +1,63 @@
+meta {
+  name: System info
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/system/info
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Local host description + hardware inventory.
+
+  Response shape:
+    {
+      "host_id": 1,
+      "description": {
+        "hostname": "...",
+        "os": "...",
+        "os_version": "...",
+        "kernel": "...",
+        "uptime_secs": 12345
+      },
+      "hardware": {
+        "cpu_model": "...",
+        "cpu_cores":   <physical>,
+        "cpu_threads": <logical>,
+        "total_memory_bytes": <u64>,
+        "disks": [
+          { "device_name", "mount_point", "fs_type", "total_bytes", "is_removable" }
+        ],
+        "network_interfaces": [
+          { "name", "mac_address", "ip_addresses", "is_virtual" }
+        ]
+      }
+    }
+
+  Caching:
+  - `description` is computed fresh on every call — `uptime_secs` is volatile,
+    the other four fields are static but the underlying syscalls are cheap.
+  - `hardware` is a snapshot taken once at server startup. Hot-plug events
+    (USB disk, new NIC) require a server restart to be reflected. If the
+    UI panel drives critical decisions off this data, surface a "captured at
+    boot" hint near the disk / NIC list.
+
+  Cross-platform notes:
+  - `network_interfaces[].ip_addresses` is always `[]` today — sysinfo does
+    not surface interface IPs. The field is in the shape so a later
+    enrichment can land without breaking clients.
+  - `is_virtual` is a name-prefix heuristic (`veth`, `docker`, `br-`); it
+    will mark some bridges and miss others. Treat as "probably synthetic"
+    rather than authoritative.
+  - `cpu_cores` is the *physical* core count from sysinfo; on hyperthreaded
+    Intel/AMD parts, `cpu_threads` will be higher.
+  - On Windows, `os_version` and `kernel` strings come from the WMI bridge
+    and can read awkwardly ("10.0.26100" vs "Windows 11 IoT Enterprise").
+}

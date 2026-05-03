@@ -11,15 +11,22 @@ post {
 }
 
 docs {
-  Start device pairing process.
-  
-  A 6-digit pairing code will be displayed in the SERVER TERMINAL (not in API response).
-  This is a security feature - you need physical access to see the code.
-  
-  Response: { "message": "Pairing code displayed in server terminal", "expires_at": 1234567890 }
-  
-  Steps:
-  1. Call this endpoint
-  2. Look at the server terminal for the 6-digit code
-  3. Use this code in "Pair Complete" request within 5 minutes
+  Start a device pairing window. The 8-digit pairing code is printed only to
+  the SERVER TERMINAL — never returned in the API response — so completing the
+  pairing requires physical (or terminal) access to the host.
+
+  Response:
+    200 { "message": "...", "expires_at": <unix-secs> }
+    409 ALREADY_EXISTS  → an unexpired pairing window is already active.
+                         Wait for it to expire or finish that one first.
+
+  Notes:
+    - Window TTL: 5 minutes (configurable via `auth.pairing_code_ttl_secs`).
+    - This endpoint is rate-limited per IP together with /auth/pair/complete,
+      /auth/login, /auth/refresh: burst 5, replenish ~1/12s. Exceeding the
+      bucket returns 429 (plain text from tower_governor).
+    - Workflow:
+        1. POST /auth/pair/initiate
+        2. Read the 8-digit code printed in the server terminal
+        3. POST /auth/pair/complete with the code (within 5 min)
 }

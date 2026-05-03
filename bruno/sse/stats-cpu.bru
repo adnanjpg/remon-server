@@ -1,0 +1,22 @@
+meta {
+  name: Stream CPU Stats
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/sse/stats/cpu
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  CPU-only filter on the unified stats broadcast. Emits one event per stats
+  tick (~2s by default).
+
+  Body (per event): the CpuStats payload from src/models/stats.rs.
+}

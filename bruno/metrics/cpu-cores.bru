@@ -1,0 +1,33 @@
+meta {
+  name: CPU Cores History (raw only)
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/metrics/cpu/cores?start={{metrics_start}}&end={{metrics_end}}&limit={{metrics_limit}}
+  body: none
+  auth: bearer
+}
+
+params:query {
+  ~start: {{metrics_start}}
+  ~end: {{metrics_end}}
+  ~limit: {{metrics_limit}}
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Per-core CPU breakdown. Always served at `raw` resolution because the
+  per-core dimension is intentionally not rolled up — aggregates over time
+  use the host-level /metrics/cpu endpoint.
+
+  `points` are ordered by (timestamp ASC, core_index ASC), so for a 4-core
+  machine you see 4 consecutive rows per timestamp.
+
+  Useful spans: last 30-60 minutes; raw retention is 24h by default
+  (`retention_policy.cpu_cores.raw.keep_seconds`).
+}

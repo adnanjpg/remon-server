@@ -1,0 +1,19 @@
+meta {
+  name: Delete Channel
+  type: http
+  seq: 4
+}
+
+delete {
+  url: {{baseUrl}}/notifications/channels/{{channel_id}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Delete a channel. 204 No Content on success.
+}

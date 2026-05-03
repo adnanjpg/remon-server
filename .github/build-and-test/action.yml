@@ -1,11 +1,10 @@
-# a composite action, as described here:
-# https://docs.github.com/en/actions/creating-actions/creating-a-composite-action
 name: "Build and test app"
 description: "Build and test app on different platforms"
 runs:
   using: "composite"
   steps:
     - uses: actions/checkout@v4
+
     - name: ⚡ Cache
       uses: actions/cache@v4
       with:
@@ -15,46 +14,17 @@ runs:
           target
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-    - uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        
-    - name: 📦 Install protoc
-      shell: bash
-      run: |
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            sudo apt-get install -y protobuf-compiler
-          elif [ "${{ runner.os }}" = "macOS" ]; then
-            brew install protobuf
-          elif [ "${{ runner.os }}" = "Windows" ]; then
-            choco install protoc
-          else
-            echo "Unsupported OS"
-            exit 1
-          fi
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
 
     - name: 🔨 Build
+      shell: bash
       env:
-        # Required for JWT validation in production builds
         REMON__AUTH__JWT_SECRET: "ci-test-secret-minimum-32-characters-long-12345678"
-      uses: actions-rs/cargo@v1
-      with:
-        command: build
-        args: --release --all-features
+      run: cargo build --release --all-features
 
     - name: 🔎 Test
+      shell: bash
       env:
-        # Required for JWT validation in production builds
         REMON__AUTH__JWT_SECRET: "ci-test-secret-minimum-32-characters-long-12345678"
-      uses: actions-rs/cargo@v1
-      with:
-        command: test
-        args: --release
-
-    # https://stackoverflow.com/a/64702025/12555423
-    # these will be used once we add integration tests
-    # - name: ⚙ Integration test
-    #   uses: actions-rs/cargo@v1
-    #   with:
-    #     command: test
-    #     args: --release --features "integration_tests"
+      run: cargo test --release

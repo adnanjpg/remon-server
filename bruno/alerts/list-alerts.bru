@@ -1,0 +1,36 @@
+meta {
+  name: List Alert Rules
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/alerts
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  List every alert rule (enabled or not).
+
+  Each rule:
+    { id, name, description, enabled, expression, severity,
+      for_duration_secs, eval_interval_secs, cooldown_secs,
+      created_at, updated_at }
+
+  Expression grammar:
+    `<ns>.<field>{<labels>} <cmp> <number>`
+    namespaces: cpu | memory | disk | network | pressure | components | probe
+    comparators: > >= < <= == !=
+
+  Examples:
+    cpu.usage_percent > 80
+    memory.swap_in_pages_per_sec > 0
+    disk.used_bytes{mount_point="/"} > 1073741824
+    pressure.some_avg10{resource="memory"} > 5.0
+    probe.free_pct{probe_name="disk-free-root"} < 10
+}

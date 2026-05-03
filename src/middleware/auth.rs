@@ -1,48 +1,69 @@
 //! Authentication middleware
 
-use axum::{extract::Request, http::StatusCode, middleware::Next, response::Response};
+use axum::{
+    extract::{Request, State},
+    middleware::Next,
+    response::Response,
+};
+use std::sync::Arc;
 
 use crate::auth::service::AuthService;
-use crate::config::Config;
+use crate::error::AppError;
 use crate::routes::extractors::Claims;
+use crate::state::AppState;
+use crate::storage::repositories::DeviceRepository;
 
-/// Auth middleware that validates JWT access tokens
-/// Supports both new access tokens and legacy tokens for backward compatibility
-pub async fn auth_middleware(mut req: Request, next: Next) -> Result<Response, StatusCode> {
-    let auth_header = req
+/// Validates the JWT access token, checks that its jti is still in the
+/// `sessions` table (not revoked via logout or refresh-rotation), and
+/// injects `Claims` into request extensions.
+///
+/// Token sources, in order of preference:
+/// 1. `Authorization: Bearer <jwt>` — the canonical path; used by every
+///    non-browser client (mobile app, curl, Bruno).
+/// 2. `?access_token=<jwt>` — fallback for browser-driven SSE/WS, since
+///    `EventSource` and `new WebSocket(...)` cannot send custom headers.
+///    The token is redacted from request span URIs by the trace layer
+///    in `main.rs` so it doesn't bleed into stdout/journald logs.
+pub async fn auth_middleware(
+    State(state): State<Arc<AppState>>,
+    mut req: Request,
+    next: Next,
+) -> Result<Response, AppError> {
+    let token = extract_token(&req).ok_or(AppError::Unauthorized)?;
+
+    let auth_service = AuthService::new(state.auth_config.clone());
+    let claims = auth_service
+        .validate_access_token(&token)
+        .map_err(|_| AppError::InvalidToken)?;
+
+    let device_repo = DeviceRepository::new(state.db.clone());
+    if !device_repo.session_exists(&claims.jti).await? {
+        return Err(AppError::InvalidToken);
+    }
+
+    req.extensions_mut().insert(Claims {
+        device_id: claims.sub,
+        jti: claims.jti,
+    });
+
+    Ok(next.run(req).await)
+}
+
+fn extract_token(req: &Request) -> Option<String> {
+    if let Some(token) = req
         .headers()
         .get("authorization")
         .and_then(|h| h.to_str().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+        .and_then(|s| s.strip_prefix("Bearer "))
+    {
+        return Some(token.to_string());
+    }
 
-    // Extract Bearer token
-    let token = if auth_header.starts_with("Bearer ") {
-        &auth_header[7..]
-    } else {
-        return Err(StatusCode::UNAUTHORIZED);
-    };
-
-    // Load config for auth settings
-    let config = Config::new().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let auth_service = AuthService::new(config.auth);
-
-    // Try new access token validation first
-    let device_id = match auth_service.validate_access_token(token) {
-        Ok(claims) => {
-            // Token is valid - device was verified at login time
-            // Note: We skip device re-validation here for performance
-            // Device status is checked on login and token refresh
-            claims.sub
-        }
-        Err(_) => {
-            // Fallback to legacy token validation for backward compatibility
-            crate::auth::token::validate_token(auth_header)
-                .await
-                .map_err(|_| StatusCode::UNAUTHORIZED)?
-        }
-    };
-
-    req.extensions_mut().insert(Claims { device_id });
-
-    Ok(next.run(req).await)
+    // Fallback: ?access_token=<jwt> — only browsers should rely on this.
+    req.uri().query().and_then(|q| {
+        q.split('&').find_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            (k == "access_token").then(|| v.to_string())
+        })
+    })
 }

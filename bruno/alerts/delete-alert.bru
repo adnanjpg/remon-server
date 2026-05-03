@@ -1,0 +1,23 @@
+meta {
+  name: Delete Alert Rule
+  type: http
+  seq: 5
+}
+
+delete {
+  url: {{baseUrl}}/alerts/{{alert_id}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Returns 204 No Content on success. ON DELETE CASCADE on `alert_history`
+  removes the rule's fire history along with it.
+
+  Errors:
+    404 NOT_FOUND
+}

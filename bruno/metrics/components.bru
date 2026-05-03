@@ -1,0 +1,41 @@
+meta {
+  name: Components (sensors)
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/metrics/components?start={{metrics_start}}&end={{metrics_end}}&resolution={{metrics_resolution}}&limit={{metrics_limit}}
+  body: none
+  auth: bearer
+}
+
+params:query {
+  ~start: {{metrics_start}}
+  ~end: {{metrics_end}}
+  ~resolution: {{metrics_resolution}}
+  ~limit: {{metrics_limit}}
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Hardware sensor history (sysinfo `Components` API). Each point is a
+  `(timestamp, label)` pair; group client-side by `label` to draw a line
+  per sensor. `temperature_c`, `max_c`, `critical_c` may be null when
+  the OS lists a sensor without a current reading.
+
+  Coverage:
+  - Linux: lm-sensors / hwmon — typically Package id 0, per-core temps,
+    NVMe Composite, GPU 0 / amdgpu, etc.
+  - macOS: IOKit smart sensors — varies by Mac model
+  - Windows: sysinfo's WMI bridge is limited; many machines (especially
+    desktops without a temp-aware ACPI table) return zero sensors. The
+    response is `points: []`, not an error — UI should treat the panel
+    as "no data" rather than "broken".
+
+  When a sensor reports `critical_c`, alerts should fire well below it —
+  thermal throttling already kicks in before the manufacturer's number.
+}

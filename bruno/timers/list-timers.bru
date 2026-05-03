@@ -1,0 +1,29 @@
+meta {
+  name: List Timers
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/timers
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  List all systemd timer units.
+
+  Response: { timers: [ { name, service, description, state, raw_state, enabled_at_boot } ] }
+
+  Where:
+    name    — timer unit name, e.g. "logrotate.timer"
+    service — associated service, e.g. "logrotate.service"
+    state   — normalized: running | stopped | failed | unknown
+
+  Failures:
+    501 NOT_SUPPORTED — non-systemd platform (OpenRC, Windows use cron/Task Scheduler instead)
+}

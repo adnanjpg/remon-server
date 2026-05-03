@@ -5,7 +5,7 @@ meta {
 }
 
 get {
-  url: {{baseUrl}}/ws/docker/containers/:id/exec
+  url: {{baseUrl}}/ws/docker/containers/{{container_id}}/exec
   body: none
   auth: bearer
 }
@@ -14,17 +14,33 @@ auth:bearer {
   token: {{jwt_token}}
 }
 
-params:path {
-  id: container-id-here
-}
-
 docs {
-  Interactive container shell via WebSocket.
-  
-  Note: Bruno doesn't support WebSocket. Use wscat:
-  
-  ```bash
-  wscat -c "ws://localhost:8080/ws/docker/containers/CONTAINER_ID/exec" \
-    -H "Authorization: Bearer $JWT_TOKEN"
-  ```
+  Interactive container shell over WebSocket. The handler in
+  src/routes/ws/docker.rs spawns a `docker exec` and bridges its stdio
+  with the socket: client → exec stdin (text/binary frames), exec
+  stdout/stderr → client (text frames).
+
+  Bruno itself can't drive WS; use wscat:
+    wscat -c "ws://localhost:8080/ws/docker/containers/$CID/exec?cmd=ls" \
+      -H "Authorization: Bearer $JWT_TOKEN"
+
+  Query params:
+    cmd    — command line to run (default `/bin/sh`). Parsed with
+             shell-words, so quoted segments stay intact:
+               `cmd=sh -c "echo hi"` → argv ["sh", "-c", "echo hi"]
+             An unmatched quote or empty result yields 400 BAD_REQUEST.
+    tty    — bool, default false
+    stdin  — bool, default true
+
+  Hardening:
+    - max_message_size / max_frame_size capped at 64 KiB
+    - server-driven 30s ping; closes after 5 min without inbound activity
+    - master kill-switch via `docker.exec_enabled` in config (default true);
+      when false the upgrade is refused with 503
+
+  Known gap (tracked):
+    - No per-token scope check. Any device with a valid access token can
+      reach root-equivalent privilege inside any container — flip
+      `exec_enabled = false` in production unless interactive shells are
+      an explicit, audited workflow.
 }

@@ -1,0 +1,45 @@
+meta {
+  name: Probe Metric History
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/metrics/probe/{{probe_name}}/{{probe_metric_name}}?start={{metrics_start}}&end={{metrics_end}}&limit={{metrics_limit}}
+  body: none
+  auth: bearer
+}
+
+params:query {
+  ~start: {{metrics_start}}
+  ~end: {{metrics_end}}
+  ~limit: {{metrics_limit}}
+  ~labels: {{probe_metric_labels}}
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Time-series for one probe's one metric. Same shape as /metrics/cpu —
+  range query, optional labels filter, server-side limit cap.
+
+  Query:
+    start, end — Unix seconds. Default = last hour.
+    limit      — max points (default 1000, hard cap 5000).
+    labels     — canonical JSON (sorted keys, no whitespace) to filter
+                 to one labelled stream. Omit to return all label
+                 combinations and group client-side.
+
+  Response: {
+    probe_name, metric_name, resolution: "raw",
+    points: [ { timestamp, labels: {…}, value } ]
+  }
+
+  Notes:
+  - Only resolution=raw is supported in MVP. Rollup pipeline for probe
+    metrics will land in a follow-up; the parameter is reserved.
+  - Probe metrics also feed alert rules of metric_type='probe' — see
+    /alerts CRUD for declaring thresholds against these values.
+}

@@ -1,12 +1,45 @@
+#![cfg(feature = "docker")]
+
+use std::sync::OnceLock;
+
 use bollard::{
-    models::ContainerInspectResponse as BollardInspectResponse,
+    models::{ContainerInspectResponse as BollardInspectResponse, ContainerSummary, ImageSummary},
     query_parameters::{ListContainersOptions, LogsOptions, RemoveContainerOptions, RemoveImageOptions, StatsOptions},
-    secret::{ContainerSummary, ImageSummary},
     Docker,
 };
 use futures_util::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
+
+static DOCKER_SOCKET: OnceLock<String> = OnceLock::new();
+
+/// Call once at startup to configure the Docker socket path.
+/// If not called (or path is empty) falls back to `DOCKER_HOST` env var
+/// and then the platform default.
+pub fn set_socket_path(path: &str) {
+    let _ = DOCKER_SOCKET.set(path.to_string());
+}
+
+fn new_docker() -> Result<Docker, DockerError> {
+    let path = DOCKER_SOCKET.get().map(|s| s.as_str()).unwrap_or("");
+    if path.is_empty() {
+        Docker::connect_with_local_defaults()
+            .map_err(|e| DockerError::NotAvailable(e.to_string()))
+    } else {
+        #[cfg(unix)]
+        {
+            use bollard::API_DEFAULT_VERSION;
+            Docker::connect_with_unix(path, 120, API_DEFAULT_VERSION)
+                .map_err(|e| DockerError::NotAvailable(e.to_string()))
+        }
+        #[cfg(not(unix))]
+        {
+            // Windows uses named pipes; socket_path not applicable
+            Docker::connect_with_local_defaults()
+                .map_err(|e| DockerError::NotAvailable(e.to_string()))
+        }
+    }
+}
 
 /// Docker service error type
 #[derive(Debug, thiserror::Error)]
@@ -46,7 +79,7 @@ pub struct DockerVersionInfo {
 
 /// Check if Docker is available
 pub async fn is_docker_available() -> bool {
-    match Docker::connect_with_local_defaults() {
+    match new_docker() {
         Ok(docker) => docker.ping().await.is_ok(),
         Err(_) => false,
     }
@@ -54,8 +87,7 @@ pub async fn is_docker_available() -> bool {
 
 /// Get Docker version information
 pub async fn get_docker_version() -> Result<DockerVersionInfo, DockerError> {
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| DockerError::NotAvailable(e.to_string()))?;
+    let docker = new_docker()?;
 
     let version = docker.version().await?;
 
@@ -70,8 +102,7 @@ pub async fn get_docker_version() -> Result<DockerVersionInfo, DockerError> {
 
 /// List all containers
 pub async fn list_containers() -> Result<Vec<ContainerSummary>, DockerError> {
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| DockerError::NotAvailable(e.to_string()))?;
+    let docker = new_docker()?;
 
     let options = Some(ListContainersOptions {
         all: true,
@@ -84,8 +115,7 @@ pub async fn list_containers() -> Result<Vec<ContainerSummary>, DockerError> {
 
 /// Start a container
 pub async fn start_container(container_id: &str) -> Result<(), DockerError> {
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| DockerError::NotAvailable(e.to_string()))?;
+    let docker = new_docker()?;
 
     docker
         .start_container(container_id, None)
@@ -96,8 +126,7 @@ pub async fn start_container(container_id: &str) -> Result<(), DockerError> {
 
 /// Stop a container
 pub async fn stop_container(container_id: &str) -> Result<(), DockerError> {
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| DockerError::NotAvailable(e.to_string()))?;
+    let docker = new_docker()?;
 
     docker.stop_container(container_id, None).await?;
     Ok(())
@@ -105,8 +134,7 @@ pub async fn stop_container(container_id: &str) -> Result<(), DockerError> {
 
 /// Restart a container
 pub async fn restart_container(container_id: &str) -> Result<(), DockerError> {
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| DockerError::NotAvailable(e.to_string()))?;
+    let docker = new_docker()?;
 
     docker.restart_container(container_id, None).await?;
     Ok(())
@@ -114,8 +142,7 @@ pub async fn restart_container(container_id: &str) -> Result<(), DockerError> {
 
 /// Pause a container
 pub async fn pause_container(container_id: &str) -> Result<(), DockerError> {
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| DockerError::NotAvailable(e.to_string()))?;
+    let docker = new_docker()?;
 
     docker.pause_container(container_id).await?;
     Ok(())
@@ -123,8 +150,7 @@ pub async fn pause_container(container_id: &str) -> Result<(), DockerError> {
 
 /// Unpause a container
 pub async fn unpause_container(container_id: &str) -> Result<(), DockerError> {
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| DockerError::NotAvailable(e.to_string()))?;
+    let docker = new_docker()?;
 
     docker.unpause_container(container_id).await?;
     Ok(())
@@ -132,8 +158,7 @@ pub async fn unpause_container(container_id: &str) -> Result<(), DockerError> {
 
 /// Delete a container
 pub async fn delete_container(container_id: &str, force: bool) -> Result<(), DockerError> {
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| DockerError::NotAvailable(e.to_string()))?;
+    let docker = new_docker()?;
 
     let options = Some(RemoveContainerOptions {
         force,
@@ -148,8 +173,7 @@ pub async fn delete_container(container_id: &str, force: bool) -> Result<(), Doc
 pub async fn get_container_inspect(
     container_id: &str,
 ) -> Result<BollardInspectResponse, DockerError> {
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| DockerError::NotAvailable(e.to_string()))?;
+    let docker = new_docker()?;
 
     let container = docker
         .inspect_container(container_id, None)
@@ -164,8 +188,7 @@ pub async fn get_container_logs(
     tail: Option<usize>,
     since: Option<i64>,
 ) -> Result<Vec<String>, DockerError> {
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| DockerError::NotAvailable(e.to_string()))?;
+    let docker = new_docker()?;
 
     let options = Some(LogsOptions {
         stdout: true,
@@ -193,8 +216,7 @@ pub async fn stream_container_logs(
     container_id: String,
     tail: Option<usize>,
 ) -> Result<Pin<Box<dyn Stream<Item = Result<String, DockerError>> + Send>>, DockerError> {
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| DockerError::NotAvailable(e.to_string()))?;
+    let docker = new_docker()?;
 
     let options = Some(LogsOptions {
         follow: true,
@@ -217,8 +239,7 @@ pub async fn stream_container_logs(
 
 /// Get real-time container stats (single snapshot)
 pub async fn get_container_stats(container_id: &str) -> Result<serde_json::Value, DockerError> {
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| DockerError::NotAvailable(e.to_string()))?;
+    let docker = new_docker()?;
 
     let options = Some(StatsOptions {
         stream: false,
@@ -243,8 +264,7 @@ pub struct PruneResult {
 }
 
 pub async fn prune_containers() -> Result<PruneResult, DockerError> {
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| DockerError::NotAvailable(e.to_string()))?;
+    let docker = new_docker()?;
 
     let result = docker.prune_containers(None).await?;
 
@@ -256,8 +276,7 @@ pub async fn prune_containers() -> Result<PruneResult, DockerError> {
 
 /// List all images
 pub async fn list_images() -> Result<Vec<ImageSummary>, DockerError> {
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| DockerError::NotAvailable(e.to_string()))?;
+    let docker = new_docker()?;
 
     use bollard::query_parameters::ListImagesOptions as LOpts;
     let images = docker.list_images(Some(LOpts::default())).await?;
@@ -266,8 +285,7 @@ pub async fn list_images() -> Result<Vec<ImageSummary>, DockerError> {
 
 /// Delete an image
 pub async fn delete_image(image_id: &str, force: bool) -> Result<(), DockerError> {
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| DockerError::NotAvailable(e.to_string()))?;
+    let docker = new_docker()?;
 
     let options = Some(RemoveImageOptions {
         force,
@@ -280,8 +298,7 @@ pub async fn delete_image(image_id: &str, force: bool) -> Result<(), DockerError
 
 /// Prune unused images
 pub async fn prune_images() -> Result<PruneResult, DockerError> {
-    let docker = Docker::connect_with_local_defaults()
-        .map_err(|e| DockerError::NotAvailable(e.to_string()))?;
+    let docker = new_docker()?;
 
     use bollard::query_parameters::PruneImagesOptions as POpts;
     let result = docker.prune_images(Some(POpts::default())).await?;

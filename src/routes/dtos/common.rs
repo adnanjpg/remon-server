@@ -1,9 +1,12 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ResponseBody {
-    Success(bool),
-    Error(String),
-    Token(String),
+/// Generic empty success body. Prefer returning `StatusCode::NO_CONTENT` when
+/// the response truly has no payload; use this when a JSON body is required.
+#[derive(Debug, Serialize)]
+pub struct SuccessResponse {
+    pub success: bool,
+}
+
+impl SuccessResponse {
+    pub const OK: Self = Self { success: true };
 }

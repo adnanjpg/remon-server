@@ -1,0 +1,31 @@
+meta {
+  name: Update FCM Token
+  type: http
+  seq: 1
+}
+
+patch {
+  url: {{baseUrl}}/me/fcm-token
+  body: json
+  auth: bearer
+}
+
+body:json {
+  {
+    "fcm_token": "{{fcm_token}}"
+  }
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Register (or clear) the FCM push target for the calling device. Until
+  this is set, the alert evaluator's fan-out finds no targets and pushes
+  go nowhere — the rule still fires into `alert_history` but `notified=0`.
+
+  To clear the registration, send `{"fcm_token": null}` (or "").
+
+  Returns 204 No Content.
+}

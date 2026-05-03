@@ -1,0 +1,32 @@
+meta {
+  name: Active Alert State
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/alerts/state
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  What's currently in `pending` or `firing` state.
+
+  Response: { states: [AlertStateDto, ...] } where each entry carries
+    rule_id, rule_name, severity, label_set, state, state_since,
+    last_value, last_eval_at, last_notified_at.
+
+  Use this for the "active alerts" widget on a dashboard.
+  - `state="firing"`  → the rule has fired and (probably) notified.
+  - `state="pending"` → violation observed, but `for_duration_secs`
+                       hasn't elapsed yet. Invisible to the operator
+                       in most UIs; useful for "about to alert" badges.
+
+  `label_set` is canonical JSON. For host-level metrics like cpu/memory
+  it's `"{}"`; for keyed ones it's e.g. `{"mount_point":"/"}`.
+}

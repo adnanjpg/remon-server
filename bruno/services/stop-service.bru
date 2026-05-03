@@ -1,0 +1,26 @@
+meta {
+  name: Stop Service
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/services/{{service_name}}/stop
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Stop a running service unit (systemctl stop).
+
+  Parameters:
+    service_name — "nginx" or "nginx.service"
+
+  Failures:
+    403 FORBIDDEN  → insufficient privileges
+    404 NOT_FOUND  → unit not found
+}

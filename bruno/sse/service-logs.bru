@@ -1,0 +1,34 @@
+meta {
+  name: Stream Service Logs
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/sse/services/{{service_name}}/logs?tail={{tail}}
+  body: none
+  auth: bearer
+}
+
+params:query {
+  tail: {{tail}}
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Live journalctl log stream for a service unit via SSE. Linux/systemd only.
+
+  Query:
+    tail — historical lines to replay before following (default 50)
+
+  Failures:
+    501 NOT_SUPPORTED  → non-systemd platform
+    404 NOT_FOUND      → unit not found
+
+  For sustained streaming use curl:
+    curl -N -H "Authorization: Bearer $JWT" \
+      "http://localhost:8080/sse/services/nginx.service/logs?tail=100"
+}

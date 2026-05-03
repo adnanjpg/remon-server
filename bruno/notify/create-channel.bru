@@ -1,0 +1,51 @@
+meta {
+  name: Create Channel
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/notifications/channels
+  body: json
+  auth: bearer
+}
+
+body:json {
+  {
+    "name": "my-telegram",
+    "type": "telegram",
+    "enabled": true,
+    "config": {
+      "bot_token": "...",
+      "chat_id": "..."
+    },
+    "min_severity": "warn"
+  }
+}
+
+script:post-response {
+  const body = res.getBody();
+  if (body && body.id) {
+    bru.setEnvVar("channel_id", body.id);
+  }
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Create a notification channel.
+
+  type: "fcm" | "telegram" | "ntfy" | "webhook"
+
+  config shapes:
+    fcm:      {}  (no per-channel config — uses server-side service account)
+    telegram: { "bot_token": "...", "chat_id": "..." }
+    ntfy:     { "server": "https://ntfy.sh", "topic": "..." }
+    webhook:  { "url": "https://..." }
+
+  min_severity: "warn" | "crit" — omit to receive all alerts.
+
+  201 Created → body is the channel object; id saved to channel_id env var.
+}

@@ -13,39 +13,64 @@ max_connections = 1
 
 [auth]
 # JWT secret - should be overridden in production via environment variable
-jwt_secret = "d3f4ult"
+jwt_secret = "change-me"
+
+# Token TTLs — uncomment to override defaults
+# access_token_ttl_secs  = 3600      # 1 hour
+# refresh_token_ttl_secs = 2592000   # 30 days
+# pairing_code_ttl_secs  = 300       # 5 minutes
 
 [monitoring]
-# System monitoring intervals and thresholds
-update_interval_ms = 5000
-enable_notifications = true
-# Minimum interval between sending threshold exceeded notifications (in seconds)
-notification_interval_seconds = 300
 # Minimum log level to persist to database: "error", "warn", "info", "debug", "trace"
 log_insertion_level = "warn"
 # Application name used in logs
 app_name = "remon"
-
-[grpc]
-# gRPC server settings
-address = "127.0.0.1:50051"
-enable_reflection = true
 
 [logging]
 # Application logging configuration
 level = "info"
 format = "compact"
 
-[fcm]
-# Firebase Cloud Messaging settings
-credentials_path = "./.remon-mobile-fcm-creds.json"
+# ── Notification channel credentials ────────────────────────────────────────
+# Sensitive values — override via environment variables in production:
+#   REMON__NOTIFICATIONS__FCM__SERVICE_ACCOUNT_PATH
+#   REMON__NOTIFICATIONS__TELEGRAM__BOT_TOKEN
+#   REMON__NOTIFICATIONS__NTFY__TOKEN
+#   REMON__NOTIFICATIONS__WEBHOOK__SECRET
+#
+# Channel targets (chat_id, topic, url) are managed via
+# POST /notifications/channels — never stored here.
+
+[notifications.fcm]
+service_account_path = ""
+
+[notifications.telegram]
+bot_token = ""
+
+[notifications.ntfy]
+# token = ""  # uncomment if your ntfy server requires auth
+
+[notifications.webhook]
+# secret = ""  # uncomment to send Authorization: Bearer <secret>
+
+[cors]
+# Allowed origins for browser clients.
+#
+# `allow_any_origin = true` mirrors `Access-Control-Allow-Origin: *` and is
+# only safe when no cookie/credentialed flow is in play (we don't have one;
+# auth is via Authorization: Bearer header).
+#
+# In production, set `allow_any_origin = false` and enumerate the actual
+# frontend origins in `allowed_origins`, e.g.:
+#   allow_any_origin = false
+#   allowed_origins  = ["https://app.example.com"]
+allow_any_origin = false
+allowed_origins  = []
 
 [docker]
-# Enable/disable Docker/Podman monitoring
-enabled = true
 # Container runtime socket path
 # Leave empty for default: unix:///var/run/docker.sock (Linux/Mac) or npipe:////./pipe/docker_engine (Windows)
-# 
+#
 # Docker examples:
 #   Linux/Mac: socket_path = "" (uses default)
 #   Windows:   socket_path = "" (uses default npipe)
@@ -57,5 +82,8 @@ enabled = true
 #   macOS:    socket_path = "/var/run/docker.sock" (podman machine)
 #
 socket_path = ""
-# Stats collection interval in milliseconds
-check_interval_ms = 10000
+# WebSocket /docker/containers/{id}/exec endpoint kill-switch.
+# Set to false in production unless interactive shells into containers
+# are an explicit, audited workflow — any device with a valid access
+# token can otherwise reach root inside privileged containers.
+exec_enabled = true

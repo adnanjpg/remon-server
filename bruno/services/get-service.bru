@@ -1,0 +1,26 @@
+meta {
+  name: Get Service
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/services/{{service_name}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Get the status of a single service unit.
+
+  Parameters:
+    service_name — unit name with or without suffix: "nginx" or "nginx.service"
+
+  Failures:
+    404 NOT_FOUND      → unit not found or not loaded
+    501 NOT_SUPPORTED  → platform not supported
+}

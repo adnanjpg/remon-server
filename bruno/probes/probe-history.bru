@@ -1,0 +1,33 @@
+meta {
+  name: Probe History
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/probes/{{probe_name}}/history?limit={{probe_history_limit}}
+  body: none
+  auth: bearer
+}
+
+params:query {
+  ~limit: {{probe_history_limit}}
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Paged run-meta log for a single probe, newest first.
+
+  Query:
+    limit — number of runs to return. Default 100, hard-capped at 1000.
+
+  Response: { probe_name, runs: [ProbeRun…] } where each ProbeRun is
+    { timestamp, duration_ms, exit_code, message, parse_ok }.
+
+  Note: this endpoint shows RUN HEALTH (did the script fire? did it
+  parse? did it timeout?) — not the metric values. For value
+  time-series, use /metrics/probe/{probe}/{metric}.
+}

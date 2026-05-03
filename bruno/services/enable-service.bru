@@ -1,0 +1,24 @@
+meta {
+  name: Enable Service at Boot
+  type: http
+  seq: 7
+}
+
+put {
+  url: {{baseUrl}}/services/{{service_name}}/enable
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Enable a service to start automatically at boot (systemctl enable).
+
+  Parameters:
+    service_name — "nginx" or "nginx.service"
+
+  Note: does not start the service immediately — use /start for that.
+}

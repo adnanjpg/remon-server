@@ -38,9 +38,3 @@ pub struct NetworkInterfaceInfo {
     pub is_virtual: bool,
 }
 
-/// Combined system info
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SystemInfo {
-    pub description: SystemDescription,
-    pub hardware: HardwareInfo,
-}

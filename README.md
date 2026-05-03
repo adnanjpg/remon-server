@@ -1,36 +1,100 @@
-# Remon
+# remon-server
 
-**Disclaimer: Early Development Stage •
-Please note that this application is currently in the early development stages and may not be stable for production use.**
+Server component of Remon — a self-hosted system monitoring platform. Exposes a REST/SSE/WebSocket API consumed by the web UI and mobile clients.
 
-
-
-## Overview
-Remon is an open-source, **blazingly fast 🚀** application that allows you to monitor your server's status in real-time and receive notifications when critical events occur. This project consists of two main components: a server application that runs on your server and a mobile app that you can install on your smartphone.
-
-The server application constantly monitors various server parameters such as CPU usage, RAM usage, storage availability, and more. The server application is built with performance in mind, so it uses minimal resources and has a negligible impact on your server's performance.
-
-The mobile app provides a user-friendly interface for configuring what events trigger notifications and viewing real-time server status through live graphs. The mobile app is designed for both Android and iOS platforms, ensuring accessibility to a wide range of users.
+> Early development. API may change between versions.
 
 ## Features
-1. Real-time Monitoring: The server application continuously collects server data and updates the mobile app in real-time.
 
-2. Configurable Notifications: Users can set thresholds for various server metrics (e.g., RAM usage > 63%) to receive push notifications when those thresholds are exceeded.
+- **System metrics** — CPU, memory, disk, network, pressure, hardware components; time-series with configurable rollup (raw / 1m / 5m / 1h) and retention
+- **Processes** — list and kill
+- **Services** — systemd (full), OpenRC (full), Windows SCM (full); timers, cron listing, live log streaming
+- **Docker / Podman** — container lifecycle, logs, stats, exec over WebSocket; optional at compile time (`--no-default-features`)
+- **Alert engine** — expression-based rules (`cpu.usage_percent > 80`), pending/firing/ok lifecycle, configurable for-duration and cooldown
+- **Notification channels** — FCM, Telegram, ntfy, webhook; managed via REST API
+- **Custom probes** — shell scripts with inline YAML header; drop into `probes/`, hot-reload via `POST /admin/probes/reload`
+- **Device pairing** — 8-digit code, Argon2-hashed token, JWT access+refresh with JTI revocation
 
-3. Live Graphs: The mobile app provides interactive graphs that visualize server performance over time, making it easy to spot trends and anomalies.
+## Requirements
 
-4. Multi-Platform: The mobile app is designed for both Android and iOS platforms, ensuring accessibility to a wide range of users.
+Rust toolchain (stable).
 
-5. Open Source: This project is open source, so you can customize and extend it to meet your specific needs.
+## Quickstart
 
-## Linux Setup
-to run on linux, you should have the following packages installed
-1. pkg-config: `sudo apt install pkg-config`
-2. libssl-dev: `sudo apt install libssl-dev`
-3. proto-compiler: `apt-get install protobuf-compiler`
+```sh
+# 1. Copy env file
+cp .env.example .env
 
-## Setup
-1. create a copy of the `.env.example` file in the root directory of the project, and name it `.env`
-2. follow the instructions in the [Firebase Documentation](https://firebase.google.com/docs/cloud-messaging/auth-server#provide-credentials-manually) to create a service account. after you create a service account, and download the json file
-3. set the value of `GOOGLE_APPLICATION_CREDENTIALS` in the `.env` file to the path of the json file you downloaded, as shown in the `.env.example` file
+# 2. Edit config/default.toml — set a strong jwt_secret for production,
+#    or override via environment variable:
+#    REMON__AUTH__JWT_SECRET="your-secret-here"
 
+# 3. Run
+cargo run
+
+# Production build
+cargo run --release
+```
+
+Set `RUN_ENV=production` to load `config/production.toml` (create as needed).
+
+## Configuration
+
+See [CONFIG.md](CONFIG.md) for all options. The layered system:
+1. `config/default.toml` — base defaults
+2. `config/<RUN_ENV>.toml` — environment overrides
+3. `REMON__*` environment variables — runtime overrides
+
+Key values to set in production:
+```toml
+# config/production.toml
+[auth]
+jwt_secret = "change-me"   # or via REMON__AUTH__JWT_SECRET
+
+[logging]
+format = "json"
+
+[cors]
+allow_any_origin = false
+allowed_origins = ["https://your-frontend.com"]
+```
+
+## FCM Push Notifications
+
+1. Create a Firebase project and download the service account JSON
+2. Set the path in config or env:
+   ```
+   REMON__NOTIFICATIONS__FCM__SERVICE_ACCOUNT_PATH=/path/to/service-account.json
+   ```
+3. Register device FCM tokens via `PATCH /me/fcm-token` after pairing
+
+## Custom Probes
+
+Drop a shell script into `probes/` with an inline header:
+
+```sh
+# @probe name=my-check
+# @probe interval=1m
+# @probe platforms=linux
+
+# Output one JSON line:
+echo '{"message":"ok","metrics":[{"name":"value","value":42}]}'
+```
+
+See `probes/examples/` for a full example. Reload without restart:
+```sh
+curl -X POST http://localhost:8080/admin/probes/reload \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+## Build without Docker
+
+```sh
+cargo build --release --no-default-features
+```
+
+Removes all `/docker/*` endpoints and the bollard dependency.
+
+## API Reference
+
+See the Bruno collection in `bruno/` for a complete, runnable API reference. Bootstrap flow: `auth/Pair Initiate` → read code from server terminal → `auth/Pair Complete` → `auth/Login`.

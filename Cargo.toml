@@ -1,59 +1,69 @@
 [package]
 name = "remon-server"
-version = "0.3.2"
+version = "0.5.0"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 anyhow = "1.0"
-base32 = "0.5.0"
-base64 = "0.22.1"
-chrono = "0.4.43"
-config = "0.15.19"
-fast_qr = "0.13.1"
-axum = { version = "0.8.8", features = ["ws"] }
+async-trait = "0.1"
+base32 = "0.5"
+base64 = "0.22"
+chrono = "0.4"
+config = "0.15"
+fast_qr = "0.13"
+axum = { version = "0.8.9", features = ["ws"] }
 tower = "0.5.3"
-tower-http = { version = "0.6.8", features = ["trace", "compression-gzip"] }
+tower-http = { version = "0.6.8", features = ["trace", "compression-gzip", "cors"] }
 jsonwebtoken = { version = "10.2.0", features = ["rust_crypto"] }
-reqwest = { version = "0.12", default-features = false, features = [
-    "rustls-tls",
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls",
     "json",
+    "form",
 ] }
 ring = "0.17.14"
-serde = { version = "1.0.202", features = ["derive"] }
-serde_derive = "1.0.228"
-serde_json = "1.0.149"
-thiserror = "2.0.18"
-sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio"] }
-sysinfo = "0.37.2"
-totp-rs = "5.5.1"
-env_logger = "0.11.3"
-log = "0.4.21"
-local-ip-address = "0.6.9"
-blake3 = "1.5.1"
-maplit = "1.0.2"
-fcm = { git = "https://github.com/rj76/fcm-rust.git", rev = "cd7323ce" }
-strum = "0.27.2"
-strum_macros = "0.27.2"
-tokio = { version = "1.49.0", features = ["full"] }
-tokio-stream = { version = "0.1.18", features = ["sync"] }
-tonic = "0.11.0"
-tonic-reflection = "0.11.0"
-prost = "0.12.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml_ng = "0.10"
+cron = "0.16.0"
+thiserror = "2.0"
+sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio", "migrate"] }
+sysinfo = "0.38"
+totp-rs = "5.5"
+env_logger = "0.11"
+log = "0.4"
+local-ip-address = "0.6"
+blake3 = "1.5"
+maplit = "1.0"
+strum = "0.28"
+strum_macros = "0.28"
+tokio = { version = "1.52", features = ["full"] }
+tokio-stream = { version = "0.1.18", features = ["sync", "io-util"] }
 colored = "3"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-bollard = "0.20.0"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+bollard = { version = "0.20", optional = true, default-features = false, features = ["pipe"] }
 futures-util = "0.3"
-hostname = "0.4.2"
+hostname = "0.4"
 argon2 = "0.5"
-rand = "0.9"
+rand = "0.10"
 hex = "0.4"
 uuid = { version = "1.0", features = ["v4"] }
+subtle = "2"
+tower_governor = "0.8"
+shell-words = "1"
+libc = "0.2"
 
-[build-dependencies]
-tonic-build = "0.11.0"
+[features]
+default = ["docker"]
+docker = ["dep:bollard"]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_System_Threading",
+    "Win32_Foundation",
+] }
 
 [dev-dependencies]
-ctor = "0.6.3"
+ctor = "0.13"
