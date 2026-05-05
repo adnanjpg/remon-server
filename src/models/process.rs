@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessInfo {
     pub pid: u32,
+    /// PID of the spawning process. `None` for PID 1 (init/systemd) and a
+    /// few kernel-managed roots; always set otherwise. Clients use this to
+    /// build the process tree without a second round-trip.
+    pub parent_pid: Option<u32>,
     pub name: String,
     pub cmd: Vec<String>,
     pub exe: Option<String>,

@@ -20,6 +20,7 @@ pub fn get_processes(sys: &System) -> ProcessList {
 
             ProcessInfo {
                 pid: pid.as_u32(),
+                parent_pid: process.parent().map(|p| p.as_u32()),
                 name: process.name().to_string_lossy().to_string(),
                 cmd: process.cmd().iter().map(|s| s.to_string_lossy().to_string()).collect(),
                 exe: process.exe().map(|p| p.to_string_lossy().to_string()),
@@ -57,6 +58,7 @@ pub fn get_process(sys: &System, pid: u32) -> Option<ProcessInfo> {
 
         ProcessInfo {
             pid,
+            parent_pid: process.parent().map(|p| p.as_u32()),
             name: process.name().to_string_lossy().to_string(),
             cmd: process.cmd().iter().map(|s| s.to_string_lossy().to_string()).collect(),
             exe: process.exe().map(|p| p.to_string_lossy().to_string()),
