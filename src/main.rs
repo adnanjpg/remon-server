@@ -188,7 +188,7 @@ async fn main() {
 
     // Layered config: TOML defaults are already in `config`; DB row in
     // `server_config` overrides selected fields at boot. The DB row is
-    // seeded by 0001_init.sql so this never returns an empty result.
+    // seeded by 0001_schema.sql so this never returns an empty result.
     let overrides = match db.config().load().await {
         Ok(o) => o,
         Err(e) => {
@@ -219,9 +219,23 @@ async fn main() {
     // without a DB round-trip.
     let probe_registry = probes::registry::new_registry();
 
+    // VAPID keypair: load from `vapid_keys` row, generate + persist on
+    // first boot. Failure here is fatal — the server identifies itself
+    // to push relays with this keypair, and we won't be able to deliver
+    // alerts without it. Built BEFORE NotificationManager so the
+    // `web-push` channel can take an Arc clone at construction time.
+    let vapid_keys = match services::webpush::load_or_generate(db.pool()).await {
+        Ok(k) => Arc::new(k),
+        Err(e) => {
+            error!("Failed to load/generate VAPID keypair: {:?}", e);
+            std::process::exit(1);
+        }
+    };
+
     let notify = match notify::NotificationManager::new(
         db.pool().clone(),
         config.notifications.clone(),
+        Arc::clone(&vapid_keys),
     )
     .await
     {
@@ -246,6 +260,7 @@ async fn main() {
         service_manager,
         probe_registry,
         notify,
+        vapid_keys,
     ));
     info!("AppState initialized with broadcast channels and layered config");
 
@@ -305,8 +320,8 @@ async fn main() {
         //
         // Two redactions matter here:
         // 1. `include_headers` is implicitly off — we don't ship them into
-        //    the span. This keeps Authorization headers out of the LogService
-        //    pipe.
+        //    the span. This kept Authorization headers out of the LogService
+        //    pipe (B1 sprint).
         // 2. The URI is sanitized via `redact_access_token` because browser
         //    SSE/WS clients pass the JWT as `?access_token=...` (the only
         //    way EventSource / `new WebSocket(...)` can authenticate). Left

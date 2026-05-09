@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-const VALID_TYPES: &[&str] = &["fcm", "telegram", "ntfy", "webhook"];
+const VALID_TYPES: &[&str] = &["fcm", "telegram", "ntfy", "webhook", "web-push"];
 const VALID_SEVERITIES: &[&str] = &["warn", "crit"];
 
 #[derive(Debug, Deserialize)]
@@ -78,6 +78,11 @@ pub struct ChannelResponse {
     pub min_severity: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListChannelsResponse {
+    pub channels: Vec<ChannelResponse>,
 }
 
 #[derive(Debug, Serialize)]

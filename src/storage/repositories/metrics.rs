@@ -247,7 +247,11 @@ impl MetricsRepository {
             Option<i64>,
         )>,
     > {
-        let rows = sqlx::query_as::<
+        // ORDER BY timestamp DESC + LIMIT N gives the most-recent N rows;
+        // we reverse client-side so the response is still in ascending
+        // order. ORDER BY ASC + LIMIT would silently drop the live tail
+        // when the window contains more samples than the limit allows.
+        let mut rows = sqlx::query_as::<
             _,
             (
                 i64,
@@ -268,7 +272,7 @@ impl MetricsRepository {
                    context_switches_per_sec, process_forks_per_sec
               FROM metrics_cpu
              WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
-             ORDER BY timestamp ASC
+             ORDER BY timestamp DESC
              LIMIT ?
             "#,
         )
@@ -278,6 +282,7 @@ impl MetricsRepository {
         .bind(limit as i64)
         .fetch_all(&self.pool)
         .await?;
+        rows.reverse();
         Ok(rows)
     }
 
@@ -287,15 +292,25 @@ impl MetricsRepository {
         end: i64,
         limit: u32,
     ) -> AppResult<Vec<(i64, i64, f64, i64)>> {
+        // Multi-row-per-timestamp (one per core) — pick the most recent
+        // `limit` distinct timestamps in a subquery so we don't truncate
+        // the live tail when N × cores exceeds the row limit.
         let rows = sqlx::query_as::<_, (i64, i64, f64, i64)>(
             r#"
             SELECT timestamp, core_index, usage_percent, freq_mhz
               FROM metrics_cpu_cores
              WHERE timestamp >= ? AND timestamp <= ?
+               AND timestamp IN (
+                   SELECT DISTINCT timestamp FROM metrics_cpu_cores
+                    WHERE timestamp >= ? AND timestamp <= ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+               )
              ORDER BY timestamp ASC, core_index ASC
-             LIMIT ?
             "#,
         )
+        .bind(start)
+        .bind(end)
         .bind(start)
         .bind(end)
         .bind(limit as i64)
@@ -323,7 +338,9 @@ impl MetricsRepository {
             Option<i64>,
         )>,
     > {
-        let rows = sqlx::query_as::<
+        // ORDER BY DESC + reverse keeps the live tail when the limit is
+        // smaller than the window's sample count (see read_cpu).
+        let mut rows = sqlx::query_as::<
             _,
             (
                 i64,
@@ -343,7 +360,7 @@ impl MetricsRepository {
                    swap_in_pages_per_sec, swap_out_pages_per_sec
               FROM metrics_memory
              WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
-             ORDER BY timestamp ASC
+             ORDER BY timestamp DESC
              LIMIT ?
             "#,
         )
@@ -353,6 +370,7 @@ impl MetricsRepository {
         .bind(limit as i64)
         .fetch_all(&self.pool)
         .await?;
+        rows.reverse();
         Ok(rows)
     }
 
@@ -363,16 +381,30 @@ impl MetricsRepository {
         end: i64,
         limit: u32,
     ) -> AppResult<Vec<(i64, String, i64, i64, i64, i64, Option<f64>)>> {
+        // Disk has N rows per timestamp (one per mount). A flat
+        // `LIMIT N` would chop off the most recent timestamps once
+        // N × mount_count exceeds the limit, leaving the client with
+        // an incomplete tail and a visible gap in the sparkline.
+        // Pick the most recent `limit` distinct timestamps first, then
+        // join all mount rows for them.
         let rows = sqlx::query_as::<_, (i64, String, i64, i64, i64, i64, Option<f64>)>(
             r#"
             SELECT timestamp, mount_point, used_bytes, available_bytes,
                    read_bytes_per_sec, write_bytes_per_sec, inode_used_percent
               FROM metrics_disk
              WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
+               AND timestamp IN (
+                   SELECT DISTINCT timestamp FROM metrics_disk
+                    WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+               )
              ORDER BY timestamp ASC, mount_point ASC
-             LIMIT ?
             "#,
         )
+        .bind(resolution)
+        .bind(start)
+        .bind(end)
         .bind(resolution)
         .bind(start)
         .bind(end)
@@ -390,7 +422,8 @@ impl MetricsRepository {
         end: i64,
         limit: u32,
     ) -> AppResult<Vec<(i64, f64, f64, f64, f64, f64, f64)>> {
-        let rows = sqlx::query_as::<_, (i64, f64, f64, f64, f64, f64, f64)>(
+        // ORDER BY DESC + reverse keeps the live tail (see read_cpu).
+        let mut rows = sqlx::query_as::<_, (i64, f64, f64, f64, f64, f64, f64)>(
             r#"
             SELECT timestamp,
                    some_avg10, some_avg60, some_avg300,
@@ -398,7 +431,7 @@ impl MetricsRepository {
               FROM metrics_pressure
              WHERE resource = ? AND resolution = ?
                AND timestamp >= ? AND timestamp <= ?
-             ORDER BY timestamp ASC
+             ORDER BY timestamp DESC
              LIMIT ?
             "#,
         )
@@ -409,6 +442,7 @@ impl MetricsRepository {
         .bind(limit as i64)
         .fetch_all(&self.pool)
         .await?;
+        rows.reverse();
         Ok(rows)
     }
 
@@ -419,6 +453,13 @@ impl MetricsRepository {
         end: i64,
         limit: u32,
     ) -> AppResult<Vec<(i64, String, i64, i64, i64, i64, i64, i64)>> {
+        // Network has N rows per timestamp (one per interface). On a host
+        // with docker / k8s plumbing N can easily exceed 20, and a flat
+        // `LIMIT 1000` then truncates the response to roughly the oldest 40
+        // timestamps — the live tail goes missing and the sparkline gets a
+        // visible gap between the prefetched history and the first SSE
+        // sample. Pick the most recent `limit` distinct timestamps in a
+        // subquery and join all interface rows for them.
         let rows = sqlx::query_as::<_, (i64, String, i64, i64, i64, i64, i64, i64)>(
             r#"
             SELECT timestamp, interface_name, rx_bytes_per_sec, tx_bytes_per_sec,
@@ -426,10 +467,18 @@ impl MetricsRepository {
                    errors_in_per_sec, errors_out_per_sec
               FROM metrics_network
              WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
+               AND timestamp IN (
+                   SELECT DISTINCT timestamp FROM metrics_network
+                    WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+               )
              ORDER BY timestamp ASC, interface_name ASC
-             LIMIT ?
             "#,
         )
+        .bind(resolution)
+        .bind(start)
+        .bind(end)
         .bind(resolution)
         .bind(start)
         .bind(end)
@@ -446,15 +495,25 @@ impl MetricsRepository {
         end: i64,
         limit: u32,
     ) -> AppResult<Vec<(i64, String, Option<f64>, Option<f64>, Option<f64>)>> {
+        // Multi-row-per-timestamp (one per component) — same subquery
+        // pattern as cpu_cores / network / disk to preserve the live tail.
         let rows = sqlx::query_as::<_, (i64, String, Option<f64>, Option<f64>, Option<f64>)>(
             r#"
             SELECT timestamp, label, temperature_c, max_c, critical_c
               FROM metrics_components
              WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
+               AND timestamp IN (
+                   SELECT DISTINCT timestamp FROM metrics_components
+                    WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+               )
              ORDER BY timestamp ASC, label ASC
-             LIMIT ?
             "#,
         )
+        .bind(resolution)
+        .bind(start)
+        .bind(end)
         .bind(resolution)
         .bind(start)
         .bind(end)

@@ -2,6 +2,9 @@ pub mod fcm;
 pub mod ntfy;
 pub mod telegram;
 pub mod webhook;
+pub mod webpush;
+
+use std::sync::Arc;
 
 use reqwest::Client;
 use serde_json::Value;
@@ -9,11 +12,13 @@ use sqlx::SqlitePool;
 
 use crate::config::NotificationsConfig;
 use crate::notify::channel::{ChannelError, NotificationChannel};
+use crate::services::webpush::VapidKeyPair;
 
 use fcm::FcmChannel;
 use ntfy::NtfyChannel;
 use telegram::TelegramChannel;
 use webhook::WebhookChannel;
+use webpush::WebPushChannel;
 
 /// Build a channel instance from a DB row.
 ///
@@ -30,6 +35,7 @@ pub fn build_channel(
     credentials: &NotificationsConfig,
     http: Client,
     pool: SqlitePool,
+    vapid: &Arc<VapidKeyPair>,
 ) -> Result<Box<dyn NotificationChannel>, ChannelError> {
     match channel_type {
         "fcm" => {
@@ -40,6 +46,14 @@ pub fn build_channel(
                 ));
             }
             Ok(Box::new(FcmChannel::new(path, http, pool)?))
+        }
+
+        "web-push" => {
+            // No per-channel config — VAPID is server-wide; subscribers
+            // are tracked on `devices` rows. Operator just toggles the
+            // channel on; the rest is automatic.
+            let _ = config; // suppress unused-var lint at this branch
+            Ok(Box::new(WebPushChannel::new(Arc::clone(vapid), pool)?))
         }
 
         "telegram" => {

@@ -199,6 +199,23 @@ impl DeviceRepository {
         Ok(result.rows_affected())
     }
 
+    /// Per-device active session count (non-expired). Used to surface
+    /// "this device has N live tokens" on the sessions management UI —
+    /// devices with 0 sessions are paired but not currently logged in.
+    pub async fn count_active_sessions_per_device(&self) -> AppResult<Vec<(String, i64)>> {
+        let rows = sqlx::query_as::<_, (String, i64)>(
+            r#"
+            SELECT device_id, COUNT(*) as cnt
+              FROM sessions
+             WHERE expires_at > unixepoch()
+             GROUP BY device_id
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// All active devices that have an FCM push token registered. The
     /// notification fan-out targets exactly this set.
     pub async fn list_active_fcm_targets(&self) -> AppResult<Vec<(String, String)>> {
@@ -212,6 +229,29 @@ impl DeviceRepository {
         Ok(rows)
     }
 
+    /// All active devices with a complete Web Push subscription triplet.
+    /// `(device_id, endpoint, p256dh, auth)`. Devices that opted out (or
+    /// never opted in) read as IS NULL on at least one of the columns
+    /// and are filtered here so the channel doesn't even try to encrypt
+    /// with missing keys.
+    pub async fn list_active_web_push_targets(
+        &self,
+    ) -> AppResult<Vec<(String, String, String, String)>> {
+        let rows = sqlx::query_as::<_, (String, String, String, String)>(
+            r#"
+            SELECT id, web_push_endpoint, web_push_p256dh, web_push_auth
+              FROM devices
+             WHERE is_active = 1
+               AND web_push_endpoint IS NOT NULL AND web_push_endpoint != ''
+               AND web_push_p256dh   IS NOT NULL AND web_push_p256dh   != ''
+               AND web_push_auth     IS NOT NULL AND web_push_auth     != ''
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     pub async fn set_fcm_token(&self, device_id: &str, fcm_token: Option<&str>) -> AppResult<()> {
         let result = sqlx::query("UPDATE devices SET fcm_token = ? WHERE id = ?")
             .bind(fcm_token)
@@ -219,6 +259,33 @@ impl DeviceRepository {
             .execute(&self.pool)
             .await?;
 
+        if result.rows_affected() == 0 {
+            return Err(AppError::NotFound("Device".into()));
+        }
+        Ok(())
+    }
+
+    /// Persist (or clear) the calling browser's Web Push subscription
+    /// triplet on its device row. All-three-or-none semantics: passing
+    /// any field as `None` while the others are `Some` would leave the
+    /// row in an unsendable mixed state, so callers should pass `None`
+    /// everywhere to unsubscribe.
+    pub async fn set_web_push_subscription(
+        &self,
+        device_id: &str,
+        endpoint: Option<&str>,
+        p256dh: Option<&str>,
+        auth: Option<&str>,
+    ) -> AppResult<()> {
+        let result = sqlx::query(
+            "UPDATE devices SET web_push_endpoint = ?, web_push_p256dh = ?, web_push_auth = ? WHERE id = ?",
+        )
+        .bind(endpoint)
+        .bind(p256dh)
+        .bind(auth)
+        .bind(device_id)
+        .execute(&self.pool)
+        .await?;
         if result.rows_affected() == 0 {
             return Err(AppError::NotFound("Device".into()));
         }

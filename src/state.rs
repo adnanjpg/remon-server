@@ -112,6 +112,12 @@ pub struct AppState {
     /// `notification_channels` table and hot-reloaded on every CRUD
     /// operation via the REST API. Credentials stay in server config.
     pub notify: Arc<NotificationManager>,
+
+    /// VAPID keypair for Web Push. Generated on first boot and persisted
+    /// in `vapid_keys`. The public half is served to clients via
+    /// `GET /push/vapid-public-key`; the private half signs the JWT we
+    /// send to push relays in phase 3.
+    pub vapid_keys: Arc<crate::services::webpush::VapidKeyPair>,
 }
 
 impl AppState {
@@ -132,6 +138,7 @@ impl AppState {
         service_manager: Arc<dyn ServiceManager>,
         probe_registry: ProbeRegistry,
         notify: Arc<NotificationManager>,
+        vapid_keys: Arc<crate::services::webpush::VapidKeyPair>,
     ) -> Self {
         let (stats_tx, _) = broadcast::channel(64);
         let (processes_tx, _) = broadcast::channel(16);
@@ -156,6 +163,7 @@ impl AppState {
             service_manager,
             probe_registry,
             notify,
+            vapid_keys,
         }
     }
 }

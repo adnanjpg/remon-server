@@ -8,6 +8,29 @@ use log::info;
 
 use crate::storage::repositories::*;
 
+// ── SQLite tuning constants ────────────────────────────────────────────────
+//
+// These are the knobs we deliberately deviate from SQLite's defaults on. The
+// values here reflect a read-heavy time-series workload: many concurrent
+// metrics-history scans, a single writer producing 0.5–1 KB of stats every
+// 2 seconds, and a few background aggregators churning through closed
+// rollup buckets on a 1-minute cadence.
+
+/// How long a query waits for a busy DB before erroring out. WAL only
+/// serialises writes, so contention is brief — but background loops can
+/// still collide with HTTP handlers under load.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Page cache per connection, in KB (negative value per SQLite convention).
+/// 64 MB lets the working set of a typical metrics-history range query live
+/// in memory; the default 2 MB forces re-reads on every scan.
+const CACHE_SIZE_KB: i64 = -65_536;
+
+/// Memory-mapped I/O ceiling, in bytes. Hot pages bypass the read syscall
+/// path entirely. Pairs well with WAL for read-heavy mixes; the OS handles
+/// eviction so this is an upper bound, not a reservation.
+const MMAP_SIZE_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Database wrapper with repository access
 #[derive(Clone)]
 pub struct Database {
@@ -20,15 +43,22 @@ impl Database {
     /// Pragmas applied:
     /// - `journal_mode=WAL`: concurrent reads while a writer is active.
     /// - `synchronous=NORMAL`: durable across power loss when paired with WAL.
-    /// - `busy_timeout=5s`: avoid SQLITE_BUSY under contention.
+    /// - `busy_timeout`: see [`BUSY_TIMEOUT`].
     /// - `foreign_keys=ON`: enforce ON DELETE CASCADE relations.
+    /// - `cache_size`: see [`CACHE_SIZE_KB`].
+    /// - `temp_store=MEMORY`: keep temp tables, sort scratch, and
+    ///   intermediate join buffers in RAM instead of spilling to disk.
+    /// - `mmap_size`: see [`MMAP_SIZE_BYTES`].
     pub async fn connect(url: &str, max_connections: u32) -> anyhow::Result<Self> {
         let opts = SqliteConnectOptions::from_str(url)?
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
-            .busy_timeout(Duration::from_secs(5))
-            .foreign_keys(true);
+            .busy_timeout(BUSY_TIMEOUT)
+            .foreign_keys(true)
+            .pragma("cache_size", CACHE_SIZE_KB.to_string())
+            .pragma("temp_store", "MEMORY")
+            .pragma("mmap_size", MMAP_SIZE_BYTES.to_string());
 
         let pool = SqlitePoolOptions::new()
             .max_connections(max_connections)
@@ -36,8 +66,10 @@ impl Database {
             .await?;
 
         info!(
-            "Connected to database (WAL, foreign_keys=ON, max_connections={})",
-            max_connections
+            "Connected to database (WAL, foreign_keys=ON, max_connections={}, cache={}MB, mmap={}MB)",
+            max_connections,
+            CACHE_SIZE_KB.unsigned_abs() / 1024,
+            MMAP_SIZE_BYTES / 1024 / 1024
         );
 
         Ok(Self { pool })

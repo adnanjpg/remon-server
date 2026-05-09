@@ -10,4 +10,5 @@ pub mod notifications;
 pub mod probes;
 pub mod process;
 pub mod services;
+pub mod sessions;
 pub mod system;

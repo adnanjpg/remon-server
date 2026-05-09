@@ -10,6 +10,7 @@ pub mod service_watcher;
 pub mod sessions;
 pub mod system;
 pub mod tick_timer;
+pub mod webpush;
 
 #[cfg(target_os = "linux")]
 pub mod system_linux;

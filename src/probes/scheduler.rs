@@ -14,11 +14,13 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use chrono::Utc;
 use log::{debug, info, warn};
 use sqlx::SqlitePool;
+use tokio::sync::Semaphore;
 
 use crate::models::probe::{ProbeMetric, ProbeRun};
 use crate::storage::repositories::{ProbeDefinitionRow, ProbeRepository};
@@ -26,6 +28,17 @@ use crate::storage::repositories::{ProbeDefinitionRow, ProbeRepository};
 use super::manifest::{Manifest, ManifestError, ProbeMode, Schedule};
 use super::registry::{ProbeEntry, ProbeRegistry};
 use super::runner;
+
+/// Bound concurrent oneshot probe executions. Each probe runs as its own
+/// child process, so an unbounded fan-out (e.g. ten probes all firing at
+/// the same cron minute on a small VPS) can spike CPU and memory hard.
+/// 5 is a comfortable default — enough to avoid serialising healthy
+/// probes back-to-back, low enough to never exhaust the host. Stream
+/// probes are deliberately exempt: they're long-running and would just
+/// hold permits forever.
+const PROBE_PERMITS: usize = 5;
+static PROBE_GATE: LazyLock<Arc<Semaphore>> =
+    LazyLock::new(|| Arc::new(Semaphore::new(PROBE_PERMITS)));
 
 /// Compute the next fire time for a schedule from "now". Always returns
 /// `Some` for `Interval` (mathematically determinate) and may return
@@ -99,6 +112,14 @@ async fn run_oneshot_loop(manifest: Manifest, registry: ProbeRegistry, db: Sqlit
         if !sleep_until_next_fire(&probe_name, &manifest.schedule).await {
             return;
         }
+        // Acquire a permit before spawning the child. If all permits are
+        // held this loop just waits — the probe will fire late rather
+        // than piling up new instances behind a stuck one. acquire_owned
+        // returns Err only if the semaphore is closed (we never close).
+        let _permit = match PROBE_GATE.clone().acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => return,
+        };
         let (run, metrics) = runner::execute(&manifest).await;
         persist_and_mirror(&repo, &registry, &probe_name, run, metrics).await;
     }

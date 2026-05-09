@@ -15,6 +15,14 @@ pub struct SystemDescriptionDto {
     pub os_version: String,
     pub kernel: String,
     pub uptime_secs: u64,
+    /// remon-server build version (`CARGO_PKG_VERSION`). Lets clients
+    /// surface server/web compatibility at a glance.
+    pub version: String,
+    /// Build mode — `"release"` or `"debug"`. Computed from
+    /// `cfg!(debug_assertions)` at compile time.
+    pub build_mode: String,
+    /// Unix seconds when this binary was built (from `build.rs`).
+    pub built_at: i64,
 }
 
 #[derive(Debug, Serialize)]

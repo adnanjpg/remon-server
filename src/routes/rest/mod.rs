@@ -11,6 +11,7 @@ pub mod notifications;
 pub mod pairing;
 pub mod probes;
 pub mod process;
+pub mod push;
 pub mod services;
 pub mod system;
 
@@ -31,7 +32,7 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
     // Per-IP rate limit on unauthenticated auth endpoints. Replenishes one
     // token every 12 seconds with a burst of 5 — i.e. a single IP can fire
     // five quick attempts then settles to ~5 req/min. Combined with the
-    // 8-digit pairing code and 3-attempts cap this puts online
+    // 8-digit pairing code + 3-attempts cap this puts online
     // brute-force well out of reach.
     let governor_conf = Arc::new(
         GovernorConfigBuilder::default()
@@ -72,12 +73,24 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/auth/logout", post(auth::logout))
         // Self (calling device) endpoints
         .route("/me/fcm-token", axum::routing::patch(me::update_fcm_token))
+        // Session/device management — list/rename/revoke any paired device.
+        .route("/me/sessions", get(me::list_sessions))
+        .route(
+            "/me/sessions/{id}",
+            axum::routing::patch(me::rename_session).delete(me::revoke_session),
+        )
+        // Web Push — public VAPID key + per-device subscription register.
+        .route("/push/vapid-public-key", get(push::vapid_public_key))
+        .route(
+            "/me/push-subscription",
+            post(push::subscribe_push).delete(push::unsubscribe_push),
+        )
         // Local host description + hardware inventory (uptime is fresh; the
         // rest is cached at boot — see services/system.rs).
         .route("/system/info", get(system::get_system_info))
         // Runtime configuration
         .route("/config", get(admin::get_config).patch(admin::patch_config))
-        // Alert engine: rule CRUD + active-state + event log
+        // Alert engine v2: rule CRUD + active-state + event log
         .route("/alerts", get(alerts::list_alerts).post(alerts::create_alert))
         .route("/alerts/state", get(alerts::list_active_state))
         .route("/alerts/events", get(alerts::list_recent_events))

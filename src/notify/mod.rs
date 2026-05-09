@@ -13,6 +13,7 @@ use tokio::sync::RwLock;
 
 use crate::config::NotificationsConfig;
 use crate::notify::channel::NotificationChannel;
+use crate::services::webpush::VapidKeyPair;
 use crate::storage::repositories::NotificationChannelRepository;
 
 struct ChannelSlot {
@@ -26,6 +27,7 @@ pub struct NotificationManager {
     pool: SqlitePool,
     http: reqwest::Client,
     credentials: Arc<NotificationsConfig>,
+    vapid: Arc<VapidKeyPair>,
     channels: RwLock<Vec<ChannelSlot>>,
 }
 
@@ -33,6 +35,7 @@ impl NotificationManager {
     pub async fn new(
         pool: SqlitePool,
         credentials: NotificationsConfig,
+        vapid: Arc<VapidKeyPair>,
     ) -> anyhow::Result<Arc<Self>> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
@@ -42,6 +45,7 @@ impl NotificationManager {
             pool,
             http,
             credentials: Arc::new(credentials),
+            vapid,
             channels: RwLock::new(Vec::new()),
         });
 
@@ -77,6 +81,7 @@ impl NotificationManager {
                 &self.credentials,
                 self.http.clone(),
                 self.pool.clone(),
+                &self.vapid,
             ) {
                 Ok(ch) => slots.push(ChannelSlot {
                     id: row.id,

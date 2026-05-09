@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use crate::error::{AppError, AppResult};
 use crate::routes::dtos::notifications::{
-    ChannelResponse, CreateChannelRequest, TestChannelResponse, UpdateChannelRequest,
+    ChannelResponse, CreateChannelRequest, ListChannelsResponse, TestChannelResponse,
+    UpdateChannelRequest,
 };
 use crate::routes::extractors::Claims;
 use crate::state::AppState;
@@ -29,10 +30,12 @@ fn to_response(row: crate::storage::repositories::NotificationChannelRow) -> Cha
 pub async fn list_channels(
     _claims: Claims,
     State(state): State<Arc<AppState>>,
-) -> AppResult<Json<Vec<ChannelResponse>>> {
+) -> AppResult<Json<ListChannelsResponse>> {
     let repo = NotificationChannelRepository::new(state.db.clone());
     let rows = repo.list_all().await?;
-    Ok(Json(rows.into_iter().map(to_response).collect()))
+    Ok(Json(ListChannelsResponse {
+        channels: rows.into_iter().map(to_response).collect(),
+    }))
 }
 
 pub async fn create_channel(

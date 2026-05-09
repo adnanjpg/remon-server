@@ -9,11 +9,15 @@ host = "0.0.0.0"
 # SQLite connection settings
 path = "./db/monitor.sqlite3"
 folder_path = "./db"
-max_connections = 1
+# WAL allows multiple concurrent readers + one writer. 5 connections lets
+# HTTP handlers, SSE evaluators, and background tasks read in parallel
+# without queueing on a single pool slot. Writes still serialize per
+# SQLite's single-writer model, so going much higher buys little.
+max_connections = 5
 
 [auth]
 # JWT secret - should be overridden in production via environment variable
-jwt_secret = "change-me"
+jwt_secret = "d3f4ult"
 
 # Token TTLs — uncomment to override defaults
 # access_token_ttl_secs  = 3600      # 1 hour

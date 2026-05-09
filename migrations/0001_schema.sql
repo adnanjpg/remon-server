@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0001_schema.sql
+-- 0001_schema.sql — complete schema for remon-server
 -- ============================================================================
 -- Design notes:
 -- 1. Single-host: one server instance monitors the machine it runs on.
@@ -17,15 +17,18 @@
 
 -- ─── DEVICES & SESSIONS (mobile clients) ────────────────────────────────────
 CREATE TABLE devices (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    token_hash  TEXT NOT NULL,
-    totp_secret TEXT,
-    fcm_token   TEXT,
-    last_ip     TEXT,
-    last_seen   INTEGER NOT NULL DEFAULT (unixepoch()),
-    created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
-    is_active   INTEGER NOT NULL DEFAULT 1
+    id                TEXT PRIMARY KEY,
+    name              TEXT NOT NULL,
+    token_hash        TEXT NOT NULL,
+    totp_secret       TEXT,
+    fcm_token         TEXT,
+    web_push_endpoint TEXT,
+    web_push_p256dh   TEXT,
+    web_push_auth     TEXT,
+    last_ip           TEXT,
+    last_seen         INTEGER NOT NULL DEFAULT (unixepoch()),
+    created_at        INTEGER NOT NULL DEFAULT (unixepoch()),
+    is_active         INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE sessions (
@@ -38,6 +41,17 @@ CREATE TABLE sessions (
 CREATE INDEX idx_sessions_device  ON sessions(device_id);
 CREATE INDEX idx_sessions_expires ON sessions(expires_at);
 CREATE INDEX idx_devices_active_fcm ON devices(is_active, fcm_token);
+
+-- VAPID identifies the server to the push relay. Same keypair across all
+-- subscribers, generated once on first boot if missing. Stored as PEM —
+-- private for signing the push JWT, public also kept here so we can serve
+-- it to clients without re-deriving every time.
+CREATE TABLE vapid_keys (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    public_key  TEXT    NOT NULL,
+    private_key TEXT    NOT NULL,
+    created_at  INTEGER NOT NULL DEFAULT (unixepoch())
+);
 
 -- ─── RUNTIME CONFIG ─────────────────────────────────────────────────────────
 CREATE TABLE server_config (
@@ -342,11 +356,12 @@ CREATE INDEX idx_alert_events_ts   ON alert_events(occurred_at DESC);
 --   telegram: {"chat_id": "-1001234..."}
 --   ntfy:     {"server": "https://ntfy.sh", "topic": "my-alerts"}
 --   webhook:  {"url": "https://hooks.example.com/..."}
+--   web-push: {}   (targets come from devices.web_push_*)
 -- `min_severity` NULL = all severities; 'warn' = warn+crit; 'crit' = crit only.
 CREATE TABLE notification_channels (
     id           INTEGER PRIMARY KEY,
     name         TEXT    NOT NULL,
-    type         TEXT    NOT NULL CHECK (type IN ('fcm', 'telegram', 'ntfy', 'webhook')),
+    type         TEXT    NOT NULL CHECK (type IN ('fcm', 'telegram', 'ntfy', 'webhook', 'web-push')),
     enabled      INTEGER NOT NULL DEFAULT 1,
     config       TEXT    NOT NULL DEFAULT '{}',
     min_severity TEXT    CHECK (min_severity IN ('warn', 'crit')),

@@ -19,18 +19,30 @@ use crate::storage::repositories::MetricsRepository;
 
 /// Default span when client omits start/end: last hour.
 const DEFAULT_SPAN_SECS: i64 = 3600;
-/// Default points per response when client omits `limit`.
-const DEFAULT_LIMIT: u32 = 1000;
+/// Default points per response when client omits `limit`. Sized to fit
+/// the worst case for each resolution band's typical use:
+/// - raw   @2s × 2h  = 3 600 points
+/// - 1m    × 24h    = 1 440 points
+/// - 5m    × 7d     = 2 016 points
+/// - 1h    × ~6 mo  = 4 320 points
+/// Anything larger than 5 000 forces the user to either narrow the range
+/// or override `?limit=` — the cap below stays in place to keep a single
+/// rogue client from materialising the whole table at once.
+const DEFAULT_LIMIT: u32 = 5000;
 /// Hard cap regardless of `limit` query param.
 const MAX_LIMIT: u32 = 5000;
 /// Resolutions accepted as override values.
 const KNOWN_RESOLUTIONS: &[&str] = &["raw", "1m", "5m", "1h"];
 
 /// Pick the coarsest resolution that still gives reasonable detail for the
-/// span. Mirrors the retention-policy bands seeded in 0001_init.sql.
+/// span. Raw 2-second samples capture every kernel context switch, which
+/// reads as visual zigzag once the chart is wider than ~30 minutes — the
+/// 1-minute rollup buckets average 30 raw samples each, smoothing the
+/// per-task spikes while keeping real trends. Operators who want the
+/// uncooked stream can still pass `?resolution=raw` to override.
 fn pick_resolution(span_secs: i64) -> &'static str {
-    if span_secs <= 7200 {
-        "raw" //   ≤ 2 hours
+    if span_secs <= 1800 {
+        "raw" //   ≤ 30 min
     } else if span_secs <= 86400 {
         "1m" //    ≤ 1 day
     } else if span_secs <= 604800 {

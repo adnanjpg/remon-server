@@ -6,7 +6,7 @@
 use crate::config::Config;
 
 const MIN_JWT_SECRET_LENGTH: usize = 32;
-const DEFAULT_SECRET: &str = "change-me";
+const DEFAULT_SECRET: &str = "d3f4ult";
 
 /// Validate JWT secret strength at startup.
 /// In debug builds: print a warning and continue. In release builds: hard error.

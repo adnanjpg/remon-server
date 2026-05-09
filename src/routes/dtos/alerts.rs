@@ -145,11 +145,15 @@ pub struct ListAlertEventsResponse {
 
 // ===== Helpers (used by REST handlers to build state DTOs joined with rule) =====
 
-pub fn state_dto_from(state: AlertStateRow, rule: &AlertRule) -> AlertStateDto {
+pub fn state_dto_from(
+    state: AlertStateRow,
+    rule_name: String,
+    severity: AlertSeverity,
+) -> AlertStateDto {
     AlertStateDto {
         rule_id: state.rule_id,
-        rule_name: rule.name.clone(),
-        severity: rule.severity,
+        rule_name,
+        severity,
         label_set: state.label_set,
         state: state.state,
         state_since: state.state_since,

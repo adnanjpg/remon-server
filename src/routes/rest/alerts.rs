@@ -10,7 +10,6 @@
 //! - `GET    /alerts/events`       — recent transitions, newest first
 //! - `GET    /alerts/{id}/events`  — recent transitions for one rule
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
@@ -214,16 +213,13 @@ pub async fn list_active_state(
     State(state): State<Arc<AppState>>,
 ) -> AppResult<Json<ListAlertStateResponse>> {
     let repo = AlertRepository::new(state.db.clone());
-    let states = repo.list_active_state().await?;
+    // Joined with alert_rules in SQL — one round-trip, no second query
+    // to materialise every rule just to look up two columns.
+    let rows = repo.list_active_state().await?;
 
-    // Hydrate rule_name + severity once per rule referenced — small N,
-    // tiny query, simpler than a join.
-    let rules = repo.list().await?;
-    let by_id: HashMap<i64, &_> = rules.iter().map(|r| (r.id, r)).collect();
-
-    let dtos: Vec<AlertStateDto> = states
+    let dtos: Vec<AlertStateDto> = rows
         .into_iter()
-        .filter_map(|s| by_id.get(&s.rule_id).map(|r| state_dto_from(s, r)))
+        .map(|(s, name, severity)| state_dto_from(s, name, severity))
         .collect();
 
     Ok(Json(ListAlertStateResponse { states: dtos }))

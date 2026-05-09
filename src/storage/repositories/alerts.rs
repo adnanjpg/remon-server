@@ -236,21 +236,71 @@ impl AlertRepository {
         Ok(rows.into_iter().filter_map(decode_state).collect())
     }
 
-    /// All currently-firing or pending state rows. Drives
-    /// `GET /alerts/state` for the dashboard's "active alerts" view.
-    pub async fn list_active_state(&self) -> AppResult<Vec<AlertStateRow>> {
-        let rows: Vec<(i64, String, String, i64, Option<f64>, i64, Option<i64>)> = sqlx::query_as(
+    /// All currently-firing or pending state rows, joined with their
+    /// rule's name + severity. Drives `GET /alerts/state` for the
+    /// dashboard's "active alerts" view.
+    ///
+    /// Returns the rule meta inline so callers don't need a second
+    /// `list()` round-trip + in-memory hash join. With many rules but
+    /// few active states, that previous pattern was an N+1-ish read
+    /// that scaled with rule count instead of active count.
+    pub async fn list_active_state(
+        &self,
+    ) -> AppResult<Vec<(AlertStateRow, String, AlertSeverity)>> {
+        let rows: Vec<(
+            i64,
+            String,
+            String,
+            i64,
+            Option<f64>,
+            i64,
+            Option<i64>,
+            String,
+            String,
+        )> = sqlx::query_as(
             r#"
-            SELECT rule_id, label_set, state, state_since,
-                   last_value, last_eval_at, last_notified_at
-              FROM alert_state
-             WHERE state IN ('pending','firing')
-             ORDER BY state_since ASC
+            SELECT s.rule_id, s.label_set, s.state, s.state_since,
+                   s.last_value, s.last_eval_at, s.last_notified_at,
+                   r.name, r.severity
+              FROM alert_state s
+              INNER JOIN alert_rules r ON r.id = s.rule_id
+             WHERE s.state IN ('pending','firing')
+             ORDER BY s.state_since ASC
             "#,
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().filter_map(decode_state).collect())
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let (
+                    rule_id,
+                    label_set,
+                    state,
+                    state_since,
+                    last_value,
+                    last_eval_at,
+                    last_notified_at,
+                    name,
+                    severity_str,
+                ) = row;
+                let lifecycle = AlertLifecycle::parse(&state)?;
+                let severity = AlertSeverity::parse(&severity_str)?;
+                Some((
+                    AlertStateRow {
+                        rule_id,
+                        label_set,
+                        state: lifecycle,
+                        state_since,
+                        last_value,
+                        last_eval_at,
+                        last_notified_at,
+                    },
+                    name,
+                    severity,
+                ))
+            })
+            .collect())
     }
 
     // ===== alert_events =====
