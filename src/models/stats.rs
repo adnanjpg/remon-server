@@ -95,6 +95,11 @@ pub struct NetworkStats {
     /// MTU mismatch, or driver problem.
     pub errors_in_per_sec: u64,
     pub errors_out_per_sec: u64,
+    /// Cumulative bytes received/transmitted since boot (from sysinfo
+    /// `total_received` / `total_transmitted`). Live-only — not stored in
+    /// the metrics DB; useful for the live overview panel.
+    pub rx_bytes_total: u64,
+    pub tx_bytes_total: u64,
     pub timestamp: i64,
 }
 
