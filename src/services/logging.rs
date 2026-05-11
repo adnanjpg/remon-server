@@ -1,27 +1,29 @@
-//! Application logger that mirrors stdout output into a `logs` table for
-//! later retrieval by the UI.
+//! Application logger — persists app-emitted events into the `logs`
+//! table for the in-UI log viewer.
 //!
-//! Wiring (in `main.rs`):
-//! 1. `LogService::new().set_level(filter).build()` → installs the
-//!    env_logger pipeline and returns the receiver end of the in-memory
-//!    channel that buffers log records.
-//! 2. After the DB is connected, call `start_db_writer(rx, pool)` to spawn
-//!    the consumer task that drains the channel into `LogRepository`.
-//!
-//! The consumer task **must not** call any `log::*!` macro itself — that
-//! would feed records back through the pipe and risk an unbounded loop
-//! when DB writes fail. Errors go straight to stderr.
+//! Architecture (since 0.7.4 — replaced the env_logger + CustomPipe
+//! design):
+//! 1. `tracing-subscriber` is the single logging backend. The
+//!    `tracing-log` feature bridges every `log::*!` macro call into a
+//!    tracing event, so the 27 source files using `log::info!` /
+//!    `warn!` / `error!` keep working unchanged.
+//! 2. `DbLayer` is a `tracing_subscriber::Layer` registered alongside
+//!    the stdout fmt layer. It runs its own per-target filter so that
+//!    third-party crate noise (sqlx queries, hyper internals) never
+//!    lands in the `logs` table — only `remon_server::*` events do.
+//! 3. `start_db_writer(rx, pool)` drains the channel into
+//!    `LogRepository`. Spawned after the DB is connected; write
+//!    failures go to **stderr only** — emitting a `log::*!` or
+//!    `tracing::*!` here would feed back through DbLayer and loop.
 
-use chrono::Local;
-use colored::Colorize;
-use log::error;
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use std::{
-    io::{self, Write},
-    sync::{Arc, Mutex},
-};
 use tokio::sync::mpsc;
+use tracing::{Event, Level, Subscriber};
+use tracing::field::{Field, Visit};
+use tracing_subscriber::layer::{Context, Layer};
 
 use crate::storage::repositories::LogRepository;
 
@@ -45,14 +47,13 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
-    fn from_string(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "error" => LogLevel::Error,
-            "warn" => LogLevel::Warn,
-            "info" => LogLevel::Info,
-            "debug" => LogLevel::Debug,
-            "trace" => LogLevel::Trace,
-            _ => LogLevel::Info,
+    fn from_tracing(level: &Level) -> Self {
+        match *level {
+            Level::ERROR => LogLevel::Error,
+            Level::WARN => LogLevel::Warn,
+            Level::INFO => LogLevel::Info,
+            Level::DEBUG => LogLevel::Debug,
+            Level::TRACE => LogLevel::Trace,
         }
     }
 
@@ -67,127 +68,116 @@ impl LogLevel {
     }
 }
 
-pub struct LogService {
-    channel: (mpsc::Sender<AppLog>, mpsc::Receiver<AppLog>),
-    builder: env_logger::Builder,
+/// tracing-subscriber Layer that persists app-emitted events into the
+/// `logs` table.
+///
+/// The layer's filter is intentionally INDEPENDENT of the global
+/// EnvFilter:
+/// - it only matches the `remon_server` target prefix (so sqlx / hyper
+///   noise never gets stored), and
+/// - it only persists events at or above `min_persist_level`, which
+///   tracks `monitoring.log_insertion_level` from config.
+///
+/// The composition lets operators run the stdout layer at `debug` for
+/// diagnostics without flooding the database in parallel.
+pub struct DbLayer {
+    sender: mpsc::Sender<AppLog>,
+    /// Lowest-verbosity level we persist (e.g. `WARN` keeps WARN+ERROR).
+    /// `tracing::Level` orders by VERBOSITY, so "more verbose than this"
+    /// means `level > min`. We persist if `level <= min`.
+    min_persist_level: Level,
+    app_id: Arc<String>,
 }
 
-struct CustomPipe {
-    buffer_tx: Arc<Mutex<mpsc::Sender<AppLog>>>,
-}
-
-impl CustomPipe {
-    fn new(tx: Arc<Mutex<mpsc::Sender<AppLog>>>) -> Self {
-        CustomPipe { buffer_tx: tx }
+impl DbLayer {
+    pub fn new(sender: mpsc::Sender<AppLog>, min_persist_level: Level, app_id: String) -> Self {
+        Self {
+            sender,
+            min_persist_level,
+            app_id: Arc::new(app_id),
+        }
     }
 }
 
-impl Write for CustomPipe {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let app_log = match serde_json::from_slice::<AppLog>(buf) {
-            Ok(log) => log,
-            Err(e) => {
-                return Err(io::Error::new(io::ErrorKind::Other, e.to_string()));
-            }
-        };
+impl<S: Subscriber> Layer<S> for DbLayer {
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        let metadata = event.metadata();
 
-        match self.buffer_tx.lock() {
-            Ok(buffer_tx) => {
-                if let Err(e) = buffer_tx.try_send(app_log) {
-                    // Use stderr — log::error! here would create a feedback loop.
-                    eprintln!("Failed to send log to buffer: {}", e);
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "Failed to send log to buffer",
-                    ));
-                }
-            }
-            Err(e) => {
-                eprintln!("Failed to acquire lock on buffer_tx: {}", e);
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Failed to acquire lock on buffer_tx",
-                ));
-            }
+        if *metadata.level() > self.min_persist_level {
+            return;
         }
 
-        Ok(buf.len())
-    }
+        // We need both the message and (for bridged `log::*!` events)
+        // the real target, which the `tracing-log` bridge stuffs into
+        // a `log.target` field rather than the event's metadata —
+        // metadata.target() for bridged events is the literal string
+        // "log". Collect both up-front.
+        let mut visitor = EventVisitor::default();
+        event.record(&mut visitor);
 
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+        // Effective target: prefer the bridged `log.target` field when
+        // present, otherwise fall back to the event's own metadata
+        // target (used by direct `tracing::*!` call sites).
+        let effective_target = visitor
+            .log_target
+            .as_deref()
+            .unwrap_or_else(|| metadata.target());
+
+        // Only persist events from our own crate. Third-party tracing
+        // events (sqlx query bodies, hyper retries, etc.) belong in
+        // stdout/journald — not the in-app log table.
+        if !effective_target.starts_with("remon_server") {
+            return;
+        }
+
+        let app_log = AppLog {
+            id: -1,
+            log_level: LogLevel::from_tracing(metadata.level()),
+            app_id: (*self.app_id).clone(),
+            logged_at: chrono::Utc::now().timestamp(),
+            message: visitor.message.unwrap_or_default(),
+            target: effective_target.to_owned(),
+        };
+
+        // try_send — drop if the buffer is full. We never want a log
+        // emission to block the calling task; a saturated channel means
+        // the DB writer is stuck and is already complaining to stderr.
+        let _ = self.sender.try_send(app_log);
     }
 }
 
-impl LogService {
-    pub fn new() -> Self {
-        let mut this = LogService {
-            channel: mpsc::channel::<AppLog>(100),
-            builder: env_logger::builder(),
-        };
+/// Pulls the two fields we care about off a tracing Event:
+/// - `message`: the formatted log line
+/// - `log.target`: present only on events bridged from the `log` crate
+///   by `tracing-log` — preserves the original module path that the
+///   bridge would otherwise hide behind a literal `"log"` metadata
+///   target.
+#[derive(Default)]
+struct EventVisitor {
+    message: Option<String>,
+    log_target: Option<String>,
+}
 
-        this.builder
-            .target(env_logger::Target::Pipe(Box::new(CustomPipe::new(
-                Arc::new(Mutex::new(this.channel.0.clone())),
-            ))));
-
-        this.builder.format(|buf, record| {
-            fn log_level_to_colored(level: log::Level) -> colored::ColoredString {
-                match level {
-                    log::Level::Error => "ERROR".red(),
-                    log::Level::Warn => "WARN".yellow(),
-                    log::Level::Info => "INFO".bright_blue(),
-                    log::Level::Debug => "DEBUG".bright_cyan(),
-                    log::Level::Trace => "TRACE".white(),
-                }
-            }
-
-            let dt = Local::now();
-            let timestamp = dt.format("%Y-%m-%d %H:%M:%S").to_string();
-            let level = format!("{:<5}", log_level_to_colored(record.level()));
-            let target = record.target().bright_green();
-            let msg = record.args();
-
-            let app_log_threshold = get_log_insertion_level();
-            if record.level() <= app_log_threshold {
-                let app_log = AppLog {
-                    id: -1,
-                    log_level: LogLevel::from_string(record.level().as_str()),
-                    app_id: get_app_name(),
-                    logged_at: dt.timestamp(),
-                    message: msg.to_string(),
-                    target: record.target().to_owned(),
-                };
-
-                if let Err(e) = serde_json::to_writer(buf, &app_log) {
-                    eprintln!("Failed to serialize log: {}", e);
-                }
-            }
-
-            writeln!(io::stdout(), "{} {} [{}] {}", timestamp, level, target, msg)
-        });
-
-        this
+impl Visit for EventVisitor {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        match field.name() {
+            "message" => self.message = Some(value.to_string()),
+            "log.target" => self.log_target = Some(value.to_string()),
+            _ => {}
+        }
     }
 
-    pub fn set_level(mut self, level: log::LevelFilter) -> Self {
-        self.builder.filter_level(level);
-        self
-    }
-
-    /// Install the env_logger pipeline and return the receiver end of the
-    /// in-memory channel. Callers should pass that receiver to
-    /// `start_db_writer` once the database is ready.
-    pub fn build(mut self) -> mpsc::Receiver<AppLog> {
-        let _ = self.builder.try_init();
-        self.channel.1
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        match field.name() {
+            "message" => self.message = Some(format!("{:?}", value)),
+            "log.target" => self.log_target = Some(format!("{:?}", value).trim_matches('"').to_string()),
+            _ => {}
+        }
     }
 }
 
 /// Drain the log channel into the `logs` table. Spawned as a tokio task
-/// after the DB pool is available. The task survives DB write failures —
-/// it only dies when the channel closes (which happens when the program
-/// drops the last sender, i.e. at shutdown).
+/// after the DB pool is available.
 pub fn start_db_writer(mut rx: mpsc::Receiver<AppLog>, pool: SqlitePool) {
     let repo = LogRepository::new(pool);
     tokio::spawn(async move {
@@ -197,47 +187,24 @@ pub fn start_db_writer(mut rx: mpsc::Receiver<AppLog>, pool: SqlitePool) {
                 .insert(level, &app_log.app_id, &app_log.target, &app_log.message)
                 .await
             {
-                // stderr only — never `log::error!` here, that would loop.
+                // stderr only — emitting a `log::*!` or `tracing::*!` here
+                // would feed back through DbLayer and loop.
                 eprintln!("LogService: failed to persist log entry: {:?}", e);
             }
         }
     });
 }
 
-/// Get the app name from config, falls back to "remon" if unavailable.
-fn get_app_name() -> String {
-    match crate::config::Config::new() {
-        Ok(config) => config.monitoring.app_name,
-        Err(_) => "remon".to_string(),
+/// Map the `monitoring.log_insertion_level` config string to a tracing Level.
+/// Falls back to WARN on unrecognized input — the same conservative default
+/// the env_logger-based predecessor used.
+pub fn parse_persist_level(s: &str) -> Level {
+    match s.to_lowercase().as_str() {
+        "error" => Level::ERROR,
+        "warn" => Level::WARN,
+        "info" => Level::INFO,
+        "debug" => Level::DEBUG,
+        "trace" => Level::TRACE,
+        _ => Level::WARN,
     }
-}
-
-/// Get the log insertion level from config, falls back to Warn if unavailable.
-///
-/// Reading `Config::new()` here on every log line is wasteful but it can't
-/// be replaced with `OnceLock` until the formatter has access to AppState
-/// — tracked under a separate cleanup task.
-fn get_log_insertion_level() -> log::Level {
-    match crate::config::Config::new() {
-        Ok(config) => match config
-            .monitoring
-            .log_insertion_level
-            .to_lowercase()
-            .as_str()
-        {
-            "error" => log::Level::Error,
-            "warn" => log::Level::Warn,
-            "info" => log::Level::Info,
-            "debug" => log::Level::Debug,
-            "trace" => log::Level::Trace,
-            _ => log::Level::Warn,
-        },
-        Err(_) => log::Level::Warn,
-    }
-}
-
-// avoid `unused_imports` for `error` after switching to eprintln in this module
-#[allow(dead_code)]
-fn _silence_unused_import_lint() {
-    error!("never called");
 }

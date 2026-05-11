@@ -1,15 +1,21 @@
 use axum::{
     Router,
-    http::{HeaderName, HeaderValue, Method},
+    http::{HeaderName, HeaderValue, Method, StatusCode},
 };
 use log::{error, info};
+use std::io::IsTerminal;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use std::time::Duration;
 use tower_http::LatencyUnit;
+use tower_http::compression::{CompressionLayer, predicate::{DefaultPredicate, NotForContentType, Predicate}};
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Level;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod config;
 mod notify;
@@ -60,9 +66,15 @@ async fn shutdown_signal() {
 #[cfg(test)]
 #[ctor::ctor(unsafe)]
 fn init_tests() {
-    let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Trace)
-        .is_test(true)
+    // tracing-subscriber's `try_init()` claims the global subscriber AND
+    // installs the `log → tracing` bridge (via the `tracing-log` feature)
+    // so `log::*!` macros still produce captured output under `cargo test`.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("trace")),
+        )
+        .with_test_writer()
         .try_init();
 }
 
@@ -77,80 +89,77 @@ async fn main() {
         }
     };
 
-    // Logger init: ORDER MATTERS.
+    // Single-facade logging: `tracing-subscriber` Registry composes a
+    // stdout fmt layer + a DB-persistence layer. The `log::*!` macros
+    // used throughout the codebase are bridged into tracing by the
+    // `tracing-log` feature on tracing-subscriber, so call sites don't
+    // change. The previous dual-facade setup (env_logger for log::, a
+    // separate tracing subscriber for tower-http spans) is gone.
     //
-    // `tracing-subscriber` (with default features) pulls in `tracing-log`,
-    // whose `LogTracer::init()` claims `log::set_logger()`. If we let it
-    // run first, env_logger's `try_init()` later silently no-ops and our
-    // pipe → DB writer never sees a record.
-    //
-    // So: install env_logger FIRST (claims `set_logger`), then install
-    // tracing as the global *tracing* subscriber. Both end up coexisting:
-    // - `log::*!` macros → env_logger pipe → DB writer + stdout
-    // - `tracing::*!` (incl. tower-http TraceLayer spans) → tracing → stdout
-    let log_filter = match config.logging.level.to_lowercase().as_str() {
-        "trace" => log::LevelFilter::Trace,
-        "debug" => log::LevelFilter::Debug,
-        "info" => log::LevelFilter::Info,
-        "warn" => log::LevelFilter::Warn,
-        "error" => log::LevelFilter::Error,
-        _ => log::LevelFilter::Info,
-    };
+    // Per-target EnvFilter defaults limit third-party noise (sqlx,
+    // hyper, h2, rustls) to WARN so enabling `debug` on the app code
+    // doesn't flood logs with raw SQL bodies. Operators override via
+    // the `RUST_LOG` env var.
+    let level_str = config.logging.level.to_lowercase();
+    let default_filter = format!(
+        "remon_server={lvl},sqlx=warn,hyper=warn,h2=warn,rustls=warn,tower_http={lvl}",
+        lvl = level_str
+    );
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(default_filter));
 
-    let log_rx = services::logging::LogService::new()
-        .set_level(log_filter)
-        .build();
+    // mpsc the DbLayer publishes onto; drained by `start_db_writer`
+    // once the DB connection is established below.
+    let (log_tx, log_rx) =
+        tokio::sync::mpsc::channel::<services::logging::AppLog>(100);
+    let persist_level =
+        services::logging::parse_persist_level(&config.monitoring.log_insertion_level);
+    let db_layer = services::logging::DbLayer::new(
+        log_tx,
+        persist_level,
+        config.monitoring.app_name.clone(),
+    );
 
-    let log_level = match config.logging.level.to_lowercase().as_str() {
-        "trace" => Level::TRACE,
-        "debug" => Level::DEBUG,
-        "info" => Level::INFO,
-        "warn" => Level::WARN,
-        "error" => Level::ERROR,
-        _ => Level::INFO,
-    };
+    // ANSI escapes are noise inside a redirected stream (file, journald,
+    // Loki). Auto-disable when stdout isn't a terminal.
+    let stdout_ansi = std::io::stdout().is_terminal();
 
-    // `set_global_default` instead of `init()` here — `init()` would also
-    // try to claim `log::set_logger` via tracing-log, panicking because
-    // env_logger already owns it. This keeps the two facades cleanly
-    // separated: log:: → env_logger → DB, tracing:: → stdout.
+    let registry = tracing_subscriber::registry().with(env_filter).with(db_layer);
+
     let format = config.logging.format.to_lowercase();
-    let format = format.as_str();
-    match format {
-        "json" => {
-            let s = tracing_subscriber::fmt()
-                .json()
-                .with_max_level(log_level)
-                .with_target(false)
-                .finish();
-            if let Err(e) = tracing::subscriber::set_global_default(s) {
-                eprintln!("Failed to install tracing subscriber: {}", e);
-                std::process::exit(1);
-            }
-        }
-        "pretty" => {
-            let s = tracing_subscriber::fmt()
-                .pretty()
-                .with_max_level(log_level)
-                .with_target(false)
-                .finish();
-            if let Err(e) = tracing::subscriber::set_global_default(s) {
-                eprintln!("Failed to install tracing subscriber: {}", e);
-                std::process::exit(1);
-            }
-        }
-        _ => {
-            let s = tracing_subscriber::fmt()
-                .compact()
-                .with_max_level(log_level)
-                .with_target(false)
-                .finish();
-            if let Err(e) = tracing::subscriber::set_global_default(s) {
-                eprintln!("Failed to install tracing subscriber: {}", e);
-                std::process::exit(1);
-            }
-        }
+    let install_result = match format.as_str() {
+        "json" => registry
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false) // JSON output never wants ANSI
+                    .json(),
+            )
+            .try_init(),
+        "pretty" => registry
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(stdout_ansi)
+                    .pretty(),
+            )
+            .try_init(),
+        _ => registry
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(stdout_ansi)
+                    .compact(),
+            )
+            .try_init(),
+    };
+    if let Err(e) = install_result {
+        eprintln!("Failed to install tracing subscriber: {}", e);
+        std::process::exit(1);
     }
+    // `try_init()` above installs the log → tracing bridge as part of
+    // SubscriberInitExt (the `tracing-log` feature is enabled in
+    // Cargo.toml), so existing `log::info!` call sites now emit tracing
+    // events through the same registry.
+    let _ = Level::INFO; // keep `Level` import alive in case future code uses it
+
 
     if let Err(e) = auth::token::validate() {
         error!("{}", e);
@@ -249,6 +258,7 @@ async fn main() {
     let app_state = Arc::new(state::AppState::new(
         db.pool().clone(),
         config.auth.clone(),
+        config.server.trusted_proxy,
         effective_config,
         overrides.collector_stats_interval_ms,
         overrides.collector_processes_interval_ms,
@@ -286,19 +296,14 @@ async fn main() {
     // task per enabled+platform-matched probe. A missing directory is
     // not an error — fresh installs may not ship any examples.
     let probe_dir = std::path::PathBuf::from("probes");
-    let report = probes::scheduler::load_and_spawn(
+    // The scheduler emits its own `probe loader: ...` info line; we
+    // don't re-log it here — was a duplicate boot entry.
+    let _ = probes::scheduler::load_and_spawn(
         &probe_dir,
         Arc::clone(&app_state.probe_registry),
         app_state.db.clone(),
     )
     .await;
-    info!(
-        "Probe loader: {} loaded, {} disabled, {} skipped(platform), {} failed",
-        report.loaded.len(),
-        report.skipped_disabled.len(),
-        report.skipped_platform.len(),
-        report.failed.len()
-    );
 
     // CORS layer for the browser-based web UI. Resolved from config; in
     // dev `allow_any_origin = true` and we hand the browser `Access-Control-
@@ -309,13 +314,30 @@ async fn main() {
     // Build the Axum router. State is passed through to each module so the
     // auth middleware (a layer attached inside each module) can run
     // session/jti revocation checks against the database.
+    //
+    // Layer placement notes:
+    // - `TimeoutLayer` is scoped to REST only — SSE and WS streams are
+    //   long-lived by definition and would 408 on the next idle moment.
+    // - `RequestBodyLimitLayer(64K)` is the defensive global cap; the
+    //   anonymous auth subrouter clamps it further (see routes/rest/mod.rs).
+    // - `CompressionLayer` excludes `text/event-stream` — gzip would buffer
+    //   SSE frames until a window fills, defeating the live-update point of
+    //   the stream entirely.
+    let rest_router = routes::rest::create_routes(app_state.clone())
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(30),
+        ));
+    let compression = CompressionLayer::new()
+        .compress_when(DefaultPredicate::new().and(NotForContentType::new("text/event-stream")));
     let app = Router::new()
-        .merge(routes::rest::create_routes(app_state.clone()))
+        .merge(rest_router)
         .nest("/sse", routes::sse::create_routes(app_state.clone()))
         .nest("/ws", routes::ws::create_routes(app_state.clone()))
         .with_state(app_state)
         .layer(cors_layer)
-        .layer(tower_http::compression::CompressionLayer::new())
+        .layer(RequestBodyLimitLayer::new(64 * 1024))
+        .layer(compression)
         // HTTP request/response trace span.
         //
         // Two redactions matter here:
