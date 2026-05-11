@@ -255,6 +255,8 @@ pub fn get_network_stats(networks: &Networks, interval_secs: f64) -> Vec<Network
                 tx_packets_per_sec: txp,
                 errors_in_per_sec: errs_in,
                 errors_out_per_sec: errs_out,
+                rx_bytes_total: data.total_received(),
+                tx_bytes_total: data.total_transmitted(),
                 timestamp,
             }
         })
