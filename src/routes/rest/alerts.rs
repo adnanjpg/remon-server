@@ -31,6 +31,10 @@ use crate::storage::repositories::{AlertRepository, UpsertAlertRule};
 
 const DEFAULT_EVENT_LIMIT: u32 = 100;
 const MAX_EVENT_LIMIT: u32 = 1000;
+/// Sanity cap on `?offset=` — at the default 90-day retention an
+/// `alert_events` table holding 100 k rows would be unusual; capping at
+/// that bounds the SQLite scan-past cost on pathological inputs.
+const MAX_EVENT_OFFSET: u32 = 100_000;
 
 const MIN_EVAL_INTERVAL: i64 = 3;
 const MAX_EVAL_INTERVAL: i64 = 3600;
@@ -40,6 +44,7 @@ const MAX_COOLDOWN: i64 = 86_400;
 #[derive(Debug, Deserialize)]
 pub struct EventsQuery {
     pub limit: Option<u32>,
+    pub offset: Option<u32>,
 }
 
 /// Common validation for create/update bodies. Bracket every numeric
@@ -233,8 +238,9 @@ pub async fn list_recent_events(
     Query(q): Query<EventsQuery>,
 ) -> AppResult<Json<ListAlertEventsResponse>> {
     let limit = q.limit.unwrap_or(DEFAULT_EVENT_LIMIT).min(MAX_EVENT_LIMIT);
+    let offset = q.offset.unwrap_or(0).min(MAX_EVENT_OFFSET);
     let repo = AlertRepository::new(state.db.clone());
-    let events = repo.recent_events(limit).await?;
+    let events = repo.recent_events(limit, offset).await?;
     Ok(Json(ListAlertEventsResponse {
         events: events.into_iter().map(AlertEventDto::from).collect(),
     }))
@@ -247,8 +253,9 @@ pub async fn list_events_for_rule(
     Query(q): Query<EventsQuery>,
 ) -> AppResult<Json<ListAlertEventsResponse>> {
     let limit = q.limit.unwrap_or(DEFAULT_EVENT_LIMIT).min(MAX_EVENT_LIMIT);
+    let offset = q.offset.unwrap_or(0).min(MAX_EVENT_OFFSET);
     let repo = AlertRepository::new(state.db.clone());
-    let events = repo.events_for_rule(id, limit).await?;
+    let events = repo.events_for_rule(id, limit, offset).await?;
     Ok(Json(ListAlertEventsResponse {
         events: events.into_iter().map(AlertEventDto::from).collect(),
     }))

@@ -28,6 +28,9 @@ use crate::storage::repositories::ProbeRepository;
 
 const DEFAULT_HISTORY_LIMIT: u32 = 100;
 const MAX_HISTORY_LIMIT: u32 = 1000;
+/// Sanity cap on `?offset=` — see alerts.rs MAX_EVENT_OFFSET for the
+/// reasoning. probe_runs follows the same retention model.
+const MAX_HISTORY_OFFSET: u32 = 100_000;
 const PROBES_DIR: &str = "probes";
 
 const DEFAULT_METRIC_SPAN_SECS: i64 = 3600;
@@ -37,6 +40,7 @@ const MAX_METRIC_LIMIT: u32 = 5000;
 #[derive(Debug, Deserialize)]
 pub struct HistoryQuery {
     pub limit: Option<u32>,
+    pub offset: Option<u32>,
 }
 
 /// Same charset rule as `/services` — kept consistent so any future
@@ -122,8 +126,9 @@ pub async fn get_probe_history(
 ) -> AppResult<Json<ProbeHistoryResponse>> {
     validate_name(&name)?;
     let limit = q.limit.unwrap_or(DEFAULT_HISTORY_LIMIT).min(MAX_HISTORY_LIMIT);
+    let offset = q.offset.unwrap_or(0).min(MAX_HISTORY_OFFSET);
     let repo = ProbeRepository::new(state.db.clone());
-    let runs = repo.run_history(&name, limit).await?;
+    let runs = repo.run_history(&name, limit, offset).await?;
     Ok(Json(ProbeHistoryResponse {
         probe_name: name,
         runs: runs.into_iter().map(ProbeRunDto::from).collect(),

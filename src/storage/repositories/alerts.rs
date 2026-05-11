@@ -333,8 +333,14 @@ impl AlertRepository {
         Ok(r.last_insert_rowid())
     }
 
-    /// Recent events for a single rule, newest first.
-    pub async fn events_for_rule(&self, rule_id: i64, limit: u32) -> AppResult<Vec<AlertEvent>> {
+    /// Recent events for a single rule, newest first. `offset` skips that
+    /// many rows after sorting, enabling client-side pagination.
+    pub async fn events_for_rule(
+        &self,
+        rule_id: i64,
+        limit: u32,
+        offset: u32,
+    ) -> AppResult<Vec<AlertEvent>> {
         let rows: Vec<(i64, i64, String, String, String, i64, Option<f64>, i64)> = sqlx::query_as(
             r#"
             SELECT id, rule_id, label_set, event_type, severity,
@@ -342,28 +348,31 @@ impl AlertRepository {
               FROM alert_events
              WHERE rule_id = ?
              ORDER BY occurred_at DESC
-             LIMIT ?
+             LIMIT ? OFFSET ?
             "#,
         )
         .bind(rule_id)
         .bind(limit as i64)
+        .bind(offset as i64)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().filter_map(decode_event).collect())
     }
 
-    /// Cross-rule recent events, newest first.
-    pub async fn recent_events(&self, limit: u32) -> AppResult<Vec<AlertEvent>> {
+    /// Cross-rule recent events, newest first. See `events_for_rule` for the
+    /// offset semantics.
+    pub async fn recent_events(&self, limit: u32, offset: u32) -> AppResult<Vec<AlertEvent>> {
         let rows: Vec<(i64, i64, String, String, String, i64, Option<f64>, i64)> = sqlx::query_as(
             r#"
             SELECT id, rule_id, label_set, event_type, severity,
                    occurred_at, metric_value, notified
               FROM alert_events
              ORDER BY occurred_at DESC
-             LIMIT ?
+             LIMIT ? OFFSET ?
             "#,
         )
         .bind(limit as i64)
+        .bind(offset as i64)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().filter_map(decode_event).collect())

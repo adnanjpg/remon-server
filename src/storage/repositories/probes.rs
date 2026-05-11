@@ -162,19 +162,26 @@ impl ProbeRepository {
     }
 
     /// Run-meta history (timestamp / duration / exit / message / parse_ok)
-    /// for `/probes/{name}/history`.
-    pub async fn run_history(&self, probe_name: &str, limit: u32) -> AppResult<Vec<ProbeRun>> {
+    /// for `/probes/{name}/history`. `offset` enables client-side paging
+    /// back through older runs once the most recent `limit` has been read.
+    pub async fn run_history(
+        &self,
+        probe_name: &str,
+        limit: u32,
+        offset: u32,
+    ) -> AppResult<Vec<ProbeRun>> {
         let rows: Vec<(i64, i64, Option<i64>, Option<String>, i64)> = sqlx::query_as(
             r#"
             SELECT timestamp, duration_ms, exit_code, message, parse_ok
               FROM probe_runs
              WHERE probe_name = ?
              ORDER BY timestamp DESC
-             LIMIT ?
+             LIMIT ? OFFSET ?
             "#,
         )
         .bind(probe_name)
         .bind(limit as i64)
+        .bind(offset as i64)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
