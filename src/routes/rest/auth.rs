@@ -3,7 +3,7 @@
 use axum::{
     Json,
     extract::{ConnectInfo, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
 };
 use log::info;
 use std::net::SocketAddr;
@@ -20,6 +20,7 @@ use crate::storage::repositories::DeviceRepository;
 pub async fn login(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<DeviceLoginRequest>,
 ) -> AppResult<Json<TokenResponse>> {
     let device_repo = DeviceRepository::new(state.db.clone());
@@ -36,7 +37,14 @@ pub async fn login(
         return Err(AppError::InvalidToken);
     }
 
-    let client_ip = addr.ip().to_string();
+    // Behind a reverse proxy (Caddy), the TCP peer is always 127.0.0.1.
+    // Use the first entry of X-Forwarded-For when present.
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| addr.ip().to_string());
     let _ = device_repo
         .update_last_seen(&req.device_id, Some(&client_ip))
         .await;
