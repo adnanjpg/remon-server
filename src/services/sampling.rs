@@ -60,14 +60,23 @@ async fn run(state: Arc<AppState>) {
         let observed = if subscribers > 0 { Mode::Active } else { Mode::Idle };
 
         if observed != current {
-            consecutive_opposite = consecutive_opposite.saturating_add(1);
-            if consecutive_opposite >= HYSTERESIS_TICKS {
-                current = observed;
+            if observed == Mode::Active {
+                // Subscriber appeared: activate immediately so the first
+                // real-time viewer doesn't wait up to HYSTERESIS_TICKS×SAMPLING_TICK_MS
+                // before the fast interval kicks in.
+                current = Mode::Active;
                 consecutive_opposite = 0;
-                info!(
-                    "Adaptive sampling → {:?} (stats subscribers={})",
-                    current, subscribers
-                );
+                info!("Adaptive sampling → Active (stats subscribers={})", subscribers);
+            } else {
+                // No subscribers: require HYSTERESIS_TICKS consecutive idle
+                // observations before slowing down, to avoid flapping on
+                // brief disconnects.
+                consecutive_opposite = consecutive_opposite.saturating_add(1);
+                if consecutive_opposite >= HYSTERESIS_TICKS {
+                    current = Mode::Idle;
+                    consecutive_opposite = 0;
+                    info!("Adaptive sampling → Idle (stats subscribers={})", subscribers);
+                }
             }
         } else {
             consecutive_opposite = 0;
