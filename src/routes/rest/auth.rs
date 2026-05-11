@@ -37,14 +37,7 @@ pub async fn login(
         return Err(AppError::InvalidToken);
     }
 
-    // Behind a reverse proxy (Caddy), the TCP peer is always 127.0.0.1.
-    // Use the first entry of X-Forwarded-For when present.
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| addr.ip().to_string());
+    let client_ip = extract_client_ip(&headers, &addr, state.trusted_proxy);
     let _ = device_repo
         .update_last_seen(&req.device_id, Some(&client_ip))
         .await;
@@ -120,6 +113,26 @@ pub async fn logout(
     device_repo.delete_session(&claims.jti).await?;
     info!("Device {} logged out (jti={})", claims.device_id, claims.jti);
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Resolve the client IP to record in audit. When `trust_proxy` is false we
+/// only trust the TCP peer — XFF can be forged by any direct caller. When
+/// true (deployer has opted in), prefer the leftmost XFF entry, which is the
+/// real client under any proxy that strips incoming XFF before adding its
+/// own. Falls back to the peer if XFF is absent or malformed.
+fn extract_client_ip(headers: &HeaderMap, addr: &SocketAddr, trust_proxy: bool) -> String {
+    if trust_proxy {
+        if let Some(v) = headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.split(',').next())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return v.to_string();
+        }
+    }
+    addr.ip().to_string()
 }
 
 /// Persist both jti's from a freshly issued token pair into the `sessions`

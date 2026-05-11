@@ -54,7 +54,7 @@ fn extract_token(req: &Request) -> Option<String> {
         .headers()
         .get("authorization")
         .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
+        .and_then(parse_bearer)
     {
         return Some(token.to_string());
     }
@@ -66,4 +66,14 @@ fn extract_token(req: &Request) -> Option<String> {
             (k == "access_token").then(|| v.to_string())
         })
     })
+}
+
+/// RFC 7235 auth schemes are case-insensitive (`Bearer` / `bearer` / `BEARER`
+/// are all valid). The strict `strip_prefix("Bearer ")` we had before locked
+/// out callers that happened to lowercase the scheme.
+fn parse_bearer(header: &str) -> Option<&str> {
+    let (scheme, rest) = header.split_once(' ')?;
+    scheme
+        .eq_ignore_ascii_case("Bearer")
+        .then_some(rest.trim_start())
 }

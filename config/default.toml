@@ -4,6 +4,16 @@
 [server]
 port = 8080
 host = "0.0.0.0"
+# Set to true ONLY when the server runs behind a reverse proxy that
+# overwrites or appends `X-Forwarded-For` on its own (Caddy with the
+# default `reverse_proxy` directive, nginx with
+# `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`, etc.).
+# When true the per-IP rate limiter and audit log read the forwarded
+# address; when false they use the TCP peer.
+# Leaving this false while behind a proxy is safe but collapses every
+# client into the proxy's IP. Setting it true while exposed directly is
+# *not* safe — any caller can spoof the header.
+trusted_proxy = false
 
 [database]
 # SQLite connection settings

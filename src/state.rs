@@ -58,6 +58,12 @@ pub struct AppState {
     pub db: SqlitePool,
     pub auth_config: AuthConfig,
 
+    /// When true, audit and rate-limit code reads the client IP from
+    /// `X-Forwarded-For` instead of the TCP peer. Mirrors
+    /// `[server] trusted_proxy` from config; see ServerConfig for the
+    /// trust contract.
+    pub trusted_proxy: bool,
+
     /// Active pairing window (only one at a time; see PAIRING_MAX_ATTEMPTS).
     pub pairing_state: RwLock<Option<PairingState>>,
 
@@ -127,6 +133,7 @@ impl AppState {
     pub fn new(
         db: SqlitePool,
         auth_config: AuthConfig,
+        trusted_proxy: bool,
         effective_config: EffectiveConfig,
         collector_stats_interval_ms: u64,
         collector_processes_interval_ms: u64,
@@ -146,6 +153,7 @@ impl AppState {
         Self {
             db,
             auth_config,
+            trusted_proxy,
             pairing_state: RwLock::new(None),
             stats_tx,
             processes_tx,

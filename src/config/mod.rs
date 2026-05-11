@@ -20,6 +20,15 @@ pub struct Config {
 pub struct ServerConfig {
     pub port: u16,
     pub host: String,
+    /// True when the server runs behind a reverse proxy that strips
+    /// client-controlled `X-Forwarded-For` and appends the real client IP
+    /// itself. When set:
+    ///   - audit log writes (`devices.last_ip`) use the forwarded address
+    ///   - per-IP rate limiting keys by the forwarded address
+    /// Leave false for direct exposure; otherwise an attacker can spoof
+    /// XFF and either pollute audit data or bypass rate limits.
+    #[serde(default)]
+    pub trusted_proxy: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]

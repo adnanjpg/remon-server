@@ -23,7 +23,18 @@ use axum::{
 };
 use std::sync::Arc;
 use std::time::Duration;
-use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
+use tower_governor::{
+    GovernorLayer,
+    governor::GovernorConfigBuilder,
+    key_extractor::SmartIpKeyExtractor,
+};
+use tower_http::limit::RequestBodyLimitLayer;
+
+/// Bodies on anonymous auth endpoints are tiny: device_id + device_token +
+/// optional device_name + optional fcm_token. 8 KiB leaves plenty of room
+/// for the longest reasonable shape and rejects DoS-by-large-body before
+/// any handler code runs.
+const ANON_AUTH_BODY_LIMIT: usize = 8 * 1024;
 
 /// Build the REST router. Public routes are merged with protected routes; the
 /// latter run through `auth_middleware` (which needs `AppState` for the
@@ -34,34 +45,66 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
     // five quick attempts then settles to ~5 req/min. Combined with the
     // 8-digit pairing code + 3-attempts cap this puts online
     // brute-force well out of reach.
-    let governor_conf = Arc::new(
-        GovernorConfigBuilder::default()
-            .per_second(12)
-            .burst_size(5)
-            .finish()
-            .expect("valid governor config"),
-    );
-
-    // Background reaper to evict idle IP entries from the limiter so memory
-    // stays bounded under abuse. Runs once a minute on the tokio runtime
-    // so it shares scheduler threads with the rest of the server (no extra
-    // OS thread parked in blocking sleep).
-    let limiter = governor_conf.limiter().clone();
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(Duration::from_secs(60));
-        tick.tick().await; // first tick fires immediately; discard it
-        loop {
+    //
+    // Key extraction depends on deployment: behind a reverse proxy the TCP
+    // peer is always 127.0.0.1, so the default `PeerIpKeyExtractor` would
+    // collapse the entire internet into one rate-limit bucket. When
+    // `trusted_proxy` is set the smart extractor honours `X-Forwarded-For`
+    // / `X-Real-IP` instead.
+    // Background reaper to evict idle IP entries so memory stays bounded
+    // under abuse. Spawned once per limiter; duplicated inside each branch
+    // because the limiter's concrete type depends on the key extractor and
+    // a generic helper would mean importing `governor`'s internals.
+    let rate_limited_auth = if state.trusted_proxy {
+        let conf = Arc::new(
+            GovernorConfigBuilder::default()
+                .per_second(12)
+                .burst_size(5)
+                .key_extractor(SmartIpKeyExtractor)
+                .finish()
+                .expect("valid governor config"),
+        );
+        let limiter = conf.limiter().clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(60));
             tick.tick().await;
-            limiter.retain_recent();
-        }
-    });
-
-    let rate_limited_auth = Router::new()
-        .route("/auth/pair/initiate", post(pairing::initiate_pairing))
-        .route("/auth/pair/complete", post(pairing::complete_pairing))
-        .route("/auth/login", post(auth::login))
-        .route("/auth/refresh", post(auth::refresh))
-        .layer(GovernorLayer::new(governor_conf));
+            loop {
+                tick.tick().await;
+                limiter.retain_recent();
+            }
+        });
+        Router::new()
+            .route("/auth/pair/initiate", post(pairing::initiate_pairing))
+            .route("/auth/pair/complete", post(pairing::complete_pairing))
+            .route("/auth/login", post(auth::login))
+            .route("/auth/refresh", post(auth::refresh))
+            .layer(GovernorLayer::new(conf))
+            .layer(RequestBodyLimitLayer::new(ANON_AUTH_BODY_LIMIT))
+    } else {
+        let conf = Arc::new(
+            GovernorConfigBuilder::default()
+                .per_second(12)
+                .burst_size(5)
+                .finish()
+                .expect("valid governor config"),
+        );
+        let limiter = conf.limiter().clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(60));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                limiter.retain_recent();
+            }
+        });
+        Router::new()
+            .route("/auth/pair/initiate", post(pairing::initiate_pairing))
+            .route("/auth/pair/complete", post(pairing::complete_pairing))
+            .route("/auth/login", post(auth::login))
+            .route("/auth/refresh", post(auth::refresh))
+            .layer(GovernorLayer::new(conf))
+            .layer(RequestBodyLimitLayer::new(ANON_AUTH_BODY_LIMIT))
+    };
 
     let public_routes = Router::new()
         .route("/hello", get(misc::hello))
