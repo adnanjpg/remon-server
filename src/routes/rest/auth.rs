@@ -105,13 +105,13 @@ pub async fn refresh(
 /// Only this access token's jti is invalidated; the refresh token (if still
 /// in the client's possession) keeps working until used or expired. Use
 /// `delete_device_sessions` here if a "log out everywhere" flow is added.
-pub async fn logout(
-    State(state): State<Arc<AppState>>,
-    claims: Claims,
-) -> AppResult<StatusCode> {
+pub async fn logout(State(state): State<Arc<AppState>>, claims: Claims) -> AppResult<StatusCode> {
     let device_repo = DeviceRepository::new(state.db.clone());
     device_repo.delete_session(&claims.jti).await?;
-    info!("Device {} logged out (jti={})", claims.device_id, claims.jti);
+    info!(
+        "Device {} logged out (jti={})",
+        claims.device_id, claims.jti
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -146,11 +146,7 @@ async fn persist_session_pair(
     repo.create_session(&tokens.access_jti, device_id, tokens.access_expires_at)
         .await?;
     if let Err(e) = repo
-        .create_session(
-            &tokens.refresh_jti,
-            device_id,
-            tokens.refresh_expires_at,
-        )
+        .create_session(&tokens.refresh_jti, device_id, tokens.refresh_expires_at)
         .await
     {
         // Roll back the access-jti row so we don't leave it dangling.

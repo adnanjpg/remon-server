@@ -38,9 +38,7 @@ impl VapidKeyPair {
             .to_pkcs8_pem(LineEnding::LF)
             .context("encode VAPID private key as PKCS#8 PEM")?
             .to_string();
-        let public_key_pem = secret
-            .public_key()
-            .to_string();
+        let public_key_pem = secret.public_key().to_string();
         Ok(Self {
             public_key_pem,
             private_key_pem,

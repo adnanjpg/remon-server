@@ -18,8 +18,8 @@
 //!   a known gap; the kill-switch above is the workaround until JWT scope
 //!   claims land.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use axum::{

@@ -43,7 +43,11 @@ impl WebPushChannel {
         pool: SqlitePool,
         client: reqwest::Client,
     ) -> Result<Self, ChannelError> {
-        Ok(Self { vapid, pool, client })
+        Ok(Self {
+            vapid,
+            pool,
+            client,
+        })
     }
 
     async fn send_to_subscriber(
@@ -173,27 +177,20 @@ fn encrypt_payload(p256dh: &str, auth: &str, plaintext: &[u8]) -> anyhow::Result
 
     // Random 16-byte salt
     let mut salt = [0u8; 16];
-    rand::SecureRandom::fill(&rng, &mut salt)
-        .map_err(|_| anyhow::anyhow!("generate salt"))?;
+    rand::SecureRandom::fill(&rng, &mut salt).map_err(|_| anyhow::anyhow!("generate salt"))?;
 
     // Ephemeral P-256 key pair (sender side)
-    let ephemeral_priv =
-        agreement::EphemeralPrivateKey::generate(&agreement::ECDH_P256, &rng)
-            .map_err(|_| anyhow::anyhow!("generate ephemeral key"))?;
+    let ephemeral_priv = agreement::EphemeralPrivateKey::generate(&agreement::ECDH_P256, &rng)
+        .map_err(|_| anyhow::anyhow!("generate ephemeral key"))?;
     let ephemeral_pub = ephemeral_priv
         .compute_public_key()
         .map_err(|_| anyhow::anyhow!("compute ephemeral public key"))?;
     let ephemeral_pub_bytes = ephemeral_pub.as_ref().to_vec(); // 65 bytes, uncompressed
 
     // ECDH: shared secret from ephemeral private + browser public key
-    let browser_pub =
-        agreement::UnparsedPublicKey::new(&agreement::ECDH_P256, &browser_pub_bytes);
-    let ecdh_secret = agreement::agree_ephemeral(
-        ephemeral_priv,
-        &browser_pub,
-        |kd| kd.to_vec(),
-    )
-    .map_err(|_| anyhow::anyhow!("ECDH agree"))?;
+    let browser_pub = agreement::UnparsedPublicKey::new(&agreement::ECDH_P256, &browser_pub_bytes);
+    let ecdh_secret = agreement::agree_ephemeral(ephemeral_priv, &browser_pub, |kd| kd.to_vec())
+        .map_err(|_| anyhow::anyhow!("ECDH agree"))?;
 
     // RFC 8291 §3.3 key derivation
     //

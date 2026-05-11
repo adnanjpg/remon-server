@@ -34,10 +34,7 @@ impl CreateChannelRequest {
             return Err("name is required".to_string());
         }
         if !VALID_TYPES.contains(&self.r#type.as_str()) {
-            return Err(format!(
-                "type must be one of: {}",
-                VALID_TYPES.join(", ")
-            ));
+            return Err(format!("type must be one of: {}", VALID_TYPES.join(", ")));
         }
         if let Some(ref sev) = self.min_severity {
             if !VALID_SEVERITIES.contains(&sev.as_str()) {

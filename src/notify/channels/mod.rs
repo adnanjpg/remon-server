@@ -53,7 +53,11 @@ pub fn build_channel(
             // are tracked on `devices` rows. Operator just toggles the
             // channel on; the rest is automatic.
             let _ = config; // suppress unused-var lint at this branch
-            Ok(Box::new(WebPushChannel::new(Arc::clone(vapid), pool, http)?))
+            Ok(Box::new(WebPushChannel::new(
+                Arc::clone(vapid),
+                pool,
+                http,
+            )?))
         }
 
         "telegram" => {
@@ -75,7 +79,13 @@ pub fn build_channel(
 
         "webhook" => {
             let url = config["url"].as_str().unwrap_or("").to_string();
-            let secret = if credentials.webhook.secret.as_deref().unwrap_or("").is_empty() {
+            let secret = if credentials
+                .webhook
+                .secret
+                .as_deref()
+                .unwrap_or("")
+                .is_empty()
+            {
                 None
             } else {
                 credentials.webhook.secret.clone()

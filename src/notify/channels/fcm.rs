@@ -8,7 +8,7 @@ use chrono::Utc;
 use log::{debug, warn};
 use reqwest::Client;
 use ring::rand::SystemRandom;
-use ring::signature::{RsaKeyPair, RSA_PKCS1_SHA256};
+use ring::signature::{RSA_PKCS1_SHA256, RsaKeyPair};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tokio::sync::RwLock;
@@ -74,18 +74,15 @@ impl FcmChannel {
             "https://oauth2.googleapis.com/token".to_string()
         }
 
-        let raw: SaJson = serde_json::from_str(&json_str).map_err(|e| {
-            ChannelError::Config(format!("parse FCM service account: {}", e))
-        })?;
+        let raw: SaJson = serde_json::from_str(&json_str)
+            .map_err(|e| ChannelError::Config(format!("parse FCM service account: {}", e)))?;
 
-        let key_der = pem_body_to_der(&raw.private_key).map_err(|e| {
-            ChannelError::Config(format!("decode FCM private key: {}", e))
-        })?;
+        let key_der = pem_body_to_der(&raw.private_key)
+            .map_err(|e| ChannelError::Config(format!("decode FCM private key: {}", e)))?;
 
         // Validate the key parses at construction time.
-        RsaKeyPair::from_pkcs8(&key_der).map_err(|e| {
-            ChannelError::Config(format!("invalid FCM RSA key: {:?}", e))
-        })?;
+        RsaKeyPair::from_pkcs8(&key_der)
+            .map_err(|e| ChannelError::Config(format!("invalid FCM RSA key: {:?}", e)))?;
 
         Ok(Self {
             inner: Arc::new(FcmInner {
@@ -234,7 +231,10 @@ fn summarize_fcm_error(body: &str) -> String {
     let fcm_code = err
         .and_then(|e| e.get("details"))
         .and_then(|d| d.as_array())
-        .and_then(|arr| arr.iter().find_map(|d| d.get("errorCode").and_then(|c| c.as_str())));
+        .and_then(|arr| {
+            arr.iter()
+                .find_map(|d| d.get("errorCode").and_then(|c| c.as_str()))
+        });
     match fcm_code {
         Some(c) => format!("{}/{}", status, c),
         None => status.to_string(),
@@ -336,8 +336,7 @@ fn build_jwt(
     let claims = URL_SAFE_NO_PAD.encode(&claims_json);
     let signing_input = format!("{}.{}", header, claims);
 
-    let key_pair =
-        RsaKeyPair::from_pkcs8(key_der).map_err(|e| format!("RsaKeyPair: {:?}", e))?;
+    let key_pair = RsaKeyPair::from_pkcs8(key_der).map_err(|e| format!("RsaKeyPair: {:?}", e))?;
 
     let rng = SystemRandom::new();
     let mut sig = vec![0u8; key_pair.public().modulus_len()];
@@ -345,17 +344,18 @@ fn build_jwt(
         .sign(&RSA_PKCS1_SHA256, &rng, signing_input.as_bytes(), &mut sig)
         .map_err(|e| format!("RSA sign: {:?}", e))?;
 
-    Ok(format!("{}.{}", signing_input, URL_SAFE_NO_PAD.encode(&sig)))
+    Ok(format!(
+        "{}.{}",
+        signing_input,
+        URL_SAFE_NO_PAD.encode(&sig)
+    ))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Decode a PEM-encoded key (any header) to raw DER bytes.
 fn pem_body_to_der(pem: &str) -> Result<Vec<u8>, String> {
-    let body: String = pem
-        .lines()
-        .filter(|l| !l.starts_with("-----"))
-        .collect();
+    let body: String = pem.lines().filter(|l| !l.starts_with("-----")).collect();
     STANDARD.decode(body.trim()).map_err(|e| e.to_string())
 }
 

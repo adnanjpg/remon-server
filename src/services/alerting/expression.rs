@@ -99,7 +99,11 @@ pub struct ParseError {
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "alert expression parse error at byte {}: {}", self.offset, self.message)
+        write!(
+            f,
+            "alert expression parse error at byte {}: {}",
+            self.offset, self.message
+        )
     }
 }
 
@@ -119,7 +123,11 @@ pub fn parse(input: &str) -> Result<Expression, ParseError> {
     if !p.eof() {
         return Err(p.err("unexpected trailing tokens"));
     }
-    Ok(Expression { metric, comparator, threshold })
+    Ok(Expression {
+        metric,
+        comparator,
+        threshold,
+    })
 }
 
 // ===== Parser =====
@@ -210,7 +218,11 @@ impl<'a> Parser<'a> {
         } else {
             BTreeMap::new()
         };
-        Ok(MetricRef { namespace, field, labels })
+        Ok(MetricRef {
+            namespace,
+            field,
+            labels,
+        })
     }
 
     fn parse_label_set(&mut self) -> Result<BTreeMap<String, String>, ParseError> {
@@ -373,9 +385,7 @@ mod tests {
 
     #[test]
     fn label_set_multi_sorted() {
-        let e = must_parse(
-            "probe.banned{probe_name=\"fail2ban\",jail=\"sshd\"} > 100",
-        );
+        let e = must_parse("probe.banned{probe_name=\"fail2ban\",jail=\"sshd\"} > 100");
         // BTreeMap: jail < probe_name alphabetically.
         let keys: Vec<&str> = e.metric.labels.keys().map(String::as_str).collect();
         assert_eq!(keys, vec!["jail", "probe_name"]);
@@ -384,7 +394,10 @@ mod tests {
     #[test]
     fn label_value_with_escape() {
         let e = must_parse(r#"a.b{x="he said \"hi\""} > 0"#);
-        assert_eq!(e.metric.labels.get("x"), Some(&"he said \"hi\"".to_string()));
+        assert_eq!(
+            e.metric.labels.get("x"),
+            Some(&"he said \"hi\"".to_string())
+        );
     }
 
     #[test]
@@ -447,8 +460,7 @@ mod tests {
 
     #[test]
     fn duplicate_label_key_rejected() {
-        let err =
-            parse("a.b{x=\"1\",x=\"2\"} > 0").unwrap_err();
+        let err = parse("a.b{x=\"1\",x=\"2\"} > 0").unwrap_err();
         assert!(err.message.contains("duplicate"));
     }
 
@@ -474,11 +486,12 @@ mod tests {
 
     #[test]
     fn metric_ref_display_is_canonical() {
-        let e = must_parse(
-            "probe.banned{probe_name=\"fail2ban\",jail=\"sshd\"} > 100",
-        );
+        let e = must_parse("probe.banned{probe_name=\"fail2ban\",jail=\"sshd\"} > 100");
         // BTreeMap sorts keys alphabetically; output reflects that.
-        assert_eq!(format!("{}", e.metric), "probe.banned{jail=\"sshd\",probe_name=\"fail2ban\"}");
+        assert_eq!(
+            format!("{}", e.metric),
+            "probe.banned{jail=\"sshd\",probe_name=\"fail2ban\"}"
+        );
     }
 
     // ----- Comparator semantics -----

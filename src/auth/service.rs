@@ -21,9 +21,8 @@ fn strict_validation() -> Validation {
     let mut v = Validation::new(Algorithm::HS256);
     v.validate_exp = true;
     v.validate_aud = false;
-    v.required_spec_claims = HashSet::from_iter(
-        ["exp", "sub", "iat"].iter().map(|s| s.to_string()),
-    );
+    v.required_spec_claims =
+        HashSet::from_iter(["exp", "sub", "iat"].iter().map(|s| s.to_string()));
     v
 }
 

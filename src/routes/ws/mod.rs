@@ -3,9 +3,9 @@ pub mod docker;
 
 use crate::state::AppState;
 
-use axum::{Router, middleware};
 #[cfg(feature = "docker")]
 use axum::routing::get;
+use axum::{Router, middleware};
 use std::sync::Arc;
 
 /// WebSocket routes. All require authentication.

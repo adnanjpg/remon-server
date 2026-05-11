@@ -93,7 +93,9 @@ async fn parse_user_file(path: &str, username: &str, out: &mut Vec<CronJob>) {
 
 fn parse_system_line(line: &str, source: &str) -> Option<CronJob> {
     let line = preprocess(line)?;
-    let mut parts = line.splitn(8, char::is_whitespace).filter(|s| !s.is_empty());
+    let mut parts = line
+        .splitn(8, char::is_whitespace)
+        .filter(|s| !s.is_empty());
 
     let first = parts.next()?;
 
@@ -134,7 +136,9 @@ fn parse_system_line(line: &str, source: &str) -> Option<CronJob> {
 
 fn parse_user_line(line: &str, username: &str, source: &str) -> Option<CronJob> {
     let line = preprocess(line)?;
-    let mut parts = line.splitn(7, char::is_whitespace).filter(|s| !s.is_empty());
+    let mut parts = line
+        .splitn(7, char::is_whitespace)
+        .filter(|s| !s.is_empty());
 
     let first = parts.next()?;
 

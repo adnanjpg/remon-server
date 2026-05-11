@@ -1,7 +1,7 @@
 use axum::{
+    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::Serialize;
 
@@ -90,11 +90,7 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, code, public_message) = match &self {
             // 400 Bad Request
-            AppError::BadRequest(msg) => (
-                StatusCode::BAD_REQUEST,
-                "BAD_REQUEST",
-                msg.clone(),
-            ),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "BAD_REQUEST", msg.clone()),
 
             // 401 Unauthorized
             AppError::Unauthorized => (
@@ -154,11 +150,7 @@ impl IntoResponse for AppError {
 
             // 403 Forbidden — caller authenticated but lacks privilege
             // (e.g. systemd service management without root / PolicyKit).
-            AppError::Forbidden(msg) => (
-                StatusCode::FORBIDDEN,
-                "FORBIDDEN",
-                msg.clone(),
-            ),
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, "FORBIDDEN", msg.clone()),
 
             // 501 Not Implemented — operation cannot run on this platform
             // (e.g. systemd timers on Windows, journalctl logs on macOS).
@@ -262,9 +254,9 @@ impl From<crate::platform::services::ServiceError> for AppError {
         match err {
             SE::NotFound(name) => AppError::NotFound(format!("Service '{}'", name)),
             SE::NotSupported => AppError::NotSupported,
-            SE::PermissionDenied => AppError::Forbidden(
-                "Service management requires elevated privileges".to_string(),
-            ),
+            SE::PermissionDenied => {
+                AppError::Forbidden("Service management requires elevated privileges".to_string())
+            }
             SE::BackendError(msg) => AppError::Internal(msg),
         }
     }

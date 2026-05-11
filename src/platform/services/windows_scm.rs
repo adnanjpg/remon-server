@@ -96,8 +96,8 @@ fn parse_status(status: u32) -> ServiceState {
         2 => ServiceState::Starting,
         3 => ServiceState::Stopping,
         4 => ServiceState::Running,
-        5 => ServiceState::Starting,  // ContinuePending
-        6 => ServiceState::Stopping,  // PausePending
+        5 => ServiceState::Starting, // ContinuePending
+        6 => ServiceState::Stopping, // PausePending
         7 => ServiceState::Paused,
         _ => ServiceState::Unknown,
     }
@@ -183,8 +183,8 @@ impl ServiceManager for WindowsScmManager {
                 .map(record_to_service)
                 .ok_or_else(|| ServiceError::NotFound(name.to_string()));
         }
-        let single: ScmRecord = serde_json::from_str(trimmed)
-            .map_err(|_| ServiceError::NotFound(name.to_string()))?;
+        let single: ScmRecord =
+            serde_json::from_str(trimmed).map_err(|_| ServiceError::NotFound(name.to_string()))?;
         Ok(record_to_service(single))
     }
 

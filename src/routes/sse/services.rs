@@ -49,9 +49,9 @@ pub async fn stream_service_logs(
 
     #[cfg(target_os = "linux")]
     {
+        use crate::platform::services::normalize_unit_name;
         use axum::response::IntoResponse;
         use axum::response::sse::{Event, KeepAlive, Sse};
-        use crate::platform::services::normalize_unit_name;
         use futures_util::StreamExt;
         use std::process::Stdio;
         use tokio::io::AsyncBufReadExt;
@@ -69,21 +69,31 @@ pub async fn stream_service_logs(
         // unit can buffer a few KB before the pipe closure registers, which
         // is the trade-off we accept.
         let mut child = tokio::process::Command::new("journalctl")
-            .args(["-fu", &unit, "--output=short-precise", "--no-pager", "-n", &tail])
+            .args([
+                "-fu",
+                &unit,
+                "--output=short-precise",
+                "--no-pager",
+                "-n",
+                &tail,
+            ])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| AppError::Internal(format!("journalctl spawn failed: {}", e)))?;
 
-        let stdout = child.stdout.take().ok_or_else(|| {
-            AppError::Internal("journalctl stdout not captured".to_string())
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| AppError::Internal("journalctl stdout not captured".to_string()))?;
         let reader = tokio::io::BufReader::new(stdout);
         let stream = LinesStream::new(reader.lines()).map(|line| match line {
             Ok(l) => Ok::<_, std::convert::Infallible>(Event::default().data(l)),
             Err(e) => Ok(Event::default().event("error").data(e.to_string())),
         });
 
-        Ok(Sse::new(stream).keep_alive(KeepAlive::default()).into_response())
+        Ok(Sse::new(stream)
+            .keep_alive(KeepAlive::default())
+            .into_response())
     }
 }

@@ -45,8 +45,8 @@ pub async fn create_channel(
 ) -> AppResult<(StatusCode, Json<ChannelResponse>)> {
     body.validate().map_err(AppError::BadRequest)?;
 
-    let config_str = serde_json::to_string(&body.config)
-        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    let config_str =
+        serde_json::to_string(&body.config).map_err(|e| AppError::BadRequest(e.to_string()))?;
 
     let repo = NotificationChannelRepository::new(state.db.clone());
     let id = repo
@@ -61,7 +61,10 @@ pub async fn create_channel(
 
     state.notify.reload().await;
 
-    let row = repo.get(id).await?.ok_or(AppError::NotFound("notification channel".to_string()))?;
+    let row = repo
+        .get(id)
+        .await?
+        .ok_or(AppError::NotFound("notification channel".to_string()))?;
     Ok((StatusCode::CREATED, Json(to_response(row))))
 }
 
@@ -73,12 +76,18 @@ pub async fn update_channel(
 ) -> AppResult<Json<ChannelResponse>> {
     body.validate().map_err(AppError::BadRequest)?;
 
-    let config_str = serde_json::to_string(&body.config)
-        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    let config_str =
+        serde_json::to_string(&body.config).map_err(|e| AppError::BadRequest(e.to_string()))?;
 
     let repo = NotificationChannelRepository::new(state.db.clone());
     let found = repo
-        .update(id, &body.name, body.enabled, &config_str, body.min_severity.as_deref())
+        .update(
+            id,
+            &body.name,
+            body.enabled,
+            &config_str,
+            body.min_severity.as_deref(),
+        )
         .await?;
 
     if !found {
@@ -87,7 +96,10 @@ pub async fn update_channel(
 
     state.notify.reload().await;
 
-    let row = repo.get(id).await?.ok_or(AppError::NotFound("notification channel".to_string()))?;
+    let row = repo
+        .get(id)
+        .await?
+        .ok_or(AppError::NotFound("notification channel".to_string()))?;
     Ok(Json(to_response(row)))
 }
 
@@ -114,7 +126,9 @@ pub async fn test_channel(
 ) -> AppResult<Json<TestChannelResponse>> {
     // Verify the channel exists in DB first.
     let repo = NotificationChannelRepository::new(state.db.clone());
-    repo.get(id).await?.ok_or(AppError::NotFound("notification channel".to_string()))?;
+    repo.get(id)
+        .await?
+        .ok_or(AppError::NotFound("notification channel".to_string()))?;
 
     let delivered = state
         .notify

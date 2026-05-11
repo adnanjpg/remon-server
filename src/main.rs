@@ -6,10 +6,13 @@ use log::{error, info};
 use std::io::IsTerminal;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::net::TcpListener;
 use std::time::Duration;
+use tokio::net::TcpListener;
 use tower_http::LatencyUnit;
-use tower_http::compression::{CompressionLayer, predicate::{DefaultPredicate, NotForContentType, Predicate}};
+use tower_http::compression::{
+    CompressionLayer,
+    predicate::{DefaultPredicate, NotForContentType, Predicate},
+};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
@@ -35,7 +38,6 @@ mod storage;
 
 use crate::services::system as system_svc;
 
-
 async fn shutdown_signal() {
     let ctrl_c = async {
         if let Err(e) = tokio::signal::ctrl_c().await {
@@ -46,7 +48,9 @@ async fn shutdown_signal() {
     #[cfg(unix)]
     let terminate = async {
         match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut sig) => { sig.recv().await; }
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
             Err(e) => {
                 error!("Failed to install SIGTERM handler: {}", e);
                 std::future::pending::<()>().await;
@@ -105,26 +109,24 @@ async fn main() {
         "remon_server={lvl},sqlx=warn,hyper=warn,h2=warn,rustls=warn,tower_http={lvl}",
         lvl = level_str
     );
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(default_filter));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
 
     // mpsc the DbLayer publishes onto; drained by `start_db_writer`
     // once the DB connection is established below.
-    let (log_tx, log_rx) =
-        tokio::sync::mpsc::channel::<services::logging::AppLog>(100);
+    let (log_tx, log_rx) = tokio::sync::mpsc::channel::<services::logging::AppLog>(100);
     let persist_level =
         services::logging::parse_persist_level(&config.monitoring.log_insertion_level);
-    let db_layer = services::logging::DbLayer::new(
-        log_tx,
-        persist_level,
-        config.monitoring.app_name.clone(),
-    );
+    let db_layer =
+        services::logging::DbLayer::new(log_tx, persist_level, config.monitoring.app_name.clone());
 
     // ANSI escapes are noise inside a redirected stream (file, journald,
     // Loki). Auto-disable when stdout isn't a terminal.
     let stdout_ansi = std::io::stdout().is_terminal();
 
-    let registry = tracing_subscriber::registry().with(env_filter).with(db_layer);
+    let registry = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(db_layer);
 
     let format = config.logging.format.to_lowercase();
     let install_result = match format.as_str() {
@@ -159,7 +161,6 @@ async fn main() {
     // Cargo.toml), so existing `log::info!` call sites now emit tracing
     // events through the same registry.
     let _ = Level::INFO; // keep `Level` import alive in case future code uses it
-
 
     if let Err(e) = auth::token::validate() {
         error!("{}", e);
@@ -323,11 +324,9 @@ async fn main() {
     // - `CompressionLayer` excludes `text/event-stream` — gzip would buffer
     //   SSE frames until a window fills, defeating the live-update point of
     //   the stream entirely.
-    let rest_router = routes::rest::create_routes(app_state.clone())
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(30),
-        ));
+    let rest_router = routes::rest::create_routes(app_state.clone()).layer(
+        TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(30)),
+    );
     let compression = CompressionLayer::new()
         .compress_when(DefaultPredicate::new().and(NotForContentType::new("text/event-stream")));
     let app = Router::new()
@@ -369,7 +368,10 @@ async fn main() {
     let bind_addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
         .parse()
         .unwrap_or_else(|_| {
-            error!("Invalid server.host '{}', falling back to 0.0.0.0:{}", config.server.host, config.server.port);
+            error!(
+                "Invalid server.host '{}', falling back to 0.0.0.0:{}",
+                config.server.host, config.server.port
+            );
             SocketAddr::from(([0, 0, 0, 0], config.server.port))
         });
 
@@ -513,4 +515,3 @@ fn build_cors_layer(cfg: &config::CorsConfig) -> CorsLayer {
     );
     base.allow_origin(AllowOrigin::list(parsed))
 }
-

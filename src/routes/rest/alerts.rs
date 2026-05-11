@@ -49,7 +49,12 @@ pub struct EventsQuery {
 
 /// Common validation for create/update bodies. Bracket every numeric
 /// knob and parse-validate the expression so a bad rule never persists.
-fn validate(req_expression: &str, for_secs: i64, eval_secs: i64, cooldown_secs: i64) -> AppResult<()> {
+fn validate(
+    req_expression: &str,
+    for_secs: i64,
+    eval_secs: i64,
+    cooldown_secs: i64,
+) -> AppResult<()> {
     if let Err(e) = expression::parse(req_expression) {
         return Err(AppError::BadRequest(format!("expression: {}", e)));
     }

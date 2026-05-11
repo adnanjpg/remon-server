@@ -57,8 +57,7 @@ fn configure_command(probe: &Manifest, kill_on_drop: bool) -> Result<Command, St
     //      in the parent) because getpwnam(3) is not async-signal-safe.
     #[cfg(unix)]
     {
-        let closure = unix_pre_exec_closure(probe)
-            .map_err(|m| format!("pre_exec setup: {}", m))?;
+        let closure = unix_pre_exec_closure(probe).map_err(|m| format!("pre_exec setup: {}", m))?;
         use std::os::unix::process::CommandExt;
         // SAFETY: every libc call in the closure is documented as
         // async-signal-safe (setpgid, setrlimit, setuid). No allocator,
@@ -118,7 +117,14 @@ pub async fn execute(probe: &Manifest) -> (ProbeRun, Vec<ProbeMetric>) {
         Ok(Err(e)) => {
             warn!("probe '{}' wait failed: {}", probe.name, e);
             return (
-                synth_run(probe, now_ts, dur_ms, None, Some(&format!("wait error: {}", e)), false),
+                synth_run(
+                    probe,
+                    now_ts,
+                    dur_ms,
+                    None,
+                    Some(&format!("wait error: {}", e)),
+                    false,
+                ),
                 Vec::new(),
             );
         }
@@ -191,11 +197,16 @@ pub async fn execute(probe: &Manifest) -> (ProbeRun, Vec<ProbeMetric>) {
             } else {
                 format!(
                     "exit {} with no parseable JSON; stderr tail: {}",
-                    exit_code.map(|c| c.to_string()).unwrap_or_else(|| "?".into()),
+                    exit_code
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "?".into()),
                     truncate(&stderr_text, 200)
                 )
             };
-            (synth_run(probe, now_ts, dur_ms, exit_code, Some(&msg), false), Vec::new())
+            (
+                synth_run(probe, now_ts, dur_ms, exit_code, Some(&msg), false),
+                Vec::new(),
+            )
         }
     }
 }
@@ -271,10 +282,7 @@ fn truncate(s: &str, max: usize) -> String {
 /// `0` because there's no fresh-spawn boundary — duration would be
 /// "time since last line" which we don't track today (and rarely
 /// matters when the alert engine fires off the value column).
-pub async fn execute_stream(
-    probe: &Manifest,
-    tx: mpsc::Sender<(ProbeRun, Vec<ProbeMetric>)>,
-) {
+pub async fn execute_stream(probe: &Manifest, tx: mpsc::Sender<(ProbeRun, Vec<ProbeMetric>)>) {
     let now_ts = chrono::Utc::now().timestamp();
     let probe_name = probe.name.clone();
 
@@ -282,7 +290,10 @@ pub async fn execute_stream(
         Ok(c) => c,
         Err(msg) => {
             let _ = tx
-                .send((synth_run(probe, now_ts, 0, None, Some(&msg), false), Vec::new()))
+                .send((
+                    synth_run(probe, now_ts, 0, None, Some(&msg), false),
+                    Vec::new(),
+                ))
                 .await;
             return;
         }

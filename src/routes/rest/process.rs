@@ -73,8 +73,8 @@ async fn get_or_refresh_processes(state: &AppState) -> ProcessList {
 
 async fn fresh_cached_processes(state: &AppState) -> Option<ProcessList> {
     let now = chrono::Utc::now().timestamp();
-    let ttl_secs = ((state.processes_cache_ttl_ms.load(Ordering::Relaxed) + 999) / 1000).max(1)
-        as i64;
+    let ttl_secs =
+        ((state.processes_cache_ttl_ms.load(Ordering::Relaxed) + 999) / 1000).max(1) as i64;
     state
         .processes_latest
         .read()

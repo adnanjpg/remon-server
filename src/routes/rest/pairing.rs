@@ -5,7 +5,6 @@ use colored::Colorize;
 use log::{info, warn};
 use std::sync::Arc;
 
-
 use subtle::ConstantTimeEq;
 
 use crate::auth::service::AuthService;
@@ -93,11 +92,7 @@ pub async fn complete_pairing(
                 PairingOutcome::Expired
             }
             Some(p) => {
-                let matches: bool = p
-                    .code
-                    .as_bytes()
-                    .ct_eq(req.pairing_code.as_bytes())
-                    .into();
+                let matches: bool = p.code.as_bytes().ct_eq(req.pairing_code.as_bytes()).into();
                 if matches {
                     *pairing = None;
                     PairingOutcome::Success
@@ -157,7 +152,12 @@ pub async fn complete_pairing(
     // immediately. Failures here don't poison the pairing — the device
     // still gets back valid credentials and can retry via
     // PATCH /me/fcm-token after login.
-    if let Some(token) = req.fcm_token.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(token) = req
+        .fcm_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         if let Err(e) = device_repo.set_fcm_token(&device_id, Some(token)).await {
             warn!(
                 "Failed to register FCM token for newly paired device {}: {:?}",

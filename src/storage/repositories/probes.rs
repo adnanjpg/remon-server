@@ -69,7 +69,10 @@ impl ProbeRepository {
                 .await?;
             return Ok(r.rows_affected());
         }
-        let placeholders = std::iter::repeat("?").take(keep.len()).collect::<Vec<_>>().join(",");
+        let placeholders = std::iter::repeat("?")
+            .take(keep.len())
+            .collect::<Vec<_>>()
+            .join(",");
         let sql = format!(
             "UPDATE probe_definitions SET enabled = 0 \
              WHERE enabled = 1 AND name NOT IN ({})",
@@ -92,13 +95,15 @@ impl ProbeRepository {
         .await?;
         Ok(rows
             .into_iter()
-            .map(|(name, enabled, schedule, timeout_ms, manifest_hash)| ProbeDefinitionRow {
-                name,
-                enabled: enabled != 0,
-                schedule,
-                timeout_ms,
-                manifest_hash,
-            })
+            .map(
+                |(name, enabled, schedule, timeout_ms, manifest_hash)| ProbeDefinitionRow {
+                    name,
+                    enabled: enabled != 0,
+                    schedule,
+                    timeout_ms,
+                    manifest_hash,
+                },
+            )
             .collect())
     }
 

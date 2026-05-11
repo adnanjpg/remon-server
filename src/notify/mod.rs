@@ -72,8 +72,7 @@ impl NotificationManager {
 
         let mut slots = Vec::new();
         for row in rows {
-            let config: serde_json::Value =
-                serde_json::from_str(&row.config).unwrap_or_default();
+            let config: serde_json::Value = serde_json::from_str(&row.config).unwrap_or_default();
 
             match channels::build_channel(
                 &row.r#type,
@@ -115,7 +114,10 @@ impl NotificationManager {
         };
 
         if targets.is_empty() {
-            debug!("fanout: no channels for severity {:?}", notification.severity);
+            debug!(
+                "fanout: no channels for severity {:?}",
+                notification.severity
+            );
             return 0;
         }
 

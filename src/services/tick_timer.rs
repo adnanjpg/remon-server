@@ -95,11 +95,7 @@ impl TickStats {
         }
         self.count_since_flush = 0;
 
-        let window_n = self
-            .phases
-            .first()
-            .map(|p| p.samples.len())
-            .unwrap_or(0);
+        let window_n = self.phases.first().map(|p| p.samples.len()).unwrap_or(0);
         if window_n == 0 {
             return;
         }
@@ -168,6 +164,9 @@ mod tests {
             t.record(&[Duration::from_micros(i)]);
         }
         // Window is 3, we recorded 5; should retain [2, 3, 4]
-        assert_eq!(t.phases[0].samples.iter().copied().collect::<Vec<_>>(), vec![2, 3, 4]);
+        assert_eq!(
+            t.phases[0].samples.iter().copied().collect::<Vec<_>>(),
+            vec![2, 3, 4]
+        );
     }
 }

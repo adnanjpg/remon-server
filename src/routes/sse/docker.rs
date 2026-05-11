@@ -25,14 +25,18 @@ pub async fn stream_logs(
     Query(params): Query<StreamLogsQuery>,
 ) -> AppResult<Sse<impl Stream<Item = Result<Event, Infallible>>>> {
     if !docker::is_docker_available().await {
-        return Err(AppError::DockerUnavailable("daemon unreachable".to_string()));
+        return Err(AppError::DockerUnavailable(
+            "daemon unreachable".to_string(),
+        ));
     }
 
     let log_stream = docker::stream_container_logs(container_id, params.tail).await?;
 
     let sse_stream = log_stream.map(|result| match result {
         Ok(log_line) => Ok(Event::default().data(log_line)),
-        Err(e) => Ok(Event::default().event("error").data(format!("Error: {}", e))),
+        Err(e) => Ok(Event::default()
+            .event("error")
+            .data(format!("Error: {}", e))),
     });
 
     Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))

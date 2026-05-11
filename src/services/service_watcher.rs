@@ -28,7 +28,9 @@ async fn run(state: Arc<AppState>) {
 }
 
 async fn tick(state: &AppState, known_failed: &mut HashSet<String>) -> anyhow::Result<()> {
-    let filter = ServiceFilter { state: Some(ServiceState::Failed) };
+    let filter = ServiceFilter {
+        state: Some(ServiceState::Failed),
+    };
 
     let failed_services = match state.service_manager.list(filter).await {
         Ok(s) => s,

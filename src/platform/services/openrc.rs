@@ -148,7 +148,11 @@ impl ServiceManager for OpenRcManager {
         // rc-service status prints " * status: started" or " * status: stopped"
         let state_str = raw
             .lines()
-            .find_map(|l| l.trim().strip_prefix("* status:").map(|s| s.trim().to_string()))
+            .find_map(|l| {
+                l.trim()
+                    .strip_prefix("* status:")
+                    .map(|s| s.trim().to_string())
+            })
             .unwrap_or_else(|| "unknown".to_string());
 
         if state_str.contains("does not exist") || state_str.contains("not found") {

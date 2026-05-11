@@ -3,9 +3,12 @@
 use std::sync::OnceLock;
 
 use bollard::{
-    models::{ContainerInspectResponse as BollardInspectResponse, ContainerSummary, ImageSummary},
-    query_parameters::{ListContainersOptions, LogsOptions, RemoveContainerOptions, RemoveImageOptions, StatsOptions},
     Docker,
+    models::{ContainerInspectResponse as BollardInspectResponse, ContainerSummary, ImageSummary},
+    query_parameters::{
+        ListContainersOptions, LogsOptions, RemoveContainerOptions, RemoveImageOptions,
+        StatsOptions,
+    },
 };
 use futures_util::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -23,8 +26,7 @@ pub fn set_socket_path(path: &str) {
 fn new_docker() -> Result<Docker, DockerError> {
     let path = DOCKER_SOCKET.get().map(|s| s.as_str()).unwrap_or("");
     if path.is_empty() {
-        Docker::connect_with_local_defaults()
-            .map_err(|e| DockerError::NotAvailable(e.to_string()))
+        Docker::connect_with_local_defaults().map_err(|e| DockerError::NotAvailable(e.to_string()))
     } else {
         #[cfg(unix)]
         {
@@ -57,11 +59,10 @@ pub enum DockerError {
 impl From<bollard::errors::Error> for DockerError {
     fn from(err: bollard::errors::Error) -> Self {
         match err {
-            bollard::errors::Error::DockerResponseServerError { status_code, message }
-                if status_code == 404 =>
-            {
-                DockerError::ContainerNotFound(message)
-            }
+            bollard::errors::Error::DockerResponseServerError {
+                status_code,
+                message,
+            } if status_code == 404 => DockerError::ContainerNotFound(message),
             _ => DockerError::ApiError(err.to_string()),
         }
     }
@@ -117,9 +118,7 @@ pub async fn list_containers() -> Result<Vec<ContainerSummary>, DockerError> {
 pub async fn start_container(container_id: &str) -> Result<(), DockerError> {
     let docker = new_docker()?;
 
-    docker
-        .start_container(container_id, None)
-        .await?;
+    docker.start_container(container_id, None).await?;
 
     Ok(())
 }
@@ -175,9 +174,7 @@ pub async fn get_container_inspect(
 ) -> Result<BollardInspectResponse, DockerError> {
     let docker = new_docker()?;
 
-    let container = docker
-        .inspect_container(container_id, None)
-        .await?;
+    let container = docker.inspect_container(container_id, None).await?;
 
     Ok(container)
 }
@@ -226,13 +223,11 @@ pub async fn stream_container_logs(
         ..Default::default()
     });
 
-    let stream = docker
-        .logs(&container_id, options)
-        .map(|result| {
-            result
-                .map(|output| output.to_string())
-                .map_err(|e| DockerError::ApiError(e.to_string()))
-        });
+    let stream = docker.logs(&container_id, options).map(|result| {
+        result
+            .map(|output| output.to_string())
+            .map_err(|e| DockerError::ApiError(e.to_string()))
+    });
 
     Ok(Box::pin(stream))
 }
@@ -304,7 +299,10 @@ pub async fn prune_images() -> Result<PruneResult, DockerError> {
     let result = docker.prune_images(Some(POpts::default())).await?;
 
     Ok(PruneResult {
-        containers_deleted: result.images_deleted.unwrap_or_default().iter()
+        containers_deleted: result
+            .images_deleted
+            .unwrap_or_default()
+            .iter()
             .filter_map(|item| item.deleted.clone())
             .collect(),
         space_reclaimed: result.space_reclaimed.unwrap_or(0) as u64,

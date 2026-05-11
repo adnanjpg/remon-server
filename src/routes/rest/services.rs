@@ -44,7 +44,9 @@ pub async fn list_services(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListServicesQuery>,
 ) -> AppResult<Json<ListServicesResponse>> {
-    let filter = ServiceFilter { state: params.into_filter_state() };
+    let filter = ServiceFilter {
+        state: params.into_filter_state(),
+    };
     let services = state.service_manager.list(filter).await?;
     Ok(Json(ListServicesResponse {
         services: services.into_iter().map(ServiceDto::from).collect(),
@@ -70,7 +72,10 @@ pub async fn start_service(
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
     state.service_manager.start(&name).await?;
-    Ok(Json(ServiceActionResponse::ok(format!("Service '{}' started", name))))
+    Ok(Json(ServiceActionResponse::ok(format!(
+        "Service '{}' started",
+        name
+    ))))
 }
 
 /// POST /services/{name}/stop
@@ -81,7 +86,10 @@ pub async fn stop_service(
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
     state.service_manager.stop(&name).await?;
-    Ok(Json(ServiceActionResponse::ok(format!("Service '{}' stopped", name))))
+    Ok(Json(ServiceActionResponse::ok(format!(
+        "Service '{}' stopped",
+        name
+    ))))
 }
 
 /// POST /services/{name}/restart
@@ -92,7 +100,10 @@ pub async fn restart_service(
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
     state.service_manager.restart(&name).await?;
-    Ok(Json(ServiceActionResponse::ok(format!("Service '{}' restarted", name))))
+    Ok(Json(ServiceActionResponse::ok(format!(
+        "Service '{}' restarted",
+        name
+    ))))
 }
 
 /// POST /services/{name}/reload
@@ -103,7 +114,10 @@ pub async fn reload_service(
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
     state.service_manager.reload(&name).await?;
-    Ok(Json(ServiceActionResponse::ok(format!("Service '{}' reloaded", name))))
+    Ok(Json(ServiceActionResponse::ok(format!(
+        "Service '{}' reloaded",
+        name
+    ))))
 }
 
 /// PUT /services/{name}/enable — enable service at boot.
@@ -114,7 +128,10 @@ pub async fn enable_service(
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
     state.service_manager.enable_at_boot(&name).await?;
-    Ok(Json(ServiceActionResponse::ok(format!("Service '{}' enabled at boot", name))))
+    Ok(Json(ServiceActionResponse::ok(format!(
+        "Service '{}' enabled at boot",
+        name
+    ))))
 }
 
 /// PUT /services/{name}/disable — disable service at boot.
@@ -125,7 +142,10 @@ pub async fn disable_service(
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
     state.service_manager.disable_at_boot(&name).await?;
-    Ok(Json(ServiceActionResponse::ok(format!("Service '{}' disabled at boot", name))))
+    Ok(Json(ServiceActionResponse::ok(format!(
+        "Service '{}' disabled at boot",
+        name
+    ))))
 }
 
 // ===== Timers =====
@@ -149,7 +169,10 @@ pub async fn enable_timer(
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
     state.service_manager.enable_at_boot(&name).await?;
-    Ok(Json(ServiceActionResponse::ok(format!("Timer '{}' enabled", name))))
+    Ok(Json(ServiceActionResponse::ok(format!(
+        "Timer '{}' enabled",
+        name
+    ))))
 }
 
 /// PUT /timers/{name}/disable
@@ -160,5 +183,8 @@ pub async fn disable_timer(
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
     state.service_manager.disable_at_boot(&name).await?;
-    Ok(Json(ServiceActionResponse::ok(format!("Timer '{}' disabled", name))))
+    Ok(Json(ServiceActionResponse::ok(format!(
+        "Timer '{}' disabled",
+        name
+    ))))
 }

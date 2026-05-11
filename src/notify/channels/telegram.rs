@@ -23,7 +23,11 @@ impl TelegramChannel {
                 "Telegram channel config missing 'chat_id'".to_string(),
             ));
         }
-        Ok(Self { http, bot_token, chat_id })
+        Ok(Self {
+            http,
+            bot_token,
+            chat_id,
+        })
     }
 }
 
@@ -56,10 +60,7 @@ fn escape_html(s: &str) -> String {
 #[async_trait]
 impl NotificationChannel for TelegramChannel {
     async fn send(&self, notification: &Notification) -> Result<usize, ChannelError> {
-        let url = format!(
-            "https://api.telegram.org/bot{}/sendMessage",
-            self.bot_token
-        );
+        let url = format!("https://api.telegram.org/bot{}/sendMessage", self.bot_token);
 
         #[derive(Deserialize)]
         struct TgResponse {

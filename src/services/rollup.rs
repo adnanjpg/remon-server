@@ -31,7 +31,14 @@ const MAX_BACKFILL_BUCKETS: i64 = 720;
 /// probes emitting the same metric_name with different labels stay
 /// separate streams through every resolution.
 const ROLLUP_RESOURCES: &[&str] = &[
-    "cpu", "memory", "disk", "network", "docker", "pressure", "components", "probe",
+    "cpu",
+    "memory",
+    "disk",
+    "network",
+    "docker",
+    "pressure",
+    "components",
+    "probe",
 ];
 
 pub fn spawn(state: Arc<AppState>) {
@@ -133,16 +140,24 @@ async fn rollup_resource(
     // Clamp the back-fill range so a restart after long downtime doesn't
     // try to rebuild months of aggregates in one tick.
     let max_start = latest_closed_start;
-    let min_start =
-        max_start.saturating_sub(MAX_BACKFILL_BUCKETS.saturating_mul(bucket));
+    let min_start = max_start.saturating_sub(MAX_BACKFILL_BUCKETS.saturating_mul(bucket));
     let mut bucket_start = start_from.max(min_start);
 
     let mut last_written = cursor.last_bucket_ts;
 
     while bucket_start <= latest_closed_start {
         let bucket_end = bucket_start + bucket;
-        match aggregate_one_bucket(state, resource, parent, &target.name, bucket_start, bucket_end).await {
-            Ok(true)  => last_written = bucket_start,
+        match aggregate_one_bucket(
+            state,
+            resource,
+            parent,
+            &target.name,
+            bucket_start,
+            bucket_end,
+        )
+        .await
+        {
+            Ok(true) => last_written = bucket_start,
             Ok(false) => {}
             Err(e) => {
                 // Stop at the first error. If we kept going and a later

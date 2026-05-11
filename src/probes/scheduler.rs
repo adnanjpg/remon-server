@@ -86,12 +86,18 @@ async fn sleep_until_next_fire(probe_name: &str, schedule: &Schedule) -> bool {
     let next = match next_fire(schedule, now) {
         Some(t) => t,
         None => {
-            warn!("probe '{}': schedule has no upcoming fire; loop exiting", probe_name);
+            warn!(
+                "probe '{}': schedule has no upcoming fire; loop exiting",
+                probe_name
+            );
             return false;
         }
     };
     let sleep_for = (next - now).to_std().unwrap_or(Duration::from_secs(0));
-    debug!("probe '{}' next fire at {} (in {:?})", probe_name, next, sleep_for);
+    debug!(
+        "probe '{}' next fire at {} (in {:?})",
+        probe_name, next, sleep_for
+    );
     tokio::time::sleep(sleep_for).await;
     true
 }
@@ -272,7 +278,9 @@ pub async fn load_and_spawn(
         };
         if let Err(e) = repo.upsert(&def).await {
             warn!("probe '{}' DB upsert failed: {:?}", manifest.name, e);
-            report.failed.push((manifest.source_path.clone(), e.to_string()));
+            report
+                .failed
+                .push((manifest.source_path.clone(), e.to_string()));
             continue;
         }
 
@@ -283,7 +291,9 @@ pub async fn load_and_spawn(
 
         // Diff against running registry — keep tasks whose manifest hash
         // is unchanged, restart the rest.
-        let prior_hash = existing_rows.get(&manifest.name).map(|r| r.manifest_hash.as_str());
+        let prior_hash = existing_rows
+            .get(&manifest.name)
+            .map(|r| r.manifest_hash.as_str());
         let already_running = {
             let reg = registry.read().await;
             reg.probes
@@ -312,11 +322,7 @@ pub async fn load_and_spawn(
                     task.abort();
                     // Wait briefly so the old task releases file handles and DB
                     // connections before the replacement starts.
-                    let _ = tokio::time::timeout(
-                        std::time::Duration::from_secs(2),
-                        task,
-                    )
-                    .await;
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), task).await;
                 }
             }
         }

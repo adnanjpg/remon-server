@@ -38,7 +38,12 @@ impl RollupStateRepository {
         })
     }
 
-    pub async fn set(&self, resource: &str, resolution: &str, last_bucket_ts: i64) -> AppResult<()> {
+    pub async fn set(
+        &self,
+        resource: &str,
+        resolution: &str,
+        last_bucket_ts: i64,
+    ) -> AppResult<()> {
         sqlx::query(
             r#"
             INSERT INTO rollup_state (resource, resolution, last_bucket_ts, last_run_at)
@@ -53,7 +58,7 @@ impl RollupStateRepository {
         .bind(last_bucket_ts)
         .execute(&self.pool)
         .await?;
-    
+
         Ok(())
     }
 }

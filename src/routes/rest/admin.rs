@@ -8,8 +8,8 @@
 //! `Arc<RwLock<EffectiveConfig>>` swaps and the collector intervals'
 //! `AtomicU64` handles update on the next tick — no restart required.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use axum::{Json, extract::State};
 use log::info;
@@ -143,9 +143,7 @@ pub async fn patch_config(
     Ok(Json(ConfigResponse {
         server_name: merged.server_name,
         collector_stats_base_interval_ms: merged.collector_stats_interval_ms,
-        collector_stats_interval_ms: state
-            .collector_stats_interval_ms
-            .load(Ordering::Relaxed),
+        collector_stats_interval_ms: state.collector_stats_interval_ms.load(Ordering::Relaxed),
         collector_processes_interval_ms: merged.processes_cache_ttl_ms,
         #[cfg(feature = "docker")]
         collector_docker_interval_ms: merged.collector_docker_interval_ms,

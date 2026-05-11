@@ -42,7 +42,12 @@ pub async fn get_system_info(
             kernel: desc.kernel,
             uptime_secs: desc.uptime_secs,
             version: env!("CARGO_PKG_VERSION").to_string(),
-            build_mode: if cfg!(debug_assertions) { "debug" } else { "release" }.to_string(),
+            build_mode: if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            }
+            .to_string(),
             built_at: env!("BUILD_TIME").parse().unwrap_or(0),
         },
         hardware: hardware_info_to_dto(&state.hardware_info),

@@ -59,10 +59,17 @@ impl ProcStatSnapshot {
 /// further down. Returns None on any I/O or parse failure.
 pub fn read_proc_stat() -> Option<ProcStatSnapshot> {
     let content = fs::read_to_string("/proc/stat").ok()?;
-    let mut user = 0u64; let mut nice = 0u64; let mut system = 0u64;
-    let mut idle = 0u64; let mut iowait = 0u64; let mut irq = 0u64;
-    let mut softirq = 0u64; let mut steal = 0u64; let mut guest = 0u64;
-    let mut ctxt = 0u64; let mut processes = 0u64;
+    let mut user = 0u64;
+    let mut nice = 0u64;
+    let mut system = 0u64;
+    let mut idle = 0u64;
+    let mut iowait = 0u64;
+    let mut irq = 0u64;
+    let mut softirq = 0u64;
+    let mut steal = 0u64;
+    let mut guest = 0u64;
+    let mut ctxt = 0u64;
+    let mut processes = 0u64;
     let mut have_cpu = false;
     for line in content.lines() {
         if !have_cpu && (line.starts_with("cpu ") || line.starts_with("cpu\t")) {
@@ -72,9 +79,15 @@ pub fn read_proc_stat() -> Option<ProcStatSnapshot> {
             if nums.len() < 9 {
                 return None;
             }
-            user = nums[0]; nice = nums[1]; system = nums[2]; idle = nums[3];
-            iowait = nums[4]; irq = nums[5]; softirq = nums[6];
-            steal = nums[7]; guest = nums[8];
+            user = nums[0];
+            nice = nums[1];
+            system = nums[2];
+            idle = nums[3];
+            iowait = nums[4];
+            irq = nums[5];
+            softirq = nums[6];
+            steal = nums[7];
+            guest = nums[8];
             have_cpu = true;
         } else if let Some(rest) = line.strip_prefix("ctxt ") {
             ctxt = rest.trim().parse().unwrap_or(0);
@@ -86,8 +99,17 @@ pub fn read_proc_stat() -> Option<ProcStatSnapshot> {
         return None;
     }
     Some(ProcStatSnapshot {
-        user, nice, system, idle, iowait, irq, softirq, steal, guest,
-        ctxt, processes,
+        user,
+        nice,
+        system,
+        idle,
+        iowait,
+        irq,
+        softirq,
+        steal,
+        guest,
+        ctxt,
+        processes,
     })
 }
 
@@ -111,16 +133,31 @@ pub fn read_vmstat() -> Option<VmstatSnapshot> {
     let mut any = false;
     for line in content.lines() {
         let mut tokens = line.split_whitespace();
-        let key = match tokens.next() { Some(k) => k, None => continue };
+        let key = match tokens.next() {
+            Some(k) => k,
+            None => continue,
+        };
         let val: u64 = match tokens.next().and_then(|v| v.parse().ok()) {
             Some(v) => v,
             None => continue,
         };
         match key {
-            "pgfault" => { s.pgfault = val; any = true; }
-            "pgmajfault" => { s.pgmajfault = val; any = true; }
-            "pswpin" => { s.pswpin = val; any = true; }
-            "pswpout" => { s.pswpout = val; any = true; }
+            "pgfault" => {
+                s.pgfault = val;
+                any = true;
+            }
+            "pgmajfault" => {
+                s.pgmajfault = val;
+                any = true;
+            }
+            "pswpin" => {
+                s.pswpin = val;
+                any = true;
+            }
+            "pswpout" => {
+                s.pswpout = val;
+                any = true;
+            }
             _ => {}
         }
     }

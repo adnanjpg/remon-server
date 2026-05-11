@@ -125,7 +125,10 @@ pub async fn get_probe_history(
     Query(q): Query<HistoryQuery>,
 ) -> AppResult<Json<ProbeHistoryResponse>> {
     validate_name(&name)?;
-    let limit = q.limit.unwrap_or(DEFAULT_HISTORY_LIMIT).min(MAX_HISTORY_LIMIT);
+    let limit = q
+        .limit
+        .unwrap_or(DEFAULT_HISTORY_LIMIT)
+        .min(MAX_HISTORY_LIMIT);
     let offset = q.offset.unwrap_or(0).min(MAX_HISTORY_OFFSET);
     let repo = ProbeRepository::new(state.db.clone());
     let runs = repo.run_history(&name, limit, offset).await?;
@@ -141,12 +144,8 @@ pub async fn reload_probes(
     State(state): State<Arc<AppState>>,
 ) -> AppResult<Json<ReloadProbesResponse>> {
     let dir = PathBuf::from(PROBES_DIR);
-    let report = scheduler::load_and_spawn(
-        &dir,
-        Arc::clone(&state.probe_registry),
-        state.db.clone(),
-    )
-    .await;
+    let report =
+        scheduler::load_and_spawn(&dir, Arc::clone(&state.probe_registry), state.db.clone()).await;
     Ok(Json(ReloadProbesResponse {
         loaded: report.loaded,
         skipped_disabled: report.skipped_disabled,

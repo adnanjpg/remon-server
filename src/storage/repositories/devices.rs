@@ -34,7 +34,19 @@ impl DeviceRepository {
     }
 
     pub async fn get_by_id(&self, id: &str) -> AppResult<Option<StoredDevice>> {
-        let row = sqlx::query_as::<_, (String, String, String, Option<String>, Option<String>, i64, i64, bool)>(
+        let row = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                i64,
+                i64,
+                bool,
+            ),
+        >(
             r#"
             SELECT id, name, token_hash, totp_secret, last_ip, last_seen, created_at, is_active
             FROM devices WHERE id = ?
@@ -57,7 +69,19 @@ impl DeviceRepository {
     }
 
     pub async fn get_all(&self) -> AppResult<Vec<StoredDevice>> {
-        let rows = sqlx::query_as::<_, (String, String, String, Option<String>, Option<String>, i64, i64, bool)>(
+        let rows = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                i64,
+                i64,
+                bool,
+            ),
+        >(
             r#"
             SELECT id, name, token_hash, totp_secret, last_ip, last_seen, created_at, is_active
             FROM devices ORDER BY created_at DESC
@@ -147,15 +171,18 @@ impl DeviceRepository {
     }
 
     // Session management
-    pub async fn create_session(&self, session_id: &str, device_id: &str, expires_at: i64) -> AppResult<()> {
-        sqlx::query(
-            "INSERT INTO sessions (id, device_id, expires_at) VALUES (?, ?, ?)",
-        )
-        .bind(session_id)
-        .bind(device_id)
-        .bind(expires_at)
-        .execute(&self.pool)
-        .await?;
+    pub async fn create_session(
+        &self,
+        session_id: &str,
+        device_id: &str,
+        expires_at: i64,
+    ) -> AppResult<()> {
+        sqlx::query("INSERT INTO sessions (id, device_id, expires_at) VALUES (?, ?, ?)")
+            .bind(session_id)
+            .bind(device_id)
+            .bind(expires_at)
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
@@ -163,12 +190,11 @@ impl DeviceRepository {
     /// Returns true if a non-expired session row exists for the given jti.
     /// Used by the auth middleware to enforce revocation.
     pub async fn session_exists(&self, jti: &str) -> AppResult<bool> {
-        let row: Option<(i64,)> = sqlx::query_as(
-            "SELECT 1 FROM sessions WHERE id = ? AND expires_at > unixepoch()",
-        )
-        .bind(jti)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM sessions WHERE id = ? AND expires_at > unixepoch()")
+                .bind(jti)
+                .fetch_optional(&self.pool)
+                .await?;
 
         Ok(row.is_some())
     }

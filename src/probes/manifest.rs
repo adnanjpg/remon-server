@@ -298,10 +298,7 @@ impl Manifest {
         let mode = match raw.mode.as_deref() {
             None => ProbeMode::Oneshot,
             Some(s) => ProbeMode::parse(s).ok_or_else(|| {
-                ManifestError::Validation(format!(
-                    "mode '{}': expected 'oneshot' or 'stream'",
-                    s
-                ))
+                ManifestError::Validation(format!("mode '{}': expected 'oneshot' or 'stream'", s))
             })?,
         };
 
@@ -312,7 +309,11 @@ impl Manifest {
             schedule,
             timeout: Duration::from_millis(timeout_ms),
             command: raw.command,
-            platforms: raw.platforms.into_iter().map(|s| s.to_lowercase()).collect(),
+            platforms: raw
+                .platforms
+                .into_iter()
+                .map(|s| s.to_lowercase())
+                .collect(),
             env: raw.env,
             run_as_user: raw.run_as_user,
             memory_limit_mb: raw.memory_limit_mb,
@@ -401,9 +402,7 @@ fn parse_inline_header(bytes: &[u8], path: &Path) -> Result<RawManifest, Manifes
 
     let name = kv
         .remove("name")
-        .ok_or_else(|| ManifestError::Validation(
-            "inline header: `name` is required".into(),
-        ))?;
+        .ok_or_else(|| ManifestError::Validation("inline header: `name` is required".into()))?;
 
     let platforms: Vec<String> = kv
         .remove("platforms")
@@ -435,14 +434,16 @@ fn parse_inline_header(bytes: &[u8], path: &Path) -> Result<RawManifest, Manifes
     // shell-words splitting so quoted arguments survive.
     let command_override = kv.remove("command");
     let command: Vec<String> = match command_override {
-        Some(c) => shell_words::split(&c)
-            .map_err(|e| ManifestError::Validation(format!("inline header: command parse: {}", e)))?,
-        None => vec![path
-            .to_str()
-            .ok_or_else(|| ManifestError::Validation(
-                "inline header: file path is not valid UTF-8".into(),
-            ))?
-            .to_string()],
+        Some(c) => shell_words::split(&c).map_err(|e| {
+            ManifestError::Validation(format!("inline header: command parse: {}", e))
+        })?,
+        None => vec![
+            path.to_str()
+                .ok_or_else(|| {
+                    ManifestError::Validation("inline header: file path is not valid UTF-8".into())
+                })?
+                .to_string(),
+        ],
     };
 
     let raw = RawManifest {
@@ -519,9 +520,7 @@ fn is_valid_name(s: &str) -> bool {
 fn parse_interval(s: &str) -> Result<Duration, ManifestError> {
     let s = s.trim();
     if s.is_empty() {
-        return Err(ManifestError::Validation(
-            "interval: empty string".into(),
-        ));
+        return Err(ManifestError::Validation("interval: empty string".into()));
     }
     let (num_part, multiplier) = if let Some(rest) = s.strip_suffix('s') {
         (rest, 1u64)
@@ -533,7 +532,10 @@ fn parse_interval(s: &str) -> Result<Duration, ManifestError> {
         (s, 1u64)
     };
     let n: u64 = num_part.trim().parse().map_err(|_| {
-        ManifestError::Validation(format!("interval: '{}' is not a number with optional s/m/h suffix", s))
+        ManifestError::Validation(format!(
+            "interval: '{}' is not a number with optional s/m/h suffix",
+            s
+        ))
     })?;
     if n == 0 {
         return Err(ManifestError::Validation(
@@ -552,7 +554,9 @@ fn parse_interval(s: &str) -> Result<Duration, ManifestError> {
 fn parse_cron(s: &str) -> Result<Schedule, ManifestError> {
     let s = s.trim();
     if s.is_empty() {
-        return Err(ManifestError::Validation("schedule: empty cron string".into()));
+        return Err(ManifestError::Validation(
+            "schedule: empty cron string".into(),
+        ));
     }
     let normalized = if s.split_whitespace().count() == 5 {
         format!("0 {}", s)
@@ -561,7 +565,9 @@ fn parse_cron(s: &str) -> Result<Schedule, ManifestError> {
     };
     cron::Schedule::from_str(&normalized)
         .map(Schedule::Cron)
-        .map_err(|e| ManifestError::Validation(format!("schedule '{}' is not a valid cron: {}", s, e)))
+        .map_err(|e| {
+            ManifestError::Validation(format!("schedule '{}' is not a valid cron: {}", s, e))
+        })
 }
 
 fn current_platform() -> &'static str {
@@ -692,7 +698,9 @@ mod tests {
             mode: None,
         };
         assert!(Manifest::validate(mk(50), "h".into(), PathBuf::from("p")).is_err());
-        assert!(Manifest::validate(mk(MAX_TIMEOUT_MS + 1), "h".into(), PathBuf::from("p")).is_err());
+        assert!(
+            Manifest::validate(mk(MAX_TIMEOUT_MS + 1), "h".into(), PathBuf::from("p")).is_err()
+        );
         assert!(Manifest::validate(mk(5_000), "h".into(), PathBuf::from("p")).is_ok());
     }
 
@@ -822,7 +830,10 @@ echo running
         assert!(raw.enabled);
         assert_eq!(raw.schedule.as_deref(), Some("*/5 * * * *"));
         assert_eq!(raw.timeout_ms, Some(15_000));
-        assert_eq!(raw.platforms, vec!["linux".to_string(), "freebsd".to_string()]);
+        assert_eq!(
+            raw.platforms,
+            vec!["linux".to_string(), "freebsd".to_string()]
+        );
         assert_eq!(raw.run_as_user.as_deref(), Some("nobody"));
     }
 

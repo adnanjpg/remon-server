@@ -52,7 +52,10 @@ pub struct ServiceActionResponse {
 
 impl ServiceActionResponse {
     pub fn ok(msg: impl Into<String>) -> Self {
-        Self { success: true, message: msg.into() }
+        Self {
+            success: true,
+            message: msg.into(),
+        }
     }
 }
 

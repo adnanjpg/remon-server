@@ -131,7 +131,15 @@ pub async fn resolve(
             resolve_unkeyed(pool, metric, "metrics_memory", MEMORY_FIELDS, MEMORY_I64).await
         }
         "disk" => {
-            resolve_keyed(pool, metric, "metrics_disk", DISK_FIELDS, DISK_I64, "mount_point").await
+            resolve_keyed(
+                pool,
+                metric,
+                "metrics_disk",
+                DISK_FIELDS,
+                DISK_I64,
+                "mount_point",
+            )
+            .await
         }
         "network" => {
             resolve_keyed(
@@ -399,10 +407,7 @@ async fn resolve_probe(
 
 // ===== helpers =====
 
-fn check_field<'a>(
-    metric: &'a MetricRef,
-    valid: &[&str],
-) -> Result<&'a str, ResolveError> {
+fn check_field<'a>(metric: &'a MetricRef, valid: &[&str]) -> Result<&'a str, ResolveError> {
     if !valid.contains(&metric.field.as_str()) {
         return Err(ResolveError::msg(format!(
             "field '{}' is not valid for namespace '{}'; expected one of {:?}",
@@ -423,8 +428,8 @@ fn canonical_labels(labels: &BTreeMap<String, String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::SqlitePoolOptions;
     use sqlx::Executor;
+    use sqlx::sqlite::SqlitePoolOptions;
 
     async fn fixture() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
@@ -499,7 +504,9 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let out = resolve(&pool, &metric("cpu", "usage_percent", &[])).await.unwrap();
+        let out = resolve(&pool, &metric("cpu", "usage_percent", &[]))
+            .await
+            .unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].label_set, "{}");
         assert_eq!(out[0].value, 75.5);
@@ -526,7 +533,9 @@ mod tests {
     #[tokio::test]
     async fn cpu_no_data_returns_empty() {
         let pool = fixture().await;
-        let out = resolve(&pool, &metric("cpu", "usage_percent", &[])).await.unwrap();
+        let out = resolve(&pool, &metric("cpu", "usage_percent", &[]))
+            .await
+            .unwrap();
         assert!(out.is_empty());
     }
 
@@ -556,7 +565,9 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let out = resolve(&pool, &metric("memory", "used_bytes", &[])).await.unwrap();
+        let out = resolve(&pool, &metric("memory", "used_bytes", &[]))
+            .await
+            .unwrap();
         assert_eq!(out[0].value, 6_291_456_000.0);
     }
 
@@ -574,7 +585,9 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let mut out = resolve(&pool, &metric("disk", "used_bytes", &[])).await.unwrap();
+        let mut out = resolve(&pool, &metric("disk", "used_bytes", &[]))
+            .await
+            .unwrap();
         out.sort_by(|a, b| a.label_set.cmp(&b.label_set));
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].label_set, r#"{"mount_point":"/"}"#);
@@ -593,7 +606,12 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let out = resolve(&pool, &metric("disk", "used_bytes", &[("mount_point", "/")])).await.unwrap();
+        let out = resolve(
+            &pool,
+            &metric("disk", "used_bytes", &[("mount_point", "/")]),
+        )
+        .await
+        .unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].value, 1000.0);
     }
@@ -601,9 +619,12 @@ mod tests {
     #[tokio::test]
     async fn disk_unknown_label_rejected() {
         let pool = fixture().await;
-        let err = resolve(&pool, &metric("disk", "used_bytes", &[("interface_name", "eth0")]))
-            .await
-            .unwrap_err();
+        let err = resolve(
+            &pool,
+            &metric("disk", "used_bytes", &[("interface_name", "eth0")]),
+        )
+        .await
+        .unwrap_err();
         assert!(err.message.contains("'mount_point'"));
     }
 
@@ -622,7 +643,12 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let out = resolve(&pool, &metric("pressure", "some_avg10", &[("resource", "cpu")])).await.unwrap();
+        let out = resolve(
+            &pool,
+            &metric("pressure", "some_avg10", &[("resource", "cpu")]),
+        )
+        .await
+        .unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].value, 1.5);
         assert_eq!(out[0].label_set, r#"{"resource":"cpu"}"#);
@@ -644,13 +670,20 @@ mod tests {
         .unwrap();
         let out = resolve(
             &pool,
-            &metric("probe", "banned", &[("probe_name", "fail2ban"), ("jail", "sshd")]),
+            &metric(
+                "probe",
+                "banned",
+                &[("probe_name", "fail2ban"), ("jail", "sshd")],
+            ),
         )
         .await
         .unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].value, 7.0);
-        assert_eq!(out[0].label_set, r#"{"jail":"sshd","probe_name":"fail2ban"}"#);
+        assert_eq!(
+            out[0].label_set,
+            r#"{"jail":"sshd","probe_name":"fail2ban"}"#
+        );
     }
 
     #[tokio::test]
@@ -666,7 +699,9 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let mut out = resolve(&pool, &metric("probe", "banned", &[])).await.unwrap();
+        let mut out = resolve(&pool, &metric("probe", "banned", &[]))
+            .await
+            .unwrap();
         out.sort_by(|a, b| a.label_set.cmp(&b.label_set));
         assert_eq!(out.len(), 2);
     }
@@ -674,7 +709,9 @@ mod tests {
     #[tokio::test]
     async fn unknown_namespace_rejected() {
         let pool = fixture().await;
-        let err = resolve(&pool, &metric("nonsense", "x", &[])).await.unwrap_err();
+        let err = resolve(&pool, &metric("nonsense", "x", &[]))
+            .await
+            .unwrap_err();
         assert!(err.message.contains("unknown namespace"));
     }
 }

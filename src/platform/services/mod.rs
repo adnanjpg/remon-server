@@ -4,12 +4,12 @@ use serde::{Deserialize, Serialize};
 pub mod factory;
 
 #[cfg(target_os = "linux")]
-mod systemd;
-#[cfg(target_os = "linux")]
 mod openrc;
+#[cfg(target_os = "linux")]
+mod systemd;
+mod unsupported;
 #[cfg(target_os = "windows")]
 mod windows_scm;
-mod unsupported;
 
 // ===== Types =====
 

@@ -57,7 +57,11 @@ async fn run(state: Arc<AppState>) {
         tokio::time::sleep(Duration::from_millis(SAMPLING_TICK_MS)).await;
 
         let subscribers = state.stats_tx.receiver_count();
-        let observed = if subscribers > 0 { Mode::Active } else { Mode::Idle };
+        let observed = if subscribers > 0 {
+            Mode::Active
+        } else {
+            Mode::Idle
+        };
 
         if observed != current {
             if observed == Mode::Active {
@@ -66,7 +70,10 @@ async fn run(state: Arc<AppState>) {
                 // before the fast interval kicks in.
                 current = Mode::Active;
                 consecutive_opposite = 0;
-                info!("Adaptive sampling → Active (stats subscribers={})", subscribers);
+                info!(
+                    "Adaptive sampling → Active (stats subscribers={})",
+                    subscribers
+                );
             } else {
                 // No subscribers: require HYSTERESIS_TICKS consecutive idle
                 // observations before slowing down, to avoid flapping on
@@ -75,7 +82,10 @@ async fn run(state: Arc<AppState>) {
                 if consecutive_opposite >= HYSTERESIS_TICKS {
                     current = Mode::Idle;
                     consecutive_opposite = 0;
-                    info!("Adaptive sampling → Idle (stats subscribers={})", subscribers);
+                    info!(
+                        "Adaptive sampling → Idle (stats subscribers={})",
+                        subscribers
+                    );
                 }
             }
         } else {

@@ -10,8 +10,8 @@ use crate::error::{AppError, AppResult};
 use crate::routes::dtos::metrics::{
     ComponentPoint, ComponentsHistoryResponse, CpuCorePoint, CpuCoresHistoryResponse,
     CpuHistoryResponse, CpuPoint, DiskHistoryResponse, DiskPoint, MemoryHistoryResponse,
-    MemoryPoint, MetricsRangeQuery, NetworkHistoryResponse, NetworkPoint,
-    PressureHistoryResponse, PressurePoint,
+    MemoryPoint, MetricsRangeQuery, NetworkHistoryResponse, NetworkPoint, PressureHistoryResponse,
+    PressurePoint,
 };
 use crate::routes::extractors::Claims;
 use crate::state::AppState;
@@ -60,9 +60,7 @@ fn resolve_range(q: &MetricsRangeQuery) -> AppResult<(i64, i64, String, u32)> {
     let start = q.start.unwrap_or(end - DEFAULT_SPAN_SECS);
 
     if end < start {
-        return Err(AppError::BadRequest(
-            "end must be >= start".to_string(),
-        ));
+        return Err(AppError::BadRequest("end must be >= start".to_string()));
     }
 
     let resolution = match q.resolution.as_deref() {
@@ -88,9 +86,7 @@ pub async fn cpu_history(
 ) -> AppResult<Json<CpuHistoryResponse>> {
     let (start, end, resolution, limit) = resolve_range(&q)?;
     let repo = MetricsRepository::new(state.db.clone());
-    let rows = repo
-        .read_cpu(&resolution, start, end, limit)
-        .await?;
+    let rows = repo.read_cpu(&resolution, start, end, limit).await?;
 
     let points: Vec<CpuPoint> = rows
         .into_iter()
@@ -110,10 +106,7 @@ pub async fn cpu_history(
         )
         .collect();
 
-    Ok(Json(CpuHistoryResponse {
-        resolution,
-        points,
-    }))
+    Ok(Json(CpuHistoryResponse { resolution, points }))
 }
 
 /// GET /metrics/cpu/cores — per-core usage. Always raw (the per-core
@@ -125,9 +118,7 @@ pub async fn cpu_cores_history(
 ) -> AppResult<Json<CpuCoresHistoryResponse>> {
     let (start, end, _resolution, limit) = resolve_range(&q)?;
     let repo = MetricsRepository::new(state.db.clone());
-    let rows = repo
-        .read_cpu_cores(start, end, limit)
-        .await?;
+    let rows = repo.read_cpu_cores(start, end, limit).await?;
 
     let points: Vec<CpuCorePoint> = rows
         .into_iter()
@@ -153,9 +144,7 @@ pub async fn memory_history(
 ) -> AppResult<Json<MemoryHistoryResponse>> {
     let (start, end, resolution, limit) = resolve_range(&q)?;
     let repo = MetricsRepository::new(state.db.clone());
-    let rows = repo
-        .read_memory(&resolution, start, end, limit)
-        .await?;
+    let rows = repo.read_memory(&resolution, start, end, limit).await?;
 
     let points: Vec<MemoryPoint> = rows
         .into_iter()
@@ -174,10 +163,7 @@ pub async fn memory_history(
         )
         .collect();
 
-    Ok(Json(MemoryHistoryResponse {
-        resolution,
-        points,
-    }))
+    Ok(Json(MemoryHistoryResponse { resolution, points }))
 }
 
 /// GET /metrics/disk — points per (timestamp, mount_point); client groups
@@ -189,9 +175,7 @@ pub async fn disk_history(
 ) -> AppResult<Json<DiskHistoryResponse>> {
     let (start, end, resolution, limit) = resolve_range(&q)?;
     let repo = MetricsRepository::new(state.db.clone());
-    let rows = repo
-        .read_disk(&resolution, start, end, limit)
-        .await?;
+    let rows = repo.read_disk(&resolution, start, end, limit).await?;
 
     let points: Vec<DiskPoint> = rows
         .into_iter()
@@ -206,10 +190,7 @@ pub async fn disk_history(
         })
         .collect();
 
-    Ok(Json(DiskHistoryResponse {
-        resolution,
-        points,
-    }))
+    Ok(Json(DiskHistoryResponse { resolution, points }))
 }
 
 /// GET /metrics/network — points per (timestamp, interface_name).
@@ -220,9 +201,7 @@ pub async fn network_history(
 ) -> AppResult<Json<NetworkHistoryResponse>> {
     let (start, end, resolution, limit) = resolve_range(&q)?;
     let repo = MetricsRepository::new(state.db.clone());
-    let rows = repo
-        .read_network(&resolution, start, end, limit)
-        .await?;
+    let rows = repo.read_network(&resolution, start, end, limit).await?;
 
     let points: Vec<NetworkPoint> = rows
         .into_iter()
@@ -238,10 +217,7 @@ pub async fn network_history(
         })
         .collect();
 
-    Ok(Json(NetworkHistoryResponse {
-        resolution,
-        points,
-    }))
+    Ok(Json(NetworkHistoryResponse { resolution, points }))
 }
 
 const VALID_PRESSURE_RESOURCES: &[&str] = &["cpu", "memory", "io"];
@@ -304,9 +280,7 @@ pub async fn components_history(
 ) -> AppResult<Json<ComponentsHistoryResponse>> {
     let (start, end, resolution, limit) = resolve_range(&q)?;
     let repo = MetricsRepository::new(state.db.clone());
-    let rows = repo
-        .read_components(&resolution, start, end, limit)
-        .await?;
+    let rows = repo.read_components(&resolution, start, end, limit).await?;
 
     let points: Vec<ComponentPoint> = rows
         .into_iter()
@@ -319,8 +293,5 @@ pub async fn components_history(
         })
         .collect();
 
-    Ok(Json(ComponentsHistoryResponse {
-        resolution,
-        points,
-    }))
+    Ok(Json(ComponentsHistoryResponse { resolution, points }))
 }

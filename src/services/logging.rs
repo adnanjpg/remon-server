@@ -21,8 +21,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
-use tracing::{Event, Level, Subscriber};
 use tracing::field::{Field, Visit};
+use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 
 use crate::storage::repositories::LogRepository;
@@ -170,7 +170,9 @@ impl Visit for EventVisitor {
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         match field.name() {
             "message" => self.message = Some(format!("{:?}", value)),
-            "log.target" => self.log_target = Some(format!("{:?}", value).trim_matches('"').to_string()),
+            "log.target" => {
+                self.log_target = Some(format!("{:?}", value).trim_matches('"').to_string())
+            }
             _ => {}
         }
     }

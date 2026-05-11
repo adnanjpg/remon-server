@@ -20,11 +20,7 @@ fn note_collision(table: &str, expected: u64, affected: u64, ts: i64, resolution
         warn!(
             "metric collision on {}: ts={} resolution={} expected={} affected={} \
              (a same-timestamp row already exists; new row dropped)",
-            table,
-            ts,
-            resolution,
-            expected,
-            affected,
+            table, ts, resolution, expected, affected,
         );
     }
 }
@@ -130,7 +126,13 @@ impl MetricsRepository {
         .bind(memory.swap_out_pages_per_sec.map(|v| v as i64))
         .execute(&mut *tx)
         .await?;
-        note_collision("metrics_memory", 1, r.rows_affected(), memory.timestamp, "raw");
+        note_collision(
+            "metrics_memory",
+            1,
+            r.rows_affected(),
+            memory.timestamp,
+            "raw",
+        );
 
         if !disks.is_empty() {
             let mut sql = String::with_capacity(200 + 20 * disks.len());
@@ -161,7 +163,13 @@ impl MetricsRepository {
                     .bind(d.inode_used_percent);
             }
             let r = q.execute(&mut *tx).await?;
-            note_collision("metrics_disk", disks.len() as u64, r.rows_affected(), ts, "raw");
+            note_collision(
+                "metrics_disk",
+                disks.len() as u64,
+                r.rows_affected(),
+                ts,
+                "raw",
+            );
         }
 
         if !networks.is_empty() {
@@ -195,7 +203,13 @@ impl MetricsRepository {
                     .bind(n.errors_out_per_sec as i64);
             }
             let r = q.execute(&mut *tx).await?;
-            note_collision("metrics_network", networks.len() as u64, r.rows_affected(), ts, "raw");
+            note_collision(
+                "metrics_network",
+                networks.len() as u64,
+                r.rows_affected(),
+                ts,
+                "raw",
+            );
         }
 
         if let Some(c) = components {
@@ -599,10 +613,12 @@ impl MetricsRepository {
                     .execute(&self.pool)
                     .await?
             }
-            "logs" => sqlx::query("DELETE FROM logs WHERE timestamp < ?")
-                .bind(cutoff_ts)
-                .execute(&self.pool)
-                .await?,
+            "logs" => {
+                sqlx::query("DELETE FROM logs WHERE timestamp < ?")
+                    .bind(cutoff_ts)
+                    .execute(&self.pool)
+                    .await?
+            }
             "probe_runs" => {
                 if resolution != "raw" {
                     return Ok(0);

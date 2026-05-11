@@ -1,8 +1,8 @@
 #![cfg(feature = "docker")]
 
 use axum::{
-    extract::{Path, Query},
     Json,
+    extract::{Path, Query},
 };
 use bollard::models::ContainerInspectResponse as BollardInspectResponse;
 use log::error;
@@ -276,9 +276,7 @@ fn map_inspect(raw: BollardInspectResponse) -> ContainerInspectInfo {
 
     ContainerInspectInfo {
         id: raw.id,
-        name: raw
-            .name
-            .map(|n| n.trim_start_matches('/').to_string()),
+        name: raw.name.map(|n| n.trim_start_matches('/').to_string()),
         image: raw.image,
         created: raw.created,
         state,

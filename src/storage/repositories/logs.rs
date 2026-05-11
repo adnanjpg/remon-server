@@ -12,7 +12,13 @@ impl LogRepository {
     }
 
     // Insert log entry
-    pub async fn insert(&self, level: i32, source: &str, target: &str, message: &str) -> AppResult<()> {
+    pub async fn insert(
+        &self,
+        level: i32,
+        source: &str,
+        target: &str,
+        message: &str,
+    ) -> AppResult<()> {
         sqlx::query(
             r#"
             INSERT INTO logs (timestamp, level, source, target, message)

@@ -7,8 +7,8 @@ use serde::Deserialize;
 use tokio::process::Command;
 
 use super::{
-    normalize_unit_name, Service, ServiceBackend, ServiceError, ServiceFilter, ServiceManager,
-    ServiceState, TimerUnit,
+    Service, ServiceBackend, ServiceError, ServiceFilter, ServiceManager, ServiceState, TimerUnit,
+    normalize_unit_name,
 };
 
 pub struct SystemdManager;
@@ -62,7 +62,10 @@ async fn run_systemctl_action(args: &[&str], unit: &str) -> Result<(), ServiceEr
     }
 
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if stderr.contains("not found") || stderr.contains("No such file") || stderr.contains("could not be found") {
+    if stderr.contains("not found")
+        || stderr.contains("No such file")
+        || stderr.contains("could not be found")
+    {
         return Err(ServiceError::NotFound(unit.to_string()));
     }
     if stderr.contains("Access denied") || stderr.contains("Failed to connect to bus") {
@@ -85,7 +88,10 @@ async fn unit_file_states(unit_type: &str) -> HashMap<String, String> {
     let Ok(records) = serde_json::from_str::<Vec<UnitFileRecord>>(&raw) else {
         return HashMap::new();
     };
-    records.into_iter().map(|r| (r.unit_file, r.state)).collect()
+    records
+        .into_iter()
+        .map(|r| (r.unit_file, r.state))
+        .collect()
 }
 
 fn parse_state(active: &str, sub: &str) -> ServiceState {
@@ -126,13 +132,7 @@ struct TimerListRecord {
 /// timezone-aware date library and is fragile across locales. The
 /// `list-timers` JSON output is locale-independent.
 async fn fetch_all_timer_times() -> HashMap<String, (Option<i64>, Option<i64>)> {
-    let Ok(raw) = run_systemctl(&[
-        "list-timers",
-        "--output=json",
-        "--no-pager",
-        "--all",
-    ])
-    .await
+    let Ok(raw) = run_systemctl(&["list-timers", "--output=json", "--no-pager", "--all"]).await
     else {
         return HashMap::new();
     };
@@ -155,7 +155,12 @@ fn usec_to_secs(us: u64) -> Option<i64> {
 }
 
 fn is_enabled(state: Option<&String>) -> Option<bool> {
-    state.map(|s| matches!(s.as_str(), "enabled" | "enabled-runtime" | "static" | "generated"))
+    state.map(|s| {
+        matches!(
+            s.as_str(),
+            "enabled" | "enabled-runtime" | "static" | "generated"
+        )
+    })
 }
 
 fn unit_name_to_service(unit: &UnitRecord, file_states: &HashMap<String, String>) -> Service {
@@ -311,11 +316,11 @@ impl ServiceManager for SystemdManager {
         let timer_times = fetch_all_timer_times().await;
 
         let mut timers = Vec::new();
-        for u in records.iter().filter(|u| u.unit.ends_with(".timer") && u.load != "not-found") {
-            let (next_run, last_run) = timer_times
-                .get(&u.unit)
-                .copied()
-                .unwrap_or((None, None));
+        for u in records
+            .iter()
+            .filter(|u| u.unit.ends_with(".timer") && u.load != "not-found")
+        {
+            let (next_run, last_run) = timer_times.get(&u.unit).copied().unwrap_or((None, None));
             let service = Some(u.unit.replace(".timer", ".service"));
             let enabled = is_enabled(file_states.get(&u.unit));
             timers.push(TimerUnit {

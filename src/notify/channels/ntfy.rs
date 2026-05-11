@@ -30,7 +30,12 @@ impl NtfyChannel {
         } else {
             server.trim_end_matches('/').to_string()
         };
-        Ok(Self { http, server, topic, token })
+        Ok(Self {
+            http,
+            server,
+            topic,
+            token,
+        })
     }
 }
 

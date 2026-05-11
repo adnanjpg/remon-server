@@ -22,7 +22,11 @@ pub fn get_processes(sys: &System) -> ProcessList {
                 pid: pid.as_u32(),
                 parent_pid: process.parent().map(|p| p.as_u32()),
                 name: process.name().to_string_lossy().to_string(),
-                cmd: process.cmd().iter().map(|s| s.to_string_lossy().to_string()).collect(),
+                cmd: process
+                    .cmd()
+                    .iter()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .collect(),
                 exe: process.exe().map(|p| p.to_string_lossy().to_string()),
                 user: process.user_id().map(|u| u.to_string()),
                 cpu_percent: process.cpu_usage() as f64,
@@ -60,7 +64,11 @@ pub fn get_process(sys: &System, pid: u32) -> Option<ProcessInfo> {
             pid,
             parent_pid: process.parent().map(|p| p.as_u32()),
             name: process.name().to_string_lossy().to_string(),
-            cmd: process.cmd().iter().map(|s| s.to_string_lossy().to_string()).collect(),
+            cmd: process
+                .cmd()
+                .iter()
+                .map(|s| s.to_string_lossy().to_string())
+                .collect(),
             exe: process.exe().map(|p| p.to_string_lossy().to_string()),
             user: process.user_id().map(|u| u.to_string()),
             cpu_percent: process.cpu_usage() as f64,
@@ -126,9 +134,7 @@ fn kill_process_native(pid: u32, signal: i32) -> Result<(), String> {
 #[cfg(windows)]
 fn kill_process_native(pid: u32, _signal: i32) -> Result<(), String> {
     use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, PROCESS_TERMINATE, TerminateProcess,
-    };
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
 
     // SAFETY: `OpenProcess` returns a null handle on failure, which we
     // check before any further use. `TerminateProcess`/`CloseHandle` are

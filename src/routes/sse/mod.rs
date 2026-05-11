@@ -17,10 +17,7 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/stats/memory", get(stats::stream_memory_stats))
         .route("/stats/disk", get(stats::stream_disk_stats))
         .route("/stats/network", get(stats::stream_network_stats))
-        .route(
-            "/services/{name}/logs",
-            get(services::stream_service_logs),
-        );
+        .route("/services/{name}/logs", get(services::stream_service_logs));
 
     #[cfg(feature = "docker")]
     let router = router.route(

@@ -37,4 +37,3 @@ pub struct NetworkInterfaceInfo {
     pub ip_addresses: Vec<String>,
     pub is_virtual: bool,
 }
-

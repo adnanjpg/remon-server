@@ -151,9 +151,7 @@ async fn evaluate_once(
     for sample in &samples {
         seen.insert(sample.label_set.clone());
 
-        let violating = expr
-            .comparator
-            .evaluate(sample.value, expr.threshold);
+        let violating = expr.comparator.evaluate(sample.value, expr.threshold);
 
         let prior_state = prior_by_label
             .get(&sample.label_set)
@@ -311,21 +309,22 @@ struct Step {
 
 impl Step {
     fn go(s: AlertLifecycle, ts: i64) -> Self {
-        Self { state: s, state_since: ts }
+        Self {
+            state: s,
+            state_since: ts,
+        }
     }
     fn keep(s: AlertLifecycle, ts: i64) -> Self {
-        Self { state: s, state_since: ts }
+        Self {
+            state: s,
+            state_since: ts,
+        }
     }
 }
 
 // ===== Notification helpers =====
 
-async fn fire_notify(
-    state: &AppState,
-    rule: &AlertRule,
-    label_set: &str,
-    value: f64,
-) -> bool {
+async fn fire_notify(state: &AppState, rule: &AlertRule, label_set: &str, value: f64) -> bool {
     let n = Notification {
         title: rule.name.clone(),
         body: format_fire_body(rule, label_set, value),
@@ -335,12 +334,7 @@ async fn fire_notify(
     state.notify.fanout(&n).await > 0
 }
 
-async fn resolve_notify(
-    state: &AppState,
-    rule: &AlertRule,
-    label_set: &str,
-    value: f64,
-) -> bool {
+async fn resolve_notify(state: &AppState, rule: &AlertRule, label_set: &str, value: f64) -> bool {
     let n = Notification {
         title: rule.name.clone(),
         body: format_resolve_body(rule, label_set, value),
@@ -386,7 +380,12 @@ fn format_resolve_body(rule: &AlertRule, label_set: &str, value: f64) -> String 
     } else {
         format!(" {}", label_set)
     };
-    format!("{}{} back to {}", rule.expression, labels, format_value(value))
+    format!(
+        "{}{} back to {}",
+        rule.expression,
+        labels,
+        format_value(value)
+    )
 }
 
 fn format_value(v: f64) -> String {

@@ -24,9 +24,7 @@ use axum::{
 use std::sync::Arc;
 use std::time::Duration;
 use tower_governor::{
-    GovernorLayer,
-    governor::GovernorConfigBuilder,
-    key_extractor::SmartIpKeyExtractor,
+    GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
 };
 use tower_http::limit::RequestBodyLimitLayer;
 
@@ -134,7 +132,10 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         // Runtime configuration
         .route("/config", get(admin::get_config).patch(admin::patch_config))
         // Alert engine v2: rule CRUD + active-state + event log
-        .route("/alerts", get(alerts::list_alerts).post(alerts::create_alert))
+        .route(
+            "/alerts",
+            get(alerts::list_alerts).post(alerts::create_alert),
+        )
         .route("/alerts/state", get(alerts::list_active_state))
         .route("/alerts/events", get(alerts::list_recent_events))
         .route(
@@ -150,7 +151,10 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/metrics/memory", get(metrics::memory_history))
         .route("/metrics/disk", get(metrics::disk_history))
         .route("/metrics/network", get(metrics::network_history))
-        .route("/metrics/pressure/{resource}", get(metrics::pressure_history))
+        .route(
+            "/metrics/pressure/{resource}",
+            get(metrics::pressure_history),
+        )
         .route("/metrics/components", get(metrics::components_history))
         .route("/processes", get(process::get_processes))
         .route("/processes/{pid}", delete(process::delete_process))
@@ -198,25 +202,42 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
     let protected_routes = protected_routes
         .route("/docker/status", get(docker::get_docker_status))
         .route("/docker/containers", get(docker::list_containers))
-        .route("/docker/containers/{id}/start", post(docker::start_container))
+        .route(
+            "/docker/containers/{id}/start",
+            post(docker::start_container),
+        )
         .route("/docker/containers/{id}/stop", post(docker::stop_container))
-        .route("/docker/containers/{id}/restart", post(docker::restart_container))
-        .route("/docker/containers/{id}/pause", post(docker::pause_container))
-        .route("/docker/containers/{id}/unpause", post(docker::unpause_container))
+        .route(
+            "/docker/containers/{id}/restart",
+            post(docker::restart_container),
+        )
+        .route(
+            "/docker/containers/{id}/pause",
+            post(docker::pause_container),
+        )
+        .route(
+            "/docker/containers/{id}/unpause",
+            post(docker::unpause_container),
+        )
         .route("/docker/containers/{id}", delete(docker::delete_container))
-        .route("/docker/containers/{id}/inspect", get(docker::inspect_container))
+        .route(
+            "/docker/containers/{id}/inspect",
+            get(docker::inspect_container),
+        )
         .route("/docker/containers/{id}/logs", get(docker::get_logs))
-        .route("/docker/containers/{id}/stats", get(docker::get_container_stats))
+        .route(
+            "/docker/containers/{id}/stats",
+            get(docker::get_container_stats),
+        )
         .route("/docker/containers/prune", post(docker::prune_containers))
         .route("/docker/images", get(docker::list_images))
         .route("/docker/images/{id}", delete(docker::delete_image))
         .route("/docker/images/prune", post(docker::prune_images));
 
-    let protected_routes = protected_routes
-        .layer(middleware::from_fn_with_state(
-            state,
-            crate::middleware::auth_middleware,
-        ));
+    let protected_routes = protected_routes.layer(middleware::from_fn_with_state(
+        state,
+        crate::middleware::auth_middleware,
+    ));
 
     public_routes.merge(protected_routes)
 }

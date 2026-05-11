@@ -4,9 +4,7 @@ use crate::models::stats::{
     AllStats, ComponentInfo, ComponentsSnapshot, CoreStats, CpuStats, DiskStats, LoadAverage,
     MemoryStats, NetworkStats,
 };
-use crate::models::system::{
-    DiskInfo, HardwareInfo, NetworkInterfaceInfo, SystemDescription,
-};
+use crate::models::system::{DiskInfo, HardwareInfo, NetworkInterfaceInfo, SystemDescription};
 
 /// Collect system description
 pub fn get_description() -> SystemDescription {
@@ -59,7 +57,9 @@ pub fn get_hardware_info() -> HardwareInfo {
             name: name.clone(),
             mac_address: Some(data.mac_address().to_string()),
             ip_addresses: vec![], // sysinfo doesn't provide IPs directly
-            is_virtual: name.starts_with("veth") || name.starts_with("docker") || name.starts_with("br-"),
+            is_virtual: name.starts_with("veth")
+                || name.starts_with("docker")
+                || name.starts_with("br-"),
         })
         .collect();
 
@@ -171,7 +171,11 @@ fn read_cached_bytes() -> u64 {
 /// First-tick `interval_secs` is near-zero, so we floor at 0 to avoid
 /// nonsensical infinities.
 pub fn get_disk_stats(disks: &Disks, interval_secs: f64, timestamp: i64) -> Vec<DiskStats> {
-    let safe_div = if interval_secs > 0.0 { interval_secs } else { 1.0 };
+    let safe_div = if interval_secs > 0.0 {
+        interval_secs
+    } else {
+        1.0
+    };
 
     disks
         .iter()
@@ -219,7 +223,11 @@ pub fn get_network_stats(
     interval_secs: f64,
     timestamp: i64,
 ) -> Vec<NetworkStats> {
-    let safe_div = if interval_secs > 0.0 { interval_secs } else { 1.0 };
+    let safe_div = if interval_secs > 0.0 {
+        interval_secs
+    } else {
+        1.0
+    };
 
     networks
         .iter()
