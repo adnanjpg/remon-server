@@ -321,7 +321,7 @@ async fn main() {
         // Two redactions matter here:
         // 1. `include_headers` is implicitly off — we don't ship them into
         //    the span. This kept Authorization headers out of the LogService
-        //    pipe (B1 sprint).
+        //    pipe.
         // 2. The URI is sanitized via `redact_access_token` because browser
         //    SSE/WS clients pass the JWT as `?access_token=...` (the only
         //    way EventSource / `new WebSocket(...)` can authenticate). Left
