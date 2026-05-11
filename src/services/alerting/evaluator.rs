@@ -35,7 +35,6 @@ use std::time::Duration;
 
 use chrono::Utc;
 use log::{debug, info, warn};
-use sqlx::SqlitePool;
 
 use crate::models::alert::{
     AlertEventType, AlertLifecycle, AlertRule, AlertSeverity, AlertStateRow,
@@ -45,7 +44,7 @@ use crate::state::AppState;
 use crate::storage::repositories::AlertRepository;
 
 use super::expression::{self, Expression};
-use super::resolver::{self, ResolvedSample};
+use super::resolver::{self};
 
 pub fn spawn(state: Arc<AppState>) {
     tokio::spawn(async move { run_supervisor(state).await });

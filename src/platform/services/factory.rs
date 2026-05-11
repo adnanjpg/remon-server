@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use log::{info, warn};
+use log::info;
 
 use crate::platform::init::InitSystem;
 
