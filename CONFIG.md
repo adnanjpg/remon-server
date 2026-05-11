@@ -9,6 +9,7 @@ Set `RUN_ENV=production` to load `config/production.toml` (optional file, create
 ### `[server]`
 - `port` — HTTP listen port (default: 8080)
 - `host` — Bind address (default: `"0.0.0.0"`, use `"127.0.0.1"` to restrict to loopback)
+- `trusted_proxy` — set `true` only when behind a reverse proxy that controls `X-Forwarded-For` (Caddy/nginx with the standard forwarded-for directive). When `true`, per-IP rate limiting and the `devices.last_ip` audit field read from `X-Forwarded-For` / `X-Real-IP`; when `false`, they use the TCP peer. Leaving this `false` while behind a proxy works but collapses every client into the proxy's IP — the auth-endpoint rate limit then applies globally instead of per-client. Setting it `true` while exposed directly lets any caller spoof the header.
 
 ### `[database]`
 - `path` — SQLite file path
@@ -59,6 +60,7 @@ This disables all `/docker/*` endpoints and removes the bollard dependency.
 # config/production.toml
 [server]
 host = "0.0.0.0"
+trusted_proxy = true   # only if behind Caddy/nginx; see [server] above
 
 [logging]
 level = "info"
