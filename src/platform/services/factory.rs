@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use log::info;
+#[cfg(not(target_os = "windows"))]
+use log::warn;
 
 use crate::platform::init::InitSystem;
 
