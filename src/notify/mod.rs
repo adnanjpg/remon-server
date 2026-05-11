@@ -123,27 +123,7 @@ impl NotificationManager {
 
         for (name, channel) in targets {
             let notif = notification.clone();
-            join_set.spawn(async move {
-                match tokio::time::timeout(
-                    Duration::from_secs(10),
-                    channel.send(&notif),
-                )
-                .await
-                {
-                    Ok(Ok(n)) => {
-                        debug!("Channel '{}' delivered {} notification(s)", name, n);
-                        n
-                    }
-                    Ok(Err(e)) => {
-                        warn!("Channel '{}' error: {}", name, e);
-                        0
-                    }
-                    Err(_) => {
-                        warn!("Channel '{}' timed out after 10s", name);
-                        0
-                    }
-                }
-            });
+            join_set.spawn(async move { send_with_retry(&name, &channel, &notif).await });
         }
 
         let mut total = 0usize;
@@ -178,6 +158,64 @@ impl NotificationManager {
             .await
             .map_err(|_| "channel timed out".to_string())?
             .map_err(|e| e.to_string())
+    }
+}
+
+/// Per-attempt timeout for a single channel.send() call. Tightened from
+/// the prior 10 s so the retry budget (2 attempts + 500 ms backoff)
+/// stays under ~11 s total in the worst case.
+const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+/// Pause between the first failed attempt and the retry. Short enough
+/// that a real transient hiccup (DNS blip, TCP reset) is over, long
+/// enough that we don't hammer a struggling upstream.
+const RETRY_BACKOFF: Duration = Duration::from_millis(500);
+
+/// Best-effort send with one retry. Catches the transient class of
+/// failures (TCP reset, DNS blip, 503) that previously dropped alert
+/// notifications permanently. Permanent failures (auth, malformed
+/// config) burn the same 5 s twice — acceptable since alert fanout
+/// already runs concurrently per channel.
+async fn send_with_retry(
+    name: &str,
+    channel: &Arc<dyn NotificationChannel>,
+    notif: &Notification,
+) -> usize {
+    let attempt_once = || async {
+        match tokio::time::timeout(SEND_TIMEOUT, channel.send(notif)).await {
+            Ok(Ok(n)) => Ok(n),
+            Ok(Err(e)) => Err(format!("channel error: {}", e)),
+            Err(_) => Err(format!("timed out after {:?}", SEND_TIMEOUT)),
+        }
+    };
+
+    match attempt_once().await {
+        Ok(n) => {
+            debug!("Channel '{}' delivered {} notification(s)", name, n);
+            n
+        }
+        Err(first_err) => {
+            debug!(
+                "Channel '{}' first attempt failed ({}) — retrying after {:?}",
+                name, first_err, RETRY_BACKOFF
+            );
+            tokio::time::sleep(RETRY_BACKOFF).await;
+            match attempt_once().await {
+                Ok(n) => {
+                    debug!(
+                        "Channel '{}' delivered {} notification(s) on retry",
+                        name, n
+                    );
+                    n
+                }
+                Err(second_err) => {
+                    warn!(
+                        "Channel '{}' failed both attempts: {} / {}",
+                        name, first_err, second_err
+                    );
+                    0
+                }
+            }
+        }
     }
 }
 

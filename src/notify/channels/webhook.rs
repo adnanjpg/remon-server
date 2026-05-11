@@ -18,6 +18,14 @@ impl WebhookChannel {
                 "webhook channel config missing 'url'".to_string(),
             ));
         }
+        // Reject non-HTTP(S) schemes (SSRF defense against file://, gopher://, etc.).
+        let lower = url.to_ascii_lowercase();
+        if !lower.starts_with("http://") && !lower.starts_with("https://") {
+            return Err(ChannelError::Config(format!(
+                "webhook url must use http:// or https://, got '{}'",
+                url
+            )));
+        }
         Ok(Self { http, url, secret })
     }
 }

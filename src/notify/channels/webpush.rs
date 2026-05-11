@@ -30,6 +30,7 @@ impl hkdf::KeyType for OkmLen {
     }
 }
 
+#[derive(Clone)]
 pub struct WebPushChannel {
     vapid: Arc<VapidKeyPair>,
     pool: SqlitePool,
@@ -37,8 +38,11 @@ pub struct WebPushChannel {
 }
 
 impl WebPushChannel {
-    pub fn new(vapid: Arc<VapidKeyPair>, pool: SqlitePool) -> Result<Self, ChannelError> {
-        let client = reqwest::Client::new();
+    pub fn new(
+        vapid: Arc<VapidKeyPair>,
+        pool: SqlitePool,
+        client: reqwest::Client,
+    ) -> Result<Self, ChannelError> {
         Ok(Self { vapid, pool, client })
     }
 
@@ -118,12 +122,9 @@ impl NotificationChannel for WebPushChannel {
 
         let mut join_set = tokio::task::JoinSet::new();
         for (device_id, endpoint, p256dh, auth) in targets {
-            let vapid = Arc::clone(&self.vapid);
-            let pool = self.pool.clone();
-            let client = self.client.clone();
+            let chan = self.clone();
             let notif = notification.clone();
             join_set.spawn(async move {
-                let chan = WebPushChannel { vapid, pool, client };
                 match tokio::time::timeout(
                     Duration::from_secs(10),
                     chan.send_to_subscriber(&device_id, &endpoint, &p256dh, &auth, &notif),

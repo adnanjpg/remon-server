@@ -53,7 +53,7 @@ pub fn build_channel(
             // are tracked on `devices` rows. Operator just toggles the
             // channel on; the rest is automatic.
             let _ = config; // suppress unused-var lint at this branch
-            Ok(Box::new(WebPushChannel::new(Arc::clone(vapid), pool)?))
+            Ok(Box::new(WebPushChannel::new(Arc::clone(vapid), pool, http)?))
         }
 
         "telegram" => {

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use chrono::Utc;
-use log::warn;
+use log::{debug, warn};
 use reqwest::Client;
 use ring::rand::SystemRandom;
 use ring::signature::{RsaKeyPair, RSA_PKCS1_SHA256};
@@ -151,8 +151,20 @@ impl FcmInner {
             .map_err(|e| ChannelError::Send(format!("FCM token request: {}", e)))?;
 
         if !resp.status().is_success() {
+            let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(ChannelError::Send(format!("FCM token endpoint: {}", body)));
+            debug!("FCM token endpoint raw error body: {}", body);
+            // Google's token endpoint returns {"error":"...", "error_description":"..."}.
+            // `error` is an enum (e.g. invalid_grant); the description may include the
+            // service-account email — keep it out of the public error string.
+            let code = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+                .unwrap_or_else(|| "unknown".to_string());
+            return Err(ChannelError::Send(format!(
+                "FCM token endpoint: {} ({})",
+                status, code
+            )));
         }
 
         let tr: TokenResp = resp
@@ -197,8 +209,35 @@ impl FcmInner {
         } else {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            Err(ChannelError::Send(format!("FCM {} — {}", status, body)))
+            debug!("FCM send raw error body: {}", body);
+            Err(ChannelError::Send(format!(
+                "FCM {} ({})",
+                status,
+                summarize_fcm_error(&body)
+            )))
         }
+    }
+}
+
+/// Extract only safe enum-valued fields from an FCM v1 error response.
+/// Drops `error.message` (free-text, may include identifiers/project refs).
+/// Returns "unknown" if the body isn't recognizable.
+fn summarize_fcm_error(body: &str) -> String {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return "unknown".to_string();
+    };
+    let err = v.get("error");
+    let status = err
+        .and_then(|e| e.get("status"))
+        .and_then(|s| s.as_str())
+        .unwrap_or("unknown");
+    let fcm_code = err
+        .and_then(|e| e.get("details"))
+        .and_then(|d| d.as_array())
+        .and_then(|arr| arr.iter().find_map(|d| d.get("errorCode").and_then(|c| c.as_str())));
+    match fcm_code {
+        Some(c) => format!("{}/{}", status, c),
+        None => status.to_string(),
     }
 }
 
