@@ -29,7 +29,7 @@ serde_yaml_ng = "0.10"
 cron = "0.16.0"
 thiserror = "2"
 sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio", "migrate"] }
-sysinfo = "0.39.0"
+sysinfo = "0.39.1"
 totp-rs = "5.5"
 env_logger = "0.11"
 log = "0.4"
