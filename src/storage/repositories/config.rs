@@ -8,7 +8,7 @@ use crate::error::AppResult;
 pub struct RuntimeOverrides {
     pub server_name: String,
     pub collector_stats_interval_ms: u64,
-    pub collector_processes_interval_ms: u64,
+    pub processes_cache_ttl_ms: u64,
     pub collector_docker_interval_ms: u64,
     pub rollup_tick_interval_ms: u64,
     pub retention_tick_interval_ms: u64,
@@ -41,7 +41,7 @@ impl ConfigRepository {
         Ok(RuntimeOverrides {
             server_name: row.0,
             collector_stats_interval_ms: row.1 as u64,
-            collector_processes_interval_ms: row.2 as u64,
+            processes_cache_ttl_ms: row.2 as u64,
             collector_docker_interval_ms: row.3 as u64,
             rollup_tick_interval_ms: row.4 as u64,
             retention_tick_interval_ms: row.5 as u64,
@@ -64,7 +64,7 @@ impl ConfigRepository {
         )
         .bind(&c.server_name)
         .bind(c.collector_stats_interval_ms as i64)
-        .bind(c.collector_processes_interval_ms as i64)
+        .bind(c.processes_cache_ttl_ms as i64)
         .bind(c.collector_docker_interval_ms as i64)
         .bind(c.rollup_tick_interval_ms as i64)
         .bind(c.retention_tick_interval_ms as i64)

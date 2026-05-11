@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 
 use sqlx::SqlitePool;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{Mutex, RwLock, broadcast};
 
 use crate::config::AuthConfig;
 use crate::models::process::ProcessList;
@@ -70,10 +70,11 @@ pub struct AppState {
     pub stats_tx: broadcast::Sender<StatsEvent>,
     pub processes_tx: broadcast::Sender<ProcessList>,
 
-    /// Latest process snapshot, refreshed by the processes collector once
-    /// per tick. REST `GET /processes` reads from here in O(microseconds);
-    /// the broadcast channel above is reserved for streaming consumers
-    /// (none today; future `/sse/processes` would use it).
+    /// Latest process snapshot. REST `GET /processes` refreshes it on
+    /// demand when the cache is stale; the background collectors do not
+    /// continuously scan the process table. This matters on hosts with
+    /// thousands of processes where sysinfo enumeration is noticeably
+    /// expensive.
     ///
     /// Why a separate cache instead of a `subscribe()`-on-broadcast trick:
     /// `broadcast::Receiver` only sees messages sent *after* subscription —
@@ -81,11 +82,15 @@ pub struct AppState {
     /// empty between collector ticks, forcing a fallback that re-reads
     /// sysinfo with no delta and reports 0% CPU on every process.
     pub processes_latest: Arc<RwLock<Option<ProcessList>>>,
+    /// Serializes on-demand process refreshes so a burst of `/processes`
+    /// requests cannot all pay the full sysinfo scan at once.
+    pub processes_refresh_lock: Arc<Mutex<()>>,
 
     pub effective_config: Arc<RwLock<EffectiveConfig>>,
 
     pub collector_stats_interval_ms: Arc<AtomicU64>,
-    pub collector_processes_interval_ms: Arc<AtomicU64>,
+    /// Cache TTL for on-demand process snapshots (mirrors `collector_processes_interval_ms` DB column).
+    pub processes_cache_ttl_ms: Arc<AtomicU64>,
     #[cfg(feature = "docker")]
     pub collector_docker_interval_ms: Arc<AtomicU64>,
 
@@ -136,11 +141,9 @@ impl AppState {
         trusted_proxy: bool,
         effective_config: EffectiveConfig,
         collector_stats_interval_ms: u64,
-        collector_processes_interval_ms: u64,
-        #[cfg(feature = "docker")]
-        collector_docker_interval_ms: u64,
-        #[cfg(feature = "docker")]
-        docker_exec_enabled: bool,
+        processes_cache_ttl_ms: u64,
+        #[cfg(feature = "docker")] collector_docker_interval_ms: u64,
+        #[cfg(feature = "docker")] docker_exec_enabled: bool,
         hardware_info: HardwareInfo,
         service_manager: Arc<dyn ServiceManager>,
         probe_registry: ProbeRegistry,
@@ -158,11 +161,10 @@ impl AppState {
             stats_tx,
             processes_tx,
             processes_latest: Arc::new(RwLock::new(None)),
+            processes_refresh_lock: Arc::new(Mutex::new(())),
             effective_config: Arc::new(RwLock::new(effective_config)),
             collector_stats_interval_ms: Arc::new(AtomicU64::new(collector_stats_interval_ms)),
-            collector_processes_interval_ms: Arc::new(AtomicU64::new(
-                collector_processes_interval_ms,
-            )),
+            processes_cache_ttl_ms: Arc::new(AtomicU64::new(processes_cache_ttl_ms)),
             #[cfg(feature = "docker")]
             collector_docker_interval_ms: Arc::new(AtomicU64::new(collector_docker_interval_ms)),
             #[cfg(feature = "docker")]

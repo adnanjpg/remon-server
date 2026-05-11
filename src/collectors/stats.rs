@@ -132,9 +132,13 @@ pub async fn run(state: Arc<AppState>) {
         // hiccup. Receivers having no listeners isn't an error here.
         let t_broadcast = Instant::now();
         let _ = state.stats_tx.send(StatsEvent::Cpu(cpu_stats.clone()));
-        let _ = state.stats_tx.send(StatsEvent::Memory(memory_stats.clone()));
+        let _ = state
+            .stats_tx
+            .send(StatsEvent::Memory(memory_stats.clone()));
         let _ = state.stats_tx.send(StatsEvent::Disk(disk_stats.clone()));
-        let _ = state.stats_tx.send(StatsEvent::Network(network_stats.clone()));
+        let _ = state
+            .stats_tx
+            .send(StatsEvent::Network(network_stats.clone()));
         if let Some(p) = pressure_snapshot.clone() {
             let _ = state.stats_tx.send(StatsEvent::Pressure(p));
         }

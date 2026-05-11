@@ -261,7 +261,7 @@ async fn main() {
         config.server.trusted_proxy,
         effective_config,
         overrides.collector_stats_interval_ms,
-        overrides.collector_processes_interval_ms,
+        overrides.processes_cache_ttl_ms,
         #[cfg(feature = "docker")]
         overrides.collector_docker_interval_ms,
         #[cfg(feature = "docker")]

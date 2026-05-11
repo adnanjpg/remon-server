@@ -1,3 +1,6 @@
+// Not spawned — process refresh is on-demand via GET /processes with TTL-based
+// caching. Kept here in case a push-based model is needed later (e.g. SSE
+// process stream endpoint).
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -30,7 +33,7 @@ pub async fn run(state: Arc<AppState>) {
     );
 
     let mut current_interval_ms = state
-        .collector_processes_interval_ms
+        .processes_cache_ttl_ms
         .load(Ordering::Relaxed)
         .max(1000);
     let mut ticker = tokio::time::interval(Duration::from_millis(current_interval_ms));
@@ -71,7 +74,7 @@ pub async fn run(state: Arc<AppState>) {
         tick_stats.flush_if_needed();
 
         let new_interval_ms = state
-            .collector_processes_interval_ms
+            .processes_cache_ttl_ms
             .load(Ordering::Relaxed)
             .max(1000);
         if new_interval_ms != current_interval_ms {
