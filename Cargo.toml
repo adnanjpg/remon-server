@@ -69,4 +69,4 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
-ctor = "0.13"
+ctor = "1.0"
