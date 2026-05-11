@@ -1,6 +1,6 @@
 [package]
 name = "remon-server"
-version = "0.7.3"
+version = "0.7.4"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -8,14 +8,12 @@ edition = "2024"
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
-base32 = "0.5"
 base64 = "0.22"
-chrono = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 config = "0.15"
-fast_qr = "0.13"
 axum = { version = "0.8.9", features = ["ws"] }
 tower = "0.5.3"
-tower-http = { version = "0.6.10", features = ["trace", "compression-gzip", "cors"] }
+tower-http = { version = "0.6.10", features = ["trace", "compression-gzip", "cors", "limit", "timeout"] }
 jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
 reqwest = { version = "0.13", default-features = false, features = [
     "rustls",
@@ -31,21 +29,25 @@ thiserror = "2"
 sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio", "migrate"] }
 sysinfo = "0.39.1"
 totp-rs = "5.5"
-env_logger = "0.11"
 log = "0.4"
-local-ip-address = "0.6"
 blake3 = "1.5"
-maplit = "1.0"
-strum = "0.28"
-strum_macros = "0.28"
-tokio = { version = "1.52", features = ["full"] }
+tokio = { version = "1.52", features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+    "sync",
+    "signal",
+    "net",
+    "fs",
+    "io-util",
+    "process",
+] }
 tokio-stream = { version = "0.1.18", features = ["sync", "io-util"] }
 colored = "3"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "tracing-log"] }
 bollard = { version = "0.21", optional = true, default-features = false, features = ["pipe"] }
 futures-util = "0.3"
-hostname = "0.4"
 argon2 = "0.5"
 rand = "0.10"
 hex = "0.4"
