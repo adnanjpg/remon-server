@@ -29,7 +29,15 @@ pub async fn run(state: Arc<AppState>) {
         12,
     );
 
+    let mut current_interval_ms = state
+        .collector_processes_interval_ms
+        .load(Ordering::Relaxed)
+        .max(1000);
+    let mut ticker = tokio::time::interval(Duration::from_millis(current_interval_ms));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     loop {
+        ticker.tick().await;
         // ── Phase: refresh ──────────────────────────────────────────────
         // Surgical: only process info, not CPU/memory/disks/networks/
         // components inside `sys` — those get re-read by the stats collector.
@@ -62,10 +70,15 @@ pub async fn run(state: Arc<AppState>) {
         tick_stats.record(&[refresh_dur, compute_dur, publish_dur]);
         tick_stats.flush_if_needed();
 
-        let interval_ms = state
+        let new_interval_ms = state
             .collector_processes_interval_ms
             .load(Ordering::Relaxed)
-            .max(500);
-        tokio::time::sleep(Duration::from_millis(interval_ms)).await;
+            .max(1000);
+        if new_interval_ms != current_interval_ms {
+            current_interval_ms = new_interval_ms;
+            let next = tokio::time::Instant::now() + Duration::from_millis(current_interval_ms);
+            ticker = tokio::time::interval_at(next, Duration::from_millis(current_interval_ms));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        }
     }
 }

@@ -73,8 +73,7 @@ pub fn get_hardware_info() -> HardwareInfo {
     }
 }
 
-/// Collect CPU stats
-pub fn get_cpu_stats(sys: &System) -> CpuStats {
+pub fn get_cpu_stats(sys: &System, timestamp: i64) -> CpuStats {
     let load_avg = System::load_average();
 
     let per_core: Vec<CoreStats> = sys
@@ -102,9 +101,7 @@ pub fn get_cpu_stats(sys: &System) -> CpuStats {
             five: load_avg.five,
             fifteen: load_avg.fifteen,
         },
-        timestamp: chrono::Utc::now().timestamp(),
-        // Linux-only extras filled in by the collector; default to None
-        // so a Windows/macOS build returns a well-formed CpuStats.
+        timestamp,
         steal_percent: None,
         iowait_percent: None,
         guest_percent: None,
@@ -121,7 +118,7 @@ pub fn get_cpu_stats(sys: &System) -> CpuStats {
 /// - On other platforms sysinfo doesn't expose a cached counter and we
 ///   return 0 rather than guessing with arithmetic that would be wrong
 ///   on a NUMA system.
-pub fn get_memory_stats(sys: &System) -> MemoryStats {
+pub fn get_memory_stats(sys: &System, timestamp: i64) -> MemoryStats {
     MemoryStats {
         total_bytes: sys.total_memory(),
         used_bytes: sys.used_memory(),
@@ -129,8 +126,8 @@ pub fn get_memory_stats(sys: &System) -> MemoryStats {
         cached_bytes: read_cached_bytes(),
         swap_total_bytes: sys.total_swap(),
         swap_used_bytes: sys.used_swap(),
-        timestamp: chrono::Utc::now().timestamp(),
-        // Linux-only extras filled in by the collector.
+        timestamp,
+        // Linux-only extras filled in by `enrich_linux`.
         page_faults_minor_per_sec: None,
         page_faults_major_per_sec: None,
         swap_in_pages_per_sec: None,
@@ -173,8 +170,7 @@ fn read_cached_bytes() -> u64 {
 /// We divide that by `interval_secs` to land on a real per-second rate.
 /// First-tick `interval_secs` is near-zero, so we floor at 0 to avoid
 /// nonsensical infinities.
-pub fn get_disk_stats(disks: &Disks, interval_secs: f64) -> Vec<DiskStats> {
-    let timestamp = chrono::Utc::now().timestamp();
+pub fn get_disk_stats(disks: &Disks, interval_secs: f64, timestamp: i64) -> Vec<DiskStats> {
     let safe_div = if interval_secs > 0.0 { interval_secs } else { 1.0 };
 
     disks
@@ -218,8 +214,11 @@ pub fn get_disk_stats(disks: &Disks, interval_secs: f64) -> Vec<DiskStats> {
 /// rate. Loopback is excluded with an exact prefix match (`lo` followed by
 /// nothing or a digit) to avoid eating real interfaces with names that
 /// happen to start with "lo" (e.g. "long0", "logical0").
-pub fn get_network_stats(networks: &Networks, interval_secs: f64) -> Vec<NetworkStats> {
-    let timestamp = chrono::Utc::now().timestamp();
+pub fn get_network_stats(
+    networks: &Networks,
+    interval_secs: f64,
+    timestamp: i64,
+) -> Vec<NetworkStats> {
     let safe_div = if interval_secs > 0.0 { interval_secs } else { 1.0 };
 
     networks
@@ -266,8 +265,7 @@ pub fn get_network_stats(networks: &Networks, interval_secs: f64) -> Vec<Network
 /// Snapshot the available hardware sensors. The caller is expected to keep
 /// a `Components` handle around and refresh it once per tick — repeatedly
 /// constructing one is more expensive than reading temperatures.
-pub fn get_components(components: &Components) -> ComponentsSnapshot {
-    let timestamp = chrono::Utc::now().timestamp();
+pub fn get_components(components: &Components, timestamp: i64) -> ComponentsSnapshot {
     let list: Vec<ComponentInfo> = components
         .iter()
         .map(|c| ComponentInfo {
@@ -296,19 +294,23 @@ fn is_loopback(name: &str) -> bool {
     false
 }
 
-/// Collect all stats at once.
+/// Collect all stats at once. Currently unused — collector code samples a
+/// single tick timestamp and calls the per-resource fns directly so the
+/// Linux enrichment block can patch them in-place.
+#[allow(dead_code)]
 pub fn get_all_stats(
     sys: &System,
     disks: &Disks,
     networks: &Networks,
     interval_secs: f64,
 ) -> AllStats {
+    let timestamp = chrono::Utc::now().timestamp();
     AllStats {
-        cpu: get_cpu_stats(sys),
-        memory: get_memory_stats(sys),
+        cpu: get_cpu_stats(sys, timestamp),
+        memory: get_memory_stats(sys, timestamp),
         pressure: None,
         components: None,
-        disks: get_disk_stats(disks, interval_secs),
-        network: get_network_stats(networks, interval_secs),
+        disks: get_disk_stats(disks, interval_secs, timestamp),
+        network: get_network_stats(networks, interval_secs, timestamp),
     }
 }

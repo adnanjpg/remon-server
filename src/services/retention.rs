@@ -21,15 +21,33 @@ pub fn spawn(state: Arc<AppState>) {
 }
 
 async fn run(state: Arc<AppState>) {
+    let mut current_interval_ms = state
+        .effective_config
+        .read()
+        .await
+        .retention_tick_interval_ms
+        .max(60_000);
+    let mut ticker = tokio::time::interval(Duration::from_millis(current_interval_ms));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     loop {
-        let tick_ms = {
-            let cfg = state.effective_config.read().await;
-            cfg.retention_tick_interval_ms.max(60_000)
-        };
-        tokio::time::sleep(Duration::from_millis(tick_ms)).await;
+        ticker.tick().await;
 
         if let Err(e) = run_once(&state).await {
             warn!("Retention tick failed: {:?}", e);
+        }
+
+        let new_interval_ms = state
+            .effective_config
+            .read()
+            .await
+            .retention_tick_interval_ms
+            .max(60_000);
+        if new_interval_ms != current_interval_ms {
+            current_interval_ms = new_interval_ms;
+            let next = tokio::time::Instant::now() + Duration::from_millis(current_interval_ms);
+            ticker = tokio::time::interval_at(next, Duration::from_millis(current_interval_ms));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         }
     }
 }

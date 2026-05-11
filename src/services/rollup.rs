@@ -41,15 +41,33 @@ pub fn spawn(state: Arc<AppState>) {
 }
 
 async fn run(state: Arc<AppState>) {
+    let mut current_interval_ms = state
+        .effective_config
+        .read()
+        .await
+        .rollup_tick_interval_ms
+        .max(1000);
+    let mut ticker = tokio::time::interval(Duration::from_millis(current_interval_ms));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     loop {
-        let tick_ms = {
-            let cfg = state.effective_config.read().await;
-            cfg.rollup_tick_interval_ms.max(1000)
-        };
-        tokio::time::sleep(Duration::from_millis(tick_ms)).await;
+        ticker.tick().await;
 
         if let Err(e) = run_once(&state).await {
             warn!("Rollup tick failed: {:?}", e);
+        }
+
+        let new_interval_ms = state
+            .effective_config
+            .read()
+            .await
+            .rollup_tick_interval_ms
+            .max(1000);
+        if new_interval_ms != current_interval_ms {
+            current_interval_ms = new_interval_ms;
+            let next = tokio::time::Instant::now() + Duration::from_millis(current_interval_ms);
+            ticker = tokio::time::interval_at(next, Duration::from_millis(current_interval_ms));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         }
     }
 }
@@ -126,10 +144,18 @@ async fn rollup_resource(
         match aggregate_one_bucket(state, resource, parent, &target.name, bucket_start, bucket_end).await {
             Ok(true)  => last_written = bucket_start,
             Ok(false) => {}
-            Err(e) => warn!(
-                "Rollup bucket failed: resource={} resolution={} bucket_start={}: {:?}",
-                resource, target.name, bucket_start, e
-            ),
+            Err(e) => {
+                // Stop at the first error. If we kept going and a later
+                // bucket succeeded, the cursor would advance past the
+                // failed one and that bucket would never be retried. The
+                // next tick picks up here and retries.
+                warn!(
+                    "Rollup bucket failed: resource={} resolution={} bucket_start={}: {:?} \
+                     (stopping for this resource; will retry next tick)",
+                    resource, target.name, bucket_start, e
+                );
+                break;
+            }
         }
         bucket_start = bucket_end;
     }

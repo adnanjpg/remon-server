@@ -102,10 +102,18 @@ async fn run_rule_loop(rule: AlertRule, state: Arc<AppState>) {
         rule.for_duration_secs
     );
 
-    let interval = Duration::from_secs(rule.eval_interval_secs.max(1) as u64);
+    let period = Duration::from_secs(rule.eval_interval_secs.max(1) as u64);
+    // Wall-clock-aligned ticker — same pattern we use in collectors /
+    // rollup / retention. Rule eval intervals don't change at runtime
+    // (no hot-reload yet) so no recreate-on-change logic here. First
+    // tick fires immediately after the 2s supervisor warmup; that's
+    // fine — a fresh boot evaluating once on tick 0 just sees current
+    // metrics, no harm done.
+    let mut ticker = tokio::time::interval(period);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
-        tokio::time::sleep(interval).await;
+        ticker.tick().await;
         if let Err(e) = evaluate_once(&rule, &parsed, &state).await {
             warn!("Alert rule '{}' eval failed: {}", rule.name, e);
         }
@@ -168,57 +176,41 @@ async fn evaluate_once(
             now,
         );
 
-        // If we just entered firing OR just resolved, emit an event.
-        let mut last_notified_at = prior_last_notified;
-        match (prior_state, next.state) {
+        // Determine transition intent; state row is committed before side effects
+        // to prevent re-firing on a transient DB error.
+        let (event_type, notify_intent) = match (prior_state, next.state) {
             (AlertLifecycle::Pending, AlertLifecycle::Firing) => {
                 let cooled_in = prior_last_notified
                     .map(|last| now - last < rule.cooldown_secs)
                     .unwrap_or(false);
-                let notified = if !cooled_in {
-                    fire_notify(state, rule, &sample.label_set, sample.value).await
-                } else {
+                if cooled_in {
                     debug!(
                         "Alert rule '{}' label={} fire suppressed by cooldown",
                         rule.name, sample.label_set
                     );
-                    false
-                };
-                if let Err(e) = repo
-                    .insert_event(
-                        rule.id,
-                        &sample.label_set,
-                        AlertEventType::Fired,
-                        rule.severity,
-                        Some(sample.value),
-                        notified,
-                    )
-                    .await
-                {
-                    warn!("alert_events insert failed: {:?}", e);
-                }
-                if notified {
-                    last_notified_at = Some(now);
+                    (Some(AlertEventType::Fired), false)
+                } else {
+                    (Some(AlertEventType::Fired), true)
                 }
             }
             (AlertLifecycle::Firing, AlertLifecycle::Ok) => {
-                let notified = resolve_notify(state, rule, &sample.label_set, sample.value).await;
-                if let Err(e) = repo
-                    .insert_event(
-                        rule.id,
-                        &sample.label_set,
-                        AlertEventType::Resolved,
-                        rule.severity,
-                        Some(sample.value),
-                        notified,
-                    )
-                    .await
-                {
-                    warn!("alert_events insert failed: {:?}", e);
-                }
+                // Resolves always notify — recovery is more useful than
+                // spam-protected here.
+                (Some(AlertEventType::Resolved), true)
             }
-            _ => { /* silent transitions */ }
-        }
+            _ => (None, false),
+        };
+
+        // Optimistically stamp `last_notified_at = now` when we intend to
+        // notify. If the fanout below produces zero deliveries (no
+        // channels configured, all timed out), cooldown still kicks in —
+        // we treat that as "we tried, don't try again immediately" rather
+        // than letting a misconfigured server re-attempt every tick.
+        let new_last_notified_at = if notify_intent {
+            Some(now)
+        } else {
+            prior_last_notified
+        };
 
         let row = AlertStateRow {
             rule_id: rule.id,
@@ -227,10 +219,46 @@ async fn evaluate_once(
             state_since: next.state_since,
             last_value: Some(sample.value),
             last_eval_at: now,
-            last_notified_at,
+            last_notified_at: new_last_notified_at,
         };
         if let Err(e) = repo.upsert_state(&row).await {
-            warn!("alert_state upsert failed: {:?}", e);
+            // State didn't persist — abort all side effects so the next
+            // tick can re-attempt the same transition cleanly.
+            warn!(
+                "alert_state upsert failed for rule='{}' label={}: {:?} \
+                 (skipping notify/event; will retry next tick)",
+                rule.name, sample.label_set, e
+            );
+            continue;
+        }
+
+        // State is durable. Now the best-effort side effects.
+        if let Some(et) = event_type {
+            let notified = if notify_intent {
+                match et {
+                    AlertEventType::Fired => {
+                        fire_notify(state, rule, &sample.label_set, sample.value).await
+                    }
+                    AlertEventType::Resolved => {
+                        resolve_notify(state, rule, &sample.label_set, sample.value).await
+                    }
+                }
+            } else {
+                false
+            };
+            if let Err(e) = repo
+                .insert_event(
+                    rule.id,
+                    &sample.label_set,
+                    et,
+                    rule.severity,
+                    Some(sample.value),
+                    notified,
+                )
+                .await
+            {
+                warn!("alert_events insert failed: {:?}", e);
+            }
         }
     }
 

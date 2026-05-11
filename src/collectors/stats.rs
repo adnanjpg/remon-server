@@ -12,6 +12,8 @@ use crate::state::AppState;
 use crate::storage::repositories::MetricsRepository;
 
 #[cfg(target_os = "linux")]
+use crate::models::stats::{CpuStats, DiskStats, MemoryStats};
+#[cfg(target_os = "linux")]
 use crate::services::system_linux::{self, ProcStatSnapshot, VmstatSnapshot};
 
 pub async fn run(state: Arc<AppState>) {
@@ -59,13 +61,24 @@ pub async fn run(state: Arc<AppState>) {
         30,
     );
 
+    // MissedTickBehavior::Skip: drop overrun ticks, don't burst-catch up.
+    let mut current_interval_ms = state
+        .collector_stats_interval_ms
+        .load(Ordering::Relaxed)
+        .max(1000);
+    let mut ticker = tokio::time::interval(Duration::from_millis(current_interval_ms));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     loop {
+        ticker.tick().await;
         let now = Instant::now();
         let interval_secs = match last_refresh {
             Some(prev) => (now - prev).as_secs_f64(),
             None => 0.0,
         };
         last_refresh = Some(now);
+
+        let tick_ts = chrono::Utc::now().timestamp();
 
         // ── Phase: refresh ──────────────────────────────────────────────
         // Surgical refreshes only — process enumeration is the most
@@ -85,69 +98,32 @@ pub async fn run(state: Arc<AppState>) {
         // ── Phase: compute ──────────────────────────────────────────────
         let t_compute = Instant::now();
 
-        #[allow(unused_mut)]
-        let mut cpu_stats = system_svc::get_cpu_stats(&sys);
-        #[allow(unused_mut)]
-        let mut memory_stats = system_svc::get_memory_stats(&sys);
-        #[allow(unused_mut)]
-        let mut disk_stats = system_svc::get_disk_stats(&disks, interval_secs);
-        let network_stats = system_svc::get_network_stats(&networks, interval_secs);
-        let components_snapshot = system_svc::get_components(&components);
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+        let mut cpu_stats = system_svc::get_cpu_stats(&sys, tick_ts);
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+        let mut memory_stats = system_svc::get_memory_stats(&sys, tick_ts);
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+        let mut disk_stats = system_svc::get_disk_stats(&disks, interval_secs, tick_ts);
+        let network_stats = system_svc::get_network_stats(&networks, interval_secs, tick_ts);
+        let components_snapshot = system_svc::get_components(&components, tick_ts);
 
-        // Linux-only enrichment: extras the cross-platform sysinfo
-        // doesn't surface. Each is a graceful no-op on other OSes.
-        #[allow(unused_mut)]
-        let mut pressure_snapshot: Option<PressureSnapshot> = None;
-
+        let pressure_snapshot: Option<PressureSnapshot>;
         #[cfg(target_os = "linux")]
         {
-            // /proc/stat: percentages AND kernel-event rates need a prior
-            // snapshot, so we only fill them on tick 2+.
-            let cur_stat = system_linux::read_proc_stat();
-            if let (Some(prev), Some(cur)) = (last_proc_stat, cur_stat) {
-                if let Some(extras) = system_linux::compute_cpu_extras(prev, cur) {
-                    cpu_stats.steal_percent = Some(extras.steal_percent);
-                    cpu_stats.iowait_percent = Some(extras.iowait_percent);
-                    cpu_stats.guest_percent = Some(extras.guest_percent);
-                }
-                if let Some(rates) =
-                    system_linux::compute_kernel_event_rates(prev, cur, interval_secs)
-                {
-                    cpu_stats.context_switches_per_sec = Some(rates.context_switches_per_sec);
-                    cpu_stats.process_forks_per_sec = Some(rates.process_forks_per_sec);
-                }
-            }
-            last_proc_stat = cur_stat;
-
-            // /proc/vmstat: page faults and swap traffic — same prior-snapshot
-            // dance.
-            let cur_vmstat = system_linux::read_vmstat();
-            if let (Some(prev), Some(cur)) = (last_vmstat, cur_vmstat) {
-                if let Some(rates) =
-                    system_linux::compute_vmstat_rates(prev, cur, interval_secs)
-                {
-                    memory_stats.page_faults_minor_per_sec =
-                        Some(rates.page_faults_minor_per_sec);
-                    memory_stats.page_faults_major_per_sec =
-                        Some(rates.page_faults_major_per_sec);
-                    memory_stats.swap_in_pages_per_sec = Some(rates.swap_in_pages_per_sec);
-                    memory_stats.swap_out_pages_per_sec = Some(rates.swap_out_pages_per_sec);
-                }
-            }
-            last_vmstat = cur_vmstat;
-
-            // statvfs inode usage per mount.
-            for d in &mut disk_stats {
-                d.inode_used_percent = system_linux::read_inode_usage(&d.mount_point);
-            }
-
-            // PSI snapshot: per-resource None on pre-4.20 kernels.
-            pressure_snapshot = Some(PressureSnapshot {
-                cpu: system_linux::read_pressure("cpu"),
-                memory: system_linux::read_pressure("memory"),
-                io: system_linux::read_pressure("io"),
-                timestamp: chrono::Utc::now().timestamp(),
-            });
+            pressure_snapshot = enrich_linux(
+                &mut cpu_stats,
+                &mut memory_stats,
+                &mut disk_stats,
+                interval_secs,
+                tick_ts,
+                &mut last_proc_stat,
+                &mut last_vmstat,
+            )
+            .await;
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            pressure_snapshot = None;
         }
         let compute_dur = t_compute.elapsed();
 
@@ -196,12 +172,73 @@ pub async fn run(state: Arc<AppState>) {
             (memory_stats.used_bytes as f64 / memory_stats.total_bytes.max(1) as f64) * 100.0
         );
 
-        // Reload interval each tick so adaptive sampling can change it on
-        // the fly. Floor at 100ms to defend against accidental zeros.
-        let interval_ms = state
+        // Rebuild on interval change to avoid an immediate double-fire.
+        let new_interval_ms = state
             .collector_stats_interval_ms
             .load(Ordering::Relaxed)
-            .max(100);
-        tokio::time::sleep(Duration::from_millis(interval_ms)).await;
+            .max(1000);
+        if new_interval_ms != current_interval_ms {
+            current_interval_ms = new_interval_ms;
+            let next = tokio::time::Instant::now() + Duration::from_millis(current_interval_ms);
+            ticker = tokio::time::interval_at(next, Duration::from_millis(current_interval_ms));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        }
     }
+}
+
+/// Patch the cross-platform stats with Linux-only extras: `/proc/stat`
+/// extended CPU breakdown + kernel event rates, `/proc/vmstat` page-fault
+/// and swap traffic rates, per-mount inode utilization via `statvfs`, and
+/// the PSI snapshot. The first tick returns a partial frame (rate fields
+/// stay None) because the rate computations need a prior snapshot.
+#[cfg(target_os = "linux")]
+async fn enrich_linux(
+    cpu: &mut CpuStats,
+    memory: &mut MemoryStats,
+    disks: &mut [DiskStats],
+    interval_secs: f64,
+    tick_ts: i64,
+    last_proc_stat: &mut Option<ProcStatSnapshot>,
+    last_vmstat: &mut Option<VmstatSnapshot>,
+) -> Option<PressureSnapshot> {
+    // /proc/stat: percentages AND kernel-event rates need a prior snapshot.
+    let cur_stat = system_linux::read_proc_stat();
+    if let (Some(prev), Some(cur)) = (*last_proc_stat, cur_stat) {
+        if let Some(extras) = system_linux::compute_cpu_extras(prev, cur) {
+            cpu.steal_percent = Some(extras.steal_percent);
+            cpu.iowait_percent = Some(extras.iowait_percent);
+            cpu.guest_percent = Some(extras.guest_percent);
+        }
+        if let Some(rates) = system_linux::compute_kernel_event_rates(prev, cur, interval_secs) {
+            cpu.context_switches_per_sec = Some(rates.context_switches_per_sec);
+            cpu.process_forks_per_sec = Some(rates.process_forks_per_sec);
+        }
+    }
+    *last_proc_stat = cur_stat;
+
+    // /proc/vmstat: page faults and swap traffic — same prior-snapshot dance.
+    let cur_vmstat = system_linux::read_vmstat();
+    if let (Some(prev), Some(cur)) = (*last_vmstat, cur_vmstat) {
+        if let Some(rates) = system_linux::compute_vmstat_rates(prev, cur, interval_secs) {
+            memory.page_faults_minor_per_sec = Some(rates.page_faults_minor_per_sec);
+            memory.page_faults_major_per_sec = Some(rates.page_faults_major_per_sec);
+            memory.swap_in_pages_per_sec = Some(rates.swap_in_pages_per_sec);
+            memory.swap_out_pages_per_sec = Some(rates.swap_out_pages_per_sec);
+        }
+    }
+    *last_vmstat = cur_vmstat;
+
+    // Per-mount inode usage via statvfs — wrapped in spawn_blocking +
+    // timeout so a hung network/fuse mount can't stall the tick.
+    for d in disks.iter_mut() {
+        d.inode_used_percent = system_linux::read_inode_usage(&d.mount_point).await;
+    }
+
+    // PSI snapshot: per-resource None on pre-4.20 kernels.
+    Some(PressureSnapshot {
+        cpu: system_linux::read_pressure("cpu"),
+        memory: system_linux::read_pressure("memory"),
+        io: system_linux::read_pressure("io"),
+        timestamp: tick_ts,
+    })
 }

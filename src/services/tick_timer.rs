@@ -19,7 +19,7 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use log::info;
+use log::debug;
 
 pub struct TickStats {
     label: &'static str,
@@ -85,9 +85,10 @@ impl TickStats {
     }
 
     /// If `flush_every` ticks have elapsed since the last flush, emit one
-    /// `info!` line and reset the counter (samples persist via the
+    /// `debug!` line and reset the counter (samples persist via the
     /// sliding window). Cheap path when not flushing — a single integer
-    /// compare.
+    /// compare. Emitted at `debug` so production at `info` doesn't pay
+    /// per-collector percentile spam every minute.
     pub fn flush_if_needed(&mut self) {
         if self.count_since_flush < self.flush_every {
             return;
@@ -119,7 +120,7 @@ impl TickStats {
                 phase.name, p50, p95, p99, max
             ));
         }
-        info!(
+        debug!(
             "{} tick μs (window={} samples): {}",
             self.label, window_n, line
         );

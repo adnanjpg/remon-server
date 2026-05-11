@@ -15,6 +15,7 @@
 use std::ffi::CString;
 use std::fs;
 use std::mem::MaybeUninit;
+use std::time::Duration;
 
 use crate::models::stats::PressureStats;
 
@@ -261,9 +262,28 @@ fn parse_pressure_line(line: &str) -> (f64, f64, f64) {
 }
 
 /// Inode utilization for a mount point, expressed as 0.0..=100.0.
-/// Backed by `statvfs(2)`. Returns None if the syscall fails or the
-/// filesystem reports `f_files = 0` (some pseudo-filesystems do).
-pub fn read_inode_usage(mount_point: &str) -> Option<f64> {
+/// Backed by `statvfs(2)`. Returns None if the syscall fails, the
+/// filesystem reports `f_files = 0` (some pseudo-filesystems do), or the
+/// call doesn't finish within `STATVFS_TIMEOUT`.
+///
+/// `statvfs` on a hung network/fuse mount blocks the calling thread
+/// indefinitely. Running it inside `spawn_blocking` + `timeout` keeps the
+/// collector loop healthy at the cost of a per-mount tokio task per tick.
+pub async fn read_inode_usage(mount_point: &str) -> Option<f64> {
+    const STATVFS_TIMEOUT: Duration = Duration::from_secs(2);
+
+    let mp = mount_point.to_string();
+    let blocking = tokio::task::spawn_blocking(move || statvfs_inode_usage(&mp));
+    match tokio::time::timeout(STATVFS_TIMEOUT, blocking).await {
+        Ok(Ok(v)) => v,
+        // Either the inner spawn_blocking panicked / was cancelled, or
+        // statvfs didn't return within the budget. Both surface as "no
+        // data for this mount this tick" rather than a stall.
+        _ => None,
+    }
+}
+
+fn statvfs_inode_usage(mount_point: &str) -> Option<f64> {
     let path = CString::new(mount_point).ok()?;
     let mut buf: MaybeUninit<libc::statvfs> = MaybeUninit::uninit();
     // SAFETY: `path` is a valid NUL-terminated C string; `buf` is
