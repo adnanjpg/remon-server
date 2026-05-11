@@ -108,7 +108,7 @@ pub async fn execute(probe: &Manifest) -> (ProbeRun, Vec<ProbeMetric>) {
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let _pid = child.id();
+    let pid = child.id();
 
     let wait_result = timeout(probe.timeout, child.wait()).await;
     let dur_ms = start.elapsed().as_millis() as i64;
