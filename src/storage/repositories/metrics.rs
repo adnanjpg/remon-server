@@ -1,3 +1,4 @@
+use log::warn;
 use sqlx::SqlitePool;
 
 use crate::error::AppResult;
@@ -7,6 +8,25 @@ use crate::models::stats::{
 
 pub struct MetricsRepository {
     pool: SqlitePool,
+}
+
+/// Surface a collision when an `ON CONFLICT DO NOTHING` insert produced
+/// fewer rows than the batch carried. With the 1s sampling floor (admin.rs)
+/// and second-resolution timestamps this should be unreachable in normal
+/// flow — a warn-level log makes any future regression visible instead of
+/// being silently swallowed by `INSERT OR REPLACE`.
+fn note_collision(table: &str, expected: u64, affected: u64, ts: i64, resolution: &str) {
+    if affected < expected {
+        warn!(
+            "metric collision on {}: ts={} resolution={} expected={} affected={} \
+             (a same-timestamp row already exists; new row dropped)",
+            table,
+            ts,
+            resolution,
+            expected,
+            affected,
+        );
+    }
 }
 
 impl MetricsRepository {
@@ -29,13 +49,14 @@ impl MetricsRepository {
     ) -> AppResult<()> {
         let mut tx = self.pool.begin().await?;
 
-        sqlx::query(
+        let r = sqlx::query(
             r#"
-            INSERT OR REPLACE INTO metrics_cpu
+            INSERT INTO metrics_cpu
               (resolution, timestamp, usage_percent, load_1m, load_5m, load_15m,
                steal_percent, iowait_percent, guest_percent,
                context_switches_per_sec, process_forks_per_sec)
             VALUES ('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(resolution, timestamp) DO NOTHING
             "#,
         )
         .bind(cpu.timestamp)
@@ -50,11 +71,16 @@ impl MetricsRepository {
         .bind(cpu.process_forks_per_sec.map(|v| v as i64))
         .execute(&mut *tx)
         .await?;
+        note_collision("metrics_cpu", 1, r.rows_affected(), cpu.timestamp, "raw");
 
+        // `metrics_cpu_cores` deliberately has no `resolution` column —
+        // rolling up per-core would multiply row count by core_count × N
+        // rollup intervals. UI shows per-core only on the live tail; rolled
+        // history is served from the host-level `metrics_cpu` table.
         if !cpu.per_core.is_empty() {
-            let mut sql = String::with_capacity(120 + 14 * cpu.per_core.len());
+            let mut sql = String::with_capacity(140 + 14 * cpu.per_core.len());
             sql.push_str(
-                "INSERT OR REPLACE INTO metrics_cpu_cores \
+                "INSERT INTO metrics_cpu_cores \
                  (timestamp, core_index, usage_percent, freq_mhz) VALUES ",
             );
             for i in 0..cpu.per_core.len() {
@@ -63,6 +89,7 @@ impl MetricsRepository {
                 }
                 sql.push_str("(?, ?, ?, ?)");
             }
+            sql.push_str(" ON CONFLICT(timestamp, core_index) DO NOTHING");
             let mut q = sqlx::query(&sql);
             for core in &cpu.per_core {
                 q = q
@@ -71,17 +98,25 @@ impl MetricsRepository {
                     .bind(core.usage_percent)
                     .bind(core.freq_mhz as i64);
             }
-            q.execute(&mut *tx).await?;
+            let r = q.execute(&mut *tx).await?;
+            note_collision(
+                "metrics_cpu_cores",
+                cpu.per_core.len() as u64,
+                r.rows_affected(),
+                cpu.timestamp,
+                "raw",
+            );
         }
 
-        sqlx::query(
+        let r = sqlx::query(
             r#"
-            INSERT OR REPLACE INTO metrics_memory
+            INSERT INTO metrics_memory
               (resolution, timestamp, used_bytes, available_bytes,
                cached_bytes, swap_used_bytes,
                page_faults_minor_per_sec, page_faults_major_per_sec,
                swap_in_pages_per_sec, swap_out_pages_per_sec)
             VALUES ('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(resolution, timestamp) DO NOTHING
             "#,
         )
         .bind(memory.timestamp)
@@ -95,11 +130,12 @@ impl MetricsRepository {
         .bind(memory.swap_out_pages_per_sec.map(|v| v as i64))
         .execute(&mut *tx)
         .await?;
+        note_collision("metrics_memory", 1, r.rows_affected(), memory.timestamp, "raw");
 
         if !disks.is_empty() {
-            let mut sql = String::with_capacity(180 + 20 * disks.len());
+            let mut sql = String::with_capacity(200 + 20 * disks.len());
             sql.push_str(
-                "INSERT OR REPLACE INTO metrics_disk \
+                "INSERT INTO metrics_disk \
                  (resolution, timestamp, mount_point, \
                   used_bytes, available_bytes, read_bytes_per_sec, write_bytes_per_sec, \
                   inode_used_percent) VALUES ",
@@ -110,8 +146,11 @@ impl MetricsRepository {
                 }
                 sql.push_str("('raw', ?, ?, ?, ?, ?, ?, ?)");
             }
+            sql.push_str(" ON CONFLICT(resolution, timestamp, mount_point) DO NOTHING");
             let mut q = sqlx::query(&sql);
+            let mut ts = 0i64;
             for d in disks {
+                ts = d.timestamp;
                 q = q
                     .bind(d.timestamp)
                     .bind(&d.mount_point)
@@ -121,13 +160,14 @@ impl MetricsRepository {
                     .bind(d.write_bytes_per_sec as i64)
                     .bind(d.inode_used_percent);
             }
-            q.execute(&mut *tx).await?;
+            let r = q.execute(&mut *tx).await?;
+            note_collision("metrics_disk", disks.len() as u64, r.rows_affected(), ts, "raw");
         }
 
         if !networks.is_empty() {
-            let mut sql = String::with_capacity(200 + 22 * networks.len());
+            let mut sql = String::with_capacity(220 + 22 * networks.len());
             sql.push_str(
-                "INSERT OR REPLACE INTO metrics_network \
+                "INSERT INTO metrics_network \
                  (resolution, timestamp, interface_name, \
                   rx_bytes_per_sec, tx_bytes_per_sec, \
                   rx_packets_per_sec, tx_packets_per_sec, \
@@ -139,8 +179,11 @@ impl MetricsRepository {
                 }
                 sql.push_str("('raw', ?, ?, ?, ?, ?, ?, ?, ?)");
             }
+            sql.push_str(" ON CONFLICT(resolution, timestamp, interface_name) DO NOTHING");
             let mut q = sqlx::query(&sql);
+            let mut ts = 0i64;
             for n in networks {
+                ts = n.timestamp;
                 q = q
                     .bind(n.timestamp)
                     .bind(&n.interface)
@@ -151,14 +194,15 @@ impl MetricsRepository {
                     .bind(n.errors_in_per_sec as i64)
                     .bind(n.errors_out_per_sec as i64);
             }
-            q.execute(&mut *tx).await?;
+            let r = q.execute(&mut *tx).await?;
+            note_collision("metrics_network", networks.len() as u64, r.rows_affected(), ts, "raw");
         }
 
         if let Some(c) = components {
             if !c.components.is_empty() {
-                let mut sql = String::with_capacity(160 + 20 * c.components.len());
+                let mut sql = String::with_capacity(180 + 20 * c.components.len());
                 sql.push_str(
-                    "INSERT OR REPLACE INTO metrics_components \
+                    "INSERT INTO metrics_components \
                      (resolution, timestamp, label, \
                       temperature_c, max_c, critical_c) VALUES ",
                 );
@@ -168,6 +212,7 @@ impl MetricsRepository {
                     }
                     sql.push_str("('raw', ?, ?, ?, ?, ?)");
                 }
+                sql.push_str(" ON CONFLICT(resolution, timestamp, label) DO NOTHING");
                 let mut q = sqlx::query(&sql);
                 for comp in &c.components {
                     q = q
@@ -177,7 +222,14 @@ impl MetricsRepository {
                         .bind(comp.max_c)
                         .bind(comp.critical_c);
                 }
-                q.execute(&mut *tx).await?;
+                let r = q.execute(&mut *tx).await?;
+                note_collision(
+                    "metrics_components",
+                    c.components.len() as u64,
+                    r.rows_affected(),
+                    c.timestamp,
+                    "raw",
+                );
             }
         }
 
@@ -192,9 +244,9 @@ impl MetricsRepository {
                 .filter_map(|(name, ps)| ps.map(|ps| (*name, ps)))
                 .collect();
             if !present.is_empty() {
-                let mut sql = String::with_capacity(200 + 28 * present.len());
+                let mut sql = String::with_capacity(220 + 28 * present.len());
                 sql.push_str(
-                    "INSERT OR REPLACE INTO metrics_pressure \
+                    "INSERT INTO metrics_pressure \
                      (resolution, timestamp, resource, \
                       some_avg10, some_avg60, some_avg300, \
                       full_avg10, full_avg60, full_avg300) VALUES ",
@@ -205,6 +257,7 @@ impl MetricsRepository {
                     }
                     sql.push_str("('raw', ?, ?, ?, ?, ?, ?, ?, ?)");
                 }
+                sql.push_str(" ON CONFLICT(resolution, timestamp, resource) DO NOTHING");
                 let mut q = sqlx::query(&sql);
                 for (resource, ps) in &present {
                     q = q
@@ -217,7 +270,14 @@ impl MetricsRepository {
                         .bind(ps.full_avg60)
                         .bind(ps.full_avg300);
                 }
-                q.execute(&mut *tx).await?;
+                let r = q.execute(&mut *tx).await?;
+                note_collision(
+                    "metrics_pressure",
+                    present.len() as u64,
+                    r.rows_affected(),
+                    p.timestamp,
+                    "raw",
+                );
             }
         }
 
@@ -574,7 +634,16 @@ impl MetricsRepository {
                     .execute(&self.pool)
                     .await?
             }
-            _ => return Ok(0),
+            other => {
+                // Likely a typo in retention_policy or a new resource added
+                // without a matching DELETE branch above. Silent no-op
+                // would let stale data accumulate forever.
+                warn!(
+                    "Retention DELETE skipped: unknown resource '{}' (resolution={}, cutoff={})",
+                    other, resolution, cutoff_ts
+                );
+                return Ok(0);
+            }
         };
 
         Ok(result.rows_affected())

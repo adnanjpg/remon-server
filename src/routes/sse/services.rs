@@ -60,6 +60,14 @@ pub async fn stream_service_logs(
         let unit = normalize_unit_name(&name, "service");
         let tail = params.tail.unwrap_or(50).to_string();
 
+        // Lifetime note: the `Child` handle is dropped when this function
+        // returns. We intentionally do NOT set `kill_on_drop(true)` — that
+        // would SIGKILL journalctl before any data flowed, since the Child
+        // dies at end of scope here even though the stream is still alive.
+        // Instead the child is reaped via SIGPIPE when the SSE response is
+        // dropped (client disconnect) and the stdout fd closes. A noisy
+        // unit can buffer a few KB before the pipe closure registers, which
+        // is the trade-off we accept.
         let mut child = tokio::process::Command::new("journalctl")
             .args(["-fu", &unit, "--output=short-precise", "--no-pager", "-n", &tail])
             .stdout(Stdio::piped())

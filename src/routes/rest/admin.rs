@@ -14,7 +14,7 @@ use std::sync::Arc;
 use axum::{Json, extract::State};
 use log::info;
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::routes::dtos::admin::{ConfigResponse, UpdateConfigRequest};
 use crate::routes::extractors::Claims;
 use crate::state::{AppState, EffectiveConfig};
@@ -73,6 +73,31 @@ pub async fn patch_config(
             .retention_tick_interval_ms
             .unwrap_or(current.retention_tick_interval_ms),
     };
+
+    const MAX_SERVER_NAME_LEN: usize = 128;
+    if merged.server_name.len() > MAX_SERVER_NAME_LEN {
+        return Err(AppError::BadRequest(format!(
+            "server_name length {} exceeds maximum {}",
+            merged.server_name.len(),
+            MAX_SERVER_NAME_LEN
+        )));
+    }
+
+    // Sub-second intervals collide on second-resolution metric PKs.
+    const MIN_COLLECTOR_INTERVAL_MS: u64 = 1000;
+    if merged.collector_stats_interval_ms < MIN_COLLECTOR_INTERVAL_MS {
+        return Err(AppError::BadRequest(format!(
+            "collector_stats_interval_ms must be >= {} (sub-second sampling \
+             collides with second-resolution timestamps)",
+            MIN_COLLECTOR_INTERVAL_MS
+        )));
+    }
+    if merged.collector_processes_interval_ms < MIN_COLLECTOR_INTERVAL_MS {
+        return Err(AppError::BadRequest(format!(
+            "collector_processes_interval_ms must be >= {}",
+            MIN_COLLECTOR_INTERVAL_MS
+        )));
+    }
 
     repo.update(&merged).await?;
 

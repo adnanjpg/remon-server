@@ -1,6 +1,7 @@
 //! Device pairing endpoints
 
 use axum::{Json, extract::State};
+use colored::Colorize;
 use log::{info, warn};
 use std::sync::Arc;
 
@@ -42,29 +43,26 @@ pub async fn initiate_pairing(
         });
     }
 
-    info!("=================================================");
-    info!("  PAIRING CODE: {}                          ", code);
-    info!(
-        "  Expires in {} seconds                     ",
-        state.auth_config.pairing_code_ttl_secs
-    );
-    info!("=================================================");
+    let ttl = state.auth_config.pairing_code_ttl_secs;
 
-    println!("\n");
-    println!("╔═══════════════════════════════════════════════╗");
-    println!("║                                               ║");
-    println!("║          DEVICE PAIRING CODE                  ║");
-    println!("║                                               ║");
-    println!("║              {}                        ║", code);
-    println!("║                                               ║");
-    println!("║     Enter this code in your mobile app        ║");
-    println!(
-        "║     Expires in {} seconds                    ║",
-        state.auth_config.pairing_code_ttl_secs
-    );
-    println!("║                                               ║");
-    println!("╚═══════════════════════════════════════════════╝");
-    println!("\n");
+    // Audit trail: log that a window opened, but never the code itself —
+    // logs may be shipped to centralized sinks that aren't trust-equivalent
+    // to the host terminal.
+    info!("Pairing window opened (ttl_secs={})", ttl);
+
+    // Terminal-only display (stdout, not the log pipeline). Possession of the
+    // code requires physical/SSH access to the host running the server.
+    let ttl_human = if ttl % 60 == 0 {
+        format!("{}m", ttl / 60)
+    } else {
+        format!("{}s", ttl)
+    };
+    println!();
+    println!("  {}", "Device pairing".bold().cyan());
+    println!("  {} {}", "code   ".dimmed(), code.bold().yellow());
+    println!("  {} {}", "expires".dimmed(), ttl_human.dimmed());
+    println!("  {}", "enter this code in your client to pair".dimmed());
+    println!();
 
     // Security: do NOT return the code in the API response — it stays in
     // the server terminal so that a successful complete_pairing call requires
