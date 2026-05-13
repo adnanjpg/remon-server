@@ -1,0 +1,40 @@
+meta {
+  name: Alerts Schema
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/alerts/schema
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Namespace / metric / label catalogue the resolver understands.
+  Hand-maintained alongside `services/alerting/resolver.rs`; the web
+  rule editor consumes this to drive its cascading form.
+
+  Response: { namespaces: [NamespaceSchemaDto, ...], comparators: [...] }
+
+  NamespaceSchemaDto:
+    name              — "cpu" | "memory" | "disk" | "network" |
+                        "pressure" | "components" | "probe" | "service"
+    description       — short human-readable
+    dynamic_metrics   — true when metric names are runtime-defined
+                        (probe scripts choose their own metric_name).
+                        For dynamic namespaces, `metrics[]` is a hint
+                        list, not a whitelist.
+    metrics[]         — { name, unit?, description?, value_type }
+                        value_type: "float" | "int" | "bool"
+    labels[]          — { name, required, values? | source? }
+                        values: closed enum (e.g. pressure resource)
+                        source: { endpoint, json_path } for autocomplete
+
+  Static endpoint — values don't change without a server rebuild, so
+  the client can cache aggressively.
+}

@@ -24,7 +24,8 @@ docs {
 
   Expression grammar:
     `<ns>.<field>{<labels>} <cmp> <number>`
-    namespaces: cpu | memory | disk | network | pressure | components | probe
+    namespaces: cpu | memory | disk | network | pressure | components
+                | probe | service
     comparators: > >= < <= == !=
 
   Examples:
@@ -33,4 +34,9 @@ docs {
     disk.used_bytes{mount_point="/"} > 1073741824
     pressure.some_avg10{resource="memory"} > 5.0
     probe.free_pct{probe_name="disk-free-root"} < 10
+    service.up{unit="nginx.service"} == 0
+
+  The `service` namespace is a live OS lookup, not a time-series read.
+  The `unit` label is mandatory. See /alerts/schema for the full
+  catalogue.
 }

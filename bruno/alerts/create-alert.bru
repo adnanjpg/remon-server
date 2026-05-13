@@ -50,9 +50,10 @@ docs {
                         Only suppresses fire fanouts; resolved events
                         always fan out.
 
-  Server validates the expression by parsing it; a 400 BAD_REQUEST
-  reports the byte offset and message of the first parse error so
-  rule editors can highlight the problem inline.
+  Server validates the expression in two passes: a parse step (syntax)
+  followed by a dry-resolve against the live state (unknown namespace
+  /field, missing required labels). Both return 400 BAD_REQUEST with
+  the failing position or label name.
 
   201 Created → body is the AlertRuleDto with the assigned `id`.
 }
