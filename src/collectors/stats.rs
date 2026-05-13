@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use log::{debug, warn};
 use sysinfo::{Components, Disks, MINIMUM_CPU_UPDATE_INTERVAL, Networks, System};
 
-use crate::models::stats::{PressureSnapshot, StatsEvent};
+use crate::models::stats::{AllStats, PressureSnapshot, StatsEvent};
 use crate::services::system as system_svc;
 use crate::services::tick_timer::TickStats;
 use crate::state::AppState;
@@ -17,27 +17,16 @@ use crate::models::stats::{CpuStats, DiskStats, MemoryStats};
 use crate::services::system_linux::{self, ProcStatSnapshot, VmstatSnapshot};
 
 pub async fn run(state: Arc<AppState>) {
-    let mut sys = System::new_all();
+    let mut sys = System::new();
+    sys.refresh_cpu_all();
+    sys.refresh_memory();
     let mut disks = Disks::new_with_refreshed_list();
     let mut networks = Networks::new_with_refreshed_list();
     let mut components = Components::new_with_refreshed_list();
     let metrics_repo = MetricsRepository::new(state.db.clone());
 
-    // Track wall-clock between refreshes so disk/network rates can be
-    // expressed per second instead of per-tick.
-    //
-    // The constructors above (`System::new_all()`, `Disks::new_with_…`,
-    // `Networks::new_with_…`) all do an implicit first refresh. We stamp
-    // `last_refresh` to *now* and then sleep `MINIMUM_CPU_UPDATE_INTERVAL`
-    // (200 ms) before the loop's first refresh: this guarantees both
-    //   1. CPU per-core deltas are non-zero on tick 1 (sysinfo requires
-    //      ≥200 ms between refreshes for `cpu_usage()` to compute), and
-    //   2. tick 1's disk/network rates use a real ~200 ms interval rather
-    //      than the previous behavior of falling back to 0 on the first
-    //      published frame.
-    //
-    // Without this warm-up the very first DB row written for cpu/disk/net
-    // would carry a misleading 0% / 0 B-per-sec.
+    // sysinfo requires ≥200 ms between refreshes for `cpu_usage()` to
+    // compute; without this warm-up the first tick reports 0% / 0 B/s.
     let mut last_refresh: Option<Instant> = Some(Instant::now());
     tokio::time::sleep(MINIMUM_CPU_UPDATE_INTERVAL).await;
 
@@ -49,17 +38,19 @@ pub async fn run(state: Arc<AppState>) {
     #[cfg(target_os = "linux")]
     let mut last_vmstat: Option<VmstatSnapshot> = None;
 
-    // Sliding-window phase stats (p50/p95/p99/max). 600-sample window =
-    // 20 minutes at the 2s default tick rate; flush every 30 ticks (~1
-    // min) so operators see fresh distributions without log spam. The
-    // window deliberately spans many flushes — that's how p99 stays
-    // meaningful when one cycle's mean is noisy.
+    // Sliding-window phase stats (p50/p95/p99/max). The window deliberately
+    // spans many flushes so p99 stays meaningful when one cycle is noisy.
     let mut tick_stats = TickStats::new(
         "stats",
         &["refresh", "compute", "broadcast", "db_write"],
         600,
         30,
     );
+
+    // `refresh(true)` re-enumerates hot-plug entries; `refresh(false)`
+    // only updates counters. Hot-plug is rare relative to the tick rate.
+    const DISCOVERY_EVERY_N_TICKS: u32 = 15;
+    let mut tick_count: u32 = 0;
 
     // MissedTickBehavior::Skip: drop overrun ticks, don't burst-catch up.
     let mut current_interval_ms = state
@@ -70,7 +61,10 @@ pub async fn run(state: Arc<AppState>) {
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
-        ticker.tick().await;
+        tokio::select! {
+            _ = ticker.tick() => {}
+            _ = state.collector_wake.notified() => {}
+        }
         let now = Instant::now();
         let interval_secs = match last_refresh {
             Some(prev) => (now - prev).as_secs_f64(),
@@ -81,18 +75,14 @@ pub async fn run(state: Arc<AppState>) {
         let tick_ts = chrono::Utc::now().timestamp();
 
         // ── Phase: refresh ──────────────────────────────────────────────
-        // Surgical refreshes only — process enumeration is the most
-        // expensive call sysinfo offers and we don't read it here (the
-        // dedicated processes collector owns that). Measured ~41% p50
-        // reduction in stats refresh on Windows vs `refresh_all()`.
+        tick_count = tick_count.wrapping_add(1);
+        let do_discovery = tick_count.is_multiple_of(DISCOVERY_EVERY_N_TICKS);
         let t_refresh = Instant::now();
         sys.refresh_cpu_all();
         sys.refresh_memory();
-        disks.refresh(true);
-        networks.refresh(true);
-        // refresh(true) — let new sensors join the list (e.g. after a USB
-        // GPU plug-in mid-run). Cheap on every platform.
-        components.refresh(true);
+        disks.refresh(do_discovery);
+        networks.refresh(do_discovery);
+        components.refresh(do_discovery);
         let refresh_dur = t_refresh.elapsed();
 
         // ── Phase: compute ──────────────────────────────────────────────
@@ -128,8 +118,7 @@ pub async fn run(state: Arc<AppState>) {
         let compute_dur = t_compute.elapsed();
 
         // ── Phase: broadcast ────────────────────────────────────────────
-        // Broadcast first — keep the live stream working even if DB writes
-        // hiccup. Receivers having no listeners isn't an error here.
+        // Empty Components frames are dropped.
         let t_broadcast = Instant::now();
         let _ = state.stats_tx.send(StatsEvent::Cpu(cpu_stats.clone()));
         let _ = state
@@ -142,15 +131,30 @@ pub async fn run(state: Arc<AppState>) {
         if let Some(p) = pressure_snapshot.clone() {
             let _ = state.stats_tx.send(StatsEvent::Pressure(p));
         }
-        let _ = state
-            .stats_tx
-            .send(StatsEvent::Components(components_snapshot.clone()));
+        let components_event = if components_snapshot.components.is_empty() {
+            None
+        } else {
+            Some(components_snapshot.clone())
+        };
+        if let Some(c) = components_event.clone() {
+            let _ = state.stats_tx.send(StatsEvent::Components(c));
+        }
         let broadcast_dur = t_broadcast.elapsed();
 
+        // SSE primer cache. Written after broadcast to preserve the
+        // invariant that a live subscriber never sees a frame the cache
+        // hasn't seen.
+        let bundle = AllStats {
+            cpu: cpu_stats.clone(),
+            memory: memory_stats.clone(),
+            disks: disk_stats.clone(),
+            network: network_stats.clone(),
+            pressure: pressure_snapshot.clone(),
+            components: components_event,
+        };
+        *state.stats_latest.write().await = Some(bundle);
+
         // ── Phase: db_write ─────────────────────────────────────────────
-        // Persist this tick into the raw bucket. One transaction keeps the
-        // frame coherent — no half-written timestamps for the rollup task
-        // to find.
         let t_db = Instant::now();
         if let Err(e) = metrics_repo
             .insert_raw_tick(

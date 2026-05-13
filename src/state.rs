@@ -4,11 +4,11 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 
 use sqlx::SqlitePool;
-use tokio::sync::{Mutex, RwLock, broadcast};
+use tokio::sync::{Mutex, Notify, OnceCell, RwLock, broadcast};
 
 use crate::config::AuthConfig;
 use crate::models::process::ProcessList;
-use crate::models::stats::StatsEvent;
+use crate::models::stats::{AllStats, StatsEvent};
 use crate::models::system::HardwareInfo;
 use crate::notify::NotificationManager;
 use crate::platform::services::ServiceManager;
@@ -70,17 +70,19 @@ pub struct AppState {
     pub stats_tx: broadcast::Sender<StatsEvent>,
     pub processes_tx: broadcast::Sender<ProcessList>,
 
-    /// Latest process snapshot. REST `GET /processes` refreshes it on
-    /// demand when the cache is stale; the background collectors do not
-    /// continuously scan the process table. This matters on hosts with
-    /// thousands of processes where sysinfo enumeration is noticeably
-    /// expensive.
-    ///
-    /// Why a separate cache instead of a `subscribe()`-on-broadcast trick:
-    /// `broadcast::Receiver` only sees messages sent *after* subscription —
-    /// so a fresh `subscribe(); try_recv()` in a request handler is always
-    /// empty between collector ticks, forcing a fallback that re-reads
-    /// sysinfo with no delta and reports 0% CPU on every process.
+    /// Most recent stats tick — primer source for new SSE subscribers.
+    pub stats_latest: Arc<RwLock<Option<AllStats>>>,
+
+    /// Poked by SSE/WS subscribe handlers to wake the adaptive sampler.
+    pub sampling_wake: Arc<Notify>,
+
+    /// Poked by the sampler on Active transitions to break the collector
+    /// out of an in-flight idle sleep.
+    pub collector_wake: Arc<Notify>,
+
+    /// Latest process snapshot. `GET /processes` refreshes on demand when
+    /// the cache is stale; no background scan, since sysinfo's process
+    /// enumeration is expensive.
     pub processes_latest: Arc<RwLock<Option<ProcessList>>>,
     /// Serializes on-demand process refreshes so a burst of `/processes`
     /// requests cannot all pay the full sysinfo scan at once.
@@ -100,13 +102,9 @@ pub struct AppState {
     #[cfg(feature = "docker")]
     pub docker_exec_enabled: Arc<AtomicBool>,
 
-    /// Hardware inventory captured at boot. `cpu_model`, core counts, total
-    /// memory, disk list and NIC list are static for the server's lifetime
-    /// in the common case — `Arc` keeps clones cheap when handlers hand out
-    /// references. Hot-plug events (USB disk, new NIC) are not reflected
-    /// until restart; if that becomes a real need, add a refresh endpoint
-    /// rather than re-running sysinfo on every request.
-    pub hardware_info: Arc<HardwareInfo>,
+    /// Hardware inventory, lazily filled by a boot-time warmup task.
+    /// Static for the server's lifetime — hot-plug requires a restart.
+    pub hardware_info: Arc<OnceCell<HardwareInfo>>,
 
     /// Platform service manager — systemd / OpenRC on Linux, SCM (via
     /// PowerShell shell-out) on Windows, `Unsupported` fallback elsewhere.
@@ -144,7 +142,7 @@ impl AppState {
         processes_cache_ttl_ms: u64,
         #[cfg(feature = "docker")] collector_docker_interval_ms: u64,
         #[cfg(feature = "docker")] docker_exec_enabled: bool,
-        hardware_info: HardwareInfo,
+        hardware_info: Arc<OnceCell<HardwareInfo>>,
         service_manager: Arc<dyn ServiceManager>,
         probe_registry: ProbeRegistry,
         notify: Arc<NotificationManager>,
@@ -160,6 +158,9 @@ impl AppState {
             pairing_state: RwLock::new(None),
             stats_tx,
             processes_tx,
+            stats_latest: Arc::new(RwLock::new(None)),
+            sampling_wake: Arc::new(Notify::new()),
+            collector_wake: Arc::new(Notify::new()),
             processes_latest: Arc::new(RwLock::new(None)),
             processes_refresh_lock: Arc::new(Mutex::new(())),
             effective_config: Arc::new(RwLock::new(effective_config)),
@@ -169,7 +170,7 @@ impl AppState {
             collector_docker_interval_ms: Arc::new(AtomicU64::new(collector_docker_interval_ms)),
             #[cfg(feature = "docker")]
             docker_exec_enabled: Arc::new(AtomicBool::new(docker_exec_enabled)),
-            hardware_info: Arc::new(hardware_info),
+            hardware_info,
             service_manager,
             probe_registry,
             notify,

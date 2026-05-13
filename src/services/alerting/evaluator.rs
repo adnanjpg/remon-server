@@ -127,7 +127,7 @@ async fn evaluate_once(
 ) -> Result<(), String> {
     let repo = AlertRepository::new(state.db.clone());
 
-    let samples = resolver::resolve(&state.db, &expr.metric)
+    let samples = resolver::resolve_with_state(state, &expr.metric)
         .await
         .map_err(|e| e.message)?;
 
@@ -234,10 +234,24 @@ async fn evaluate_once(
             let notified = if notify_intent {
                 match et {
                     AlertEventType::Fired => {
-                        fire_notify(state, rule, &sample.label_set, sample.value).await
+                        fire_notify(
+                            state,
+                            rule,
+                            &sample.label_set,
+                            sample.value,
+                            sample.meta.as_deref(),
+                        )
+                        .await
                     }
                     AlertEventType::Resolved => {
-                        resolve_notify(state, rule, &sample.label_set, sample.value).await
+                        resolve_notify(
+                            state,
+                            rule,
+                            &sample.label_set,
+                            sample.value,
+                            sample.meta.as_deref(),
+                        )
+                        .await
                     }
                 }
             } else {
@@ -324,20 +338,32 @@ impl Step {
 
 // ===== Notification helpers =====
 
-async fn fire_notify(state: &AppState, rule: &AlertRule, label_set: &str, value: f64) -> bool {
+async fn fire_notify(
+    state: &AppState,
+    rule: &AlertRule,
+    label_set: &str,
+    value: f64,
+    meta: Option<&str>,
+) -> bool {
     let n = Notification {
         title: rule.name.clone(),
-        body: format_fire_body(rule, label_set, value),
+        body: format_fire_body(rule, label_set, value, meta),
         severity: alert_severity(rule.severity),
         event: NotificationEvent::Fired,
     };
     state.notify.fanout(&n).await > 0
 }
 
-async fn resolve_notify(state: &AppState, rule: &AlertRule, label_set: &str, value: f64) -> bool {
+async fn resolve_notify(
+    state: &AppState,
+    rule: &AlertRule,
+    label_set: &str,
+    value: f64,
+    meta: Option<&str>,
+) -> bool {
     let n = Notification {
         title: rule.name.clone(),
-        body: format_resolve_body(rule, label_set, value),
+        body: format_resolve_body(rule, label_set, value, meta),
         severity: alert_severity(rule.severity),
         event: NotificationEvent::Resolved,
     };
@@ -351,7 +377,14 @@ fn alert_severity(s: AlertSeverity) -> Severity {
     }
 }
 
-fn format_fire_body(rule: &AlertRule, label_set: &str, value: f64) -> String {
+fn render_observed(value: f64, meta: Option<&str>) -> String {
+    match meta {
+        Some(s) => format!("{} ({})", s, format_value(value)),
+        None => format_value(value),
+    }
+}
+
+fn format_fire_body(rule: &AlertRule, label_set: &str, value: f64, meta: Option<&str>) -> String {
     let labels = if label_set == "{}" {
         String::new()
     } else {
@@ -364,17 +397,20 @@ fn format_fire_body(rule: &AlertRule, label_set: &str, value: f64) -> String {
     };
     format!(
         "{}{} = {} (rule: {}{})",
-        // The rule expression already encodes namespace.field; show the
-        // raw value alongside it so push notifications are self-explanatory.
         rule.expression,
         labels,
-        format_value(value),
+        render_observed(value, meta),
         rule.expression,
         sustained
     )
 }
 
-fn format_resolve_body(rule: &AlertRule, label_set: &str, value: f64) -> String {
+fn format_resolve_body(
+    rule: &AlertRule,
+    label_set: &str,
+    value: f64,
+    meta: Option<&str>,
+) -> String {
     let labels = if label_set == "{}" {
         String::new()
     } else {
@@ -384,7 +420,7 @@ fn format_resolve_body(rule: &AlertRule, label_set: &str, value: f64) -> String 
         "{}{} back to {}",
         rule.expression,
         labels,
-        format_value(value)
+        render_observed(value, meta)
     )
 }
 

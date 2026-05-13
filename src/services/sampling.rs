@@ -1,24 +1,15 @@
-//! Adaptive sampling — speed up the stats collector when somebody is
-//! actually watching, slow down when nobody is.
+//! Adaptive sampling — speed up the stats collector when someone is
+//! watching, slow down when nobody is.
 //!
-//! Mechanism:
-//! - Every `SAMPLING_TICK_MS` (10s) check `stats_tx.receiver_count()`.
-//! - >0 receivers ⇒ Active (live SSE/WS subscriber present).
-//! - 0 receivers ⇒ Idle (background-only mode).
-//! - Hysteresis: only flip after `HYSTERESIS_TICKS` consecutive observations
-//!   in the new state, so a brief subscribe/unsubscribe doesn't oscillate
-//!   the collector cadence.
-//! - In Idle the collector interval becomes `base × IDLE_MULTIPLIER`. In
-//!   Active it returns to `base`.
+//! - Every `SAMPLING_TICK_MS`, or on `sampling_wake`, check
+//!   `stats_tx.receiver_count()`.
+//! - Activation is immediate; Idle requires `HYSTERESIS_TICKS` to flip,
+//!   so brief subscribe/unsubscribe doesn't oscillate the cadence.
+//! - In Idle the interval is `base × IDLE_MULTIPLIER`; in Active it
+//!   returns to `base`. Active transitions poke `collector_wake`.
 //!
-//! Only the *stats* collector is governed here. Process/Docker collectors
-//! follow their static configured intervals because they don't have
-//! persistent SSE/WS subscribers in the current routing.
-//!
-//! Adaptive sampling never touches the configured base. PATCH /config
-//! changes the base in `EffectiveConfig`; this task reads the live base
-//! every tick and recomputes the effective interval from current state,
-//! so a config change shows up within one sampling tick.
+//! Only the stats collector is governed here. The configured base is
+//! read live each tick, so `PATCH /config` takes effect within one tick.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -54,7 +45,10 @@ async fn run(state: Arc<AppState>) {
     let mut consecutive_opposite: u8 = 0;
 
     loop {
-        tokio::time::sleep(Duration::from_millis(SAMPLING_TICK_MS)).await;
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_millis(SAMPLING_TICK_MS)) => {}
+            _ = state.sampling_wake.notified() => {}
+        }
 
         let subscribers = state.stats_tx.receiver_count();
         let observed = if subscribers > 0 {
@@ -63,6 +57,7 @@ async fn run(state: Arc<AppState>) {
             Mode::Idle
         };
 
+        let mut activated_now = false;
         if observed != current {
             if observed == Mode::Active {
                 // Subscriber appeared: activate immediately so the first
@@ -70,6 +65,7 @@ async fn run(state: Arc<AppState>) {
                 // before the fast interval kicks in.
                 current = Mode::Active;
                 consecutive_opposite = 0;
+                activated_now = true;
                 info!(
                     "Adaptive sampling → Active (stats subscribers={})",
                     subscribers
@@ -109,5 +105,9 @@ async fn run(state: Arc<AppState>) {
         state
             .collector_stats_interval_ms
             .store(effective, Ordering::Relaxed);
+
+        if activated_now {
+            state.collector_wake.notify_one();
+        }
     }
 }

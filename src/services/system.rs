@@ -6,10 +6,8 @@ use crate::models::stats::{
 };
 use crate::models::system::{DiskInfo, HardwareInfo, NetworkInterfaceInfo, SystemDescription};
 
-/// Collect system description
+/// Collect system description.
 pub fn get_description() -> SystemDescription {
-    let _sys = System::new_all();
-
     SystemDescription {
         hostname: System::host_name().unwrap_or_else(|| "unknown".into()),
         os: System::name().unwrap_or_else(|| "unknown".into()),
@@ -19,9 +17,11 @@ pub fn get_description() -> SystemDescription {
     }
 }
 
-/// Collect hardware information
+/// Collect hardware information.
 pub fn get_hardware_info() -> HardwareInfo {
-    let sys = System::new_all();
+    let mut sys = System::new();
+    sys.refresh_cpu_list(sysinfo::CpuRefreshKind::nothing());
+    sys.refresh_memory();
     let disks = Disks::new_with_refreshed_list();
     let networks = Networks::new_with_refreshed_list();
 
@@ -38,9 +38,9 @@ pub fn get_hardware_info() -> HardwareInfo {
     // Memory
     let total_memory_bytes = sys.total_memory();
 
-    // Disks
     let disk_infos: Vec<DiskInfo> = disks
         .iter()
+        .filter(|d| !is_hidden_mount(&d.mount_point().to_string_lossy()))
         .map(|d| DiskInfo {
             device_name: d.name().to_string_lossy().to_string(),
             mount_point: d.mount_point().to_string_lossy().to_string(),
@@ -50,9 +50,9 @@ pub fn get_hardware_info() -> HardwareInfo {
         })
         .collect();
 
-    // Network interfaces
     let net_infos: Vec<NetworkInterfaceInfo> = networks
         .iter()
+        .filter(|(name, _)| !is_loopback(name) && !is_virtual_interface(name))
         .map(|(name, data)| NetworkInterfaceInfo {
             name: name.clone(),
             mac_address: Some(data.mac_address().to_string()),
@@ -71,6 +71,13 @@ pub fn get_hardware_info() -> HardwareInfo {
         disks: disk_infos,
         network_interfaces: net_infos,
     }
+}
+
+/// `OnceCell::get_or_init` wrapper that runs sysinfo on the blocking pool.
+pub async fn init_hardware_info() -> HardwareInfo {
+    tokio::task::spawn_blocking(get_hardware_info)
+        .await
+        .expect("hardware info collection should not panic")
 }
 
 pub fn get_cpu_stats(sys: &System, timestamp: i64) -> CpuStats {
@@ -169,7 +176,7 @@ fn read_cached_bytes() -> u64 {
 /// `Disk::usage()`, which on sysinfo 0.38 returns "bytes since last refresh".
 /// We divide that by `interval_secs` to land on a real per-second rate.
 /// First-tick `interval_secs` is near-zero, so we floor at 0 to avoid
-/// nonsensical infinities.
+/// nonsensical infinities. Container-overlay mounts are filtered out.
 pub fn get_disk_stats(disks: &Disks, interval_secs: f64, timestamp: i64) -> Vec<DiskStats> {
     let safe_div = if interval_secs > 0.0 {
         interval_secs
@@ -179,6 +186,7 @@ pub fn get_disk_stats(disks: &Disks, interval_secs: f64, timestamp: i64) -> Vec<
 
     disks
         .iter()
+        .filter(|d| !is_hidden_mount(&d.mount_point().to_string_lossy()))
         .map(|d| {
             let total = d.total_space();
             let available = d.available_space();
@@ -215,9 +223,8 @@ pub fn get_disk_stats(disks: &Disks, interval_secs: f64, timestamp: i64) -> Vec<
 /// sysinfo's `received()` / `transmitted()` / `packets_*()` return "delta
 /// since last refresh" (NOT a rate, NOT cumulative — the docs are easy to
 /// misread). We divide by `interval_secs` to convert into a true per-second
-/// rate. Loopback is excluded with an exact prefix match (`lo` followed by
-/// nothing or a digit) to avoid eating real interfaces with names that
-/// happen to start with "lo" (e.g. "long0", "logical0").
+/// rate. Loopback and virtual/bridge interfaces are filtered out — see
+/// `is_loopback` and `is_virtual_interface`.
 pub fn get_network_stats(
     networks: &Networks,
     interval_secs: f64,
@@ -231,7 +238,7 @@ pub fn get_network_stats(
 
     networks
         .iter()
-        .filter(|(name, _)| !is_loopback(name))
+        .filter(|(name, _)| !is_loopback(name) && !is_virtual_interface(name))
         .map(|(name, data)| {
             let (rxb, txb, rxp, txp) = if interval_secs > 0.0 {
                 (
@@ -293,12 +300,68 @@ fn is_loopback(name: &str) -> bool {
     if name == "lo" {
         return true;
     }
-    // Match `lo` followed only by digits ("lo0", "lo1", …); reject "long0",
-    // "logical0", "loopback-fake", anything alphanumeric after the prefix
-    // that isn't pure digits.
     if let Some(rest) = name.strip_prefix("lo") {
-        return !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit());
+        if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
+            return true;
+        }
     }
+    name.to_ascii_lowercase()
+        .starts_with("loopback pseudo-interface")
+}
+
+const HIDDEN_MOUNT_PREFIXES: &[&str] = &["/var/lib/docker/", "/var/lib/containers/"];
+
+fn is_hidden_mount(mount: &str) -> bool {
+    HIDDEN_MOUNT_PREFIXES.iter().any(|p| mount.starts_with(p))
+}
+
+/// Drops container/hypervisor bridges, packet-capture shadow adapters,
+/// and platform pseudo-tunnels. VPN tunnels (`tun*`, `wg*`, `utun*`,
+/// `tailscale*`) are deliberately kept.
+fn is_virtual_interface(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+
+    const CONTAINER_PREFIXES: &[&str] = &[
+        "veth", "docker", "br-", "cni", "cilium", "flannel", "calico", "kube",
+    ];
+    if CONTAINER_PREFIXES.iter().any(|p| lower.starts_with(p)) {
+        return true;
+    }
+
+    const HV_PREFIXES: &[&str] = &["vethernet", "vmnet", "vboxnet", "virbr", "tap"];
+    if HV_PREFIXES.iter().any(|p| lower.starts_with(p)) {
+        return true;
+    }
+    if lower.contains("vmware virtual") || lower.contains("virtualbox host-only") {
+        return true;
+    }
+
+    if lower.contains("npcap") {
+        return true;
+    }
+
+    if lower.contains("wan miniport")
+        || lower.contains("teredo tunneling")
+        || lower.contains("isatap")
+        || lower.contains("wfp lightweight")
+    {
+        return true;
+    }
+
+    // macOS aux: prefix + pure digits.
+    for prefix in ["awdl", "llw", "gif", "stf"] {
+        if let Some(rest) = lower.strip_prefix(prefix) {
+            if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
+                return true;
+            }
+        }
+    }
+    if let Some(rest) = lower.strip_prefix("bridge") {
+        if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
+            return true;
+        }
+    }
+
     false
 }
 

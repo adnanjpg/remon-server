@@ -194,7 +194,14 @@ async fn main() {
         std::process::exit(1);
     }
 
-    let local_hardware = system_svc::get_hardware_info();
+    let local_hardware: Arc<tokio::sync::OnceCell<crate::models::system::HardwareInfo>> =
+        Arc::default();
+    {
+        let cell = Arc::clone(&local_hardware);
+        tokio::spawn(async move {
+            let _ = cell.get_or_init(system_svc::init_hardware_info).await;
+        });
+    }
 
     // Layered config: TOML defaults are already in `config`; DB row in
     // `server_config` overrides selected fields at boot. The DB row is
@@ -282,16 +289,17 @@ async fn main() {
     // Spawn collectors (broadcast + raw metrics writer)
     collectors::spawn_all(app_state.clone());
 
-    // Spawn rollup, retention, adaptive sampling, alert evaluator, service watcher
+    // Spawn rollup, retention, adaptive sampling, alert evaluator, sessions cleanup.
+    // The legacy "watch every failed service and notify" task was retired in
+    // 0.7.5; the same behaviour is now available as user-defined alert rules
+    // of the form `service.up{unit="..."} == 0`, evaluated by the alert
+    // engine like any other rule.
     services::rollup::spawn(app_state.clone());
     services::retention::spawn(app_state.clone());
     services::sampling::spawn(app_state.clone());
     services::alerts::spawn(app_state.clone());
-    services::service_watcher::spawn(app_state.clone());
     services::sessions::spawn(app_state.clone());
-    info!(
-        "Rollup, retention, sampling, alert evaluator, service watcher, and session cleanup workers spawned"
-    );
+    info!("Rollup, retention, sampling, alert evaluator, and session cleanup workers spawned");
 
     // Probe loader: scan probes/, validate manifests, spawn one
     // task per enabled+platform-matched probe. A missing directory is

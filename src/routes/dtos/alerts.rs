@@ -1,4 +1,4 @@
-//! Alert engine v2 REST DTOs.
+//! Alert engine REST DTOs.
 
 use serde::{Deserialize, Serialize};
 
@@ -141,6 +141,61 @@ impl From<AlertEvent> for AlertEventDto {
 #[derive(Debug, Serialize)]
 pub struct ListAlertEventsResponse {
     pub events: Vec<AlertEventDto>,
+}
+
+// ===== Schema (drives the web rule-editor's cascading form) =====
+
+#[derive(Debug, Serialize)]
+pub struct AlertsSchemaResponse {
+    pub namespaces: Vec<NamespaceSchemaDto>,
+    pub comparators: Vec<ComparatorSchemaDto>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NamespaceSchemaDto {
+    pub name: &'static str,
+    pub description: &'static str,
+    /// True when metric names are script/runtime-defined (e.g. `probe`).
+    /// The `metrics` list, when populated alongside this flag, is just a
+    /// hint of typical names.
+    pub dynamic_metrics: bool,
+    pub metrics: Vec<MetricSchemaDto>,
+    pub labels: Vec<LabelSchemaDto>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MetricSchemaDto {
+    pub name: &'static str,
+    pub unit: Option<&'static str>,
+    pub description: Option<&'static str>,
+    /// `"float"` | `"int"` | `"bool"` — UI hint for the threshold input.
+    pub value_type: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LabelSchemaDto {
+    pub name: &'static str,
+    pub required: bool,
+    /// Fixed enumeration of valid values; mutually exclusive with `source`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<&'static [&'static str]>,
+    /// REST endpoint + JSON path to fetch acceptable values from at
+    /// runtime, for autocomplete.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<LabelSourceDto>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LabelSourceDto {
+    pub endpoint: &'static str,
+    /// Dot-path with `[]` for array iteration.
+    pub json_path: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ComparatorSchemaDto {
+    pub op: &'static str,
+    pub display: &'static str,
 }
 
 // ===== Helpers (used by REST handlers to build state DTOs joined with rule) =====

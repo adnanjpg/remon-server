@@ -1,4 +1,4 @@
-//! Alert engine v2 REST endpoints.
+//! Alert engine REST endpoints.
 //!
 //! Surface:
 //! - `GET    /alerts`              — list rules
@@ -9,6 +9,7 @@
 //! - `GET    /alerts/state`        — currently pending or firing
 //! - `GET    /alerts/events`       — recent transitions, newest first
 //! - `GET    /alerts/{id}/events`  — recent transitions for one rule
+//! - `GET    /alerts/schema`       — namespace/metric/label catalogue
 
 use std::sync::Arc;
 
@@ -21,11 +22,13 @@ use serde::Deserialize;
 
 use crate::error::{AppError, AppResult};
 use crate::routes::dtos::alerts::{
-    AlertEventDto, AlertRuleDto, AlertStateDto, CreateAlertRuleRequest, ListAlertEventsResponse,
-    ListAlertRulesResponse, ListAlertStateResponse, UpdateAlertRuleRequest, state_dto_from,
+    AlertEventDto, AlertRuleDto, AlertStateDto, AlertsSchemaResponse, ComparatorSchemaDto,
+    CreateAlertRuleRequest, LabelSchemaDto, LabelSourceDto, ListAlertEventsResponse,
+    ListAlertRulesResponse, ListAlertStateResponse, MetricSchemaDto, NamespaceSchemaDto,
+    UpdateAlertRuleRequest, state_dto_from,
 };
 use crate::routes::extractors::Claims;
-use crate::services::alerting::expression;
+use crate::services::alerting::{expression, resolver};
 use crate::state::AppState;
 use crate::storage::repositories::{AlertRepository, UpsertAlertRule};
 
@@ -47,16 +50,19 @@ pub struct EventsQuery {
     pub offset: Option<u32>,
 }
 
-/// Common validation for create/update bodies. Bracket every numeric
-/// knob and parse-validate the expression so a bad rule never persists.
-fn validate(
+/// Validate a create/update body. A dry resolve catches bad metric refs
+/// at write time instead of every eval tick.
+async fn validate(
+    state: &AppState,
     req_expression: &str,
     for_secs: i64,
     eval_secs: i64,
     cooldown_secs: i64,
 ) -> AppResult<()> {
-    if let Err(e) = expression::parse(req_expression) {
-        return Err(AppError::BadRequest(format!("expression: {}", e)));
+    let expr = expression::parse(req_expression)
+        .map_err(|e| AppError::BadRequest(format!("expression: {}", e)))?;
+    if let Err(e) = resolver::resolve_with_state(state, &expr.metric).await {
+        return Err(AppError::BadRequest(format!("expression: {}", e.message)));
     }
     if !(MIN_EVAL_INTERVAL..=MAX_EVAL_INTERVAL).contains(&eval_secs) {
         return Err(AppError::BadRequest(format!(
@@ -111,11 +117,13 @@ pub async fn create_alert(
     Json(req): Json<CreateAlertRuleRequest>,
 ) -> AppResult<(StatusCode, Json<AlertRuleDto>)> {
     validate(
+        &state,
         &req.expression,
         req.for_duration_secs,
         req.eval_interval_secs,
         req.cooldown_secs,
-    )?;
+    )
+    .await?;
 
     let repo = AlertRepository::new(state.db.clone());
     let upsert = UpsertAlertRule {
@@ -176,11 +184,13 @@ pub async fn update_alert(
     }
 
     validate(
+        &state,
         &current.expression,
         current.for_duration_secs,
         current.eval_interval_secs,
         current.cooldown_secs,
-    )?;
+    )
+    .await?;
 
     let merged = UpsertAlertRule {
         name: current.name.clone(),
@@ -264,4 +274,376 @@ pub async fn list_events_for_rule(
     Ok(Json(ListAlertEventsResponse {
         events: events.into_iter().map(AlertEventDto::from).collect(),
     }))
+}
+
+// ===== Schema =====
+
+/// Schema for the web rule editor. Mirrors the resolver whitelists in
+/// `services/alerting/resolver.rs` — keep both in sync.
+pub async fn get_alerts_schema(_claims: Claims) -> Json<AlertsSchemaResponse> {
+    Json(build_alerts_schema())
+}
+
+fn build_alerts_schema() -> AlertsSchemaResponse {
+    AlertsSchemaResponse {
+        namespaces: vec![
+            NamespaceSchemaDto {
+                name: "cpu",
+                description: "CPU usage, load average, and kernel-event counters",
+                dynamic_metrics: false,
+                metrics: vec![
+                    MetricSchemaDto {
+                        name: "usage_percent",
+                        unit: Some("%"),
+                        description: Some("Overall CPU usage 0-100"),
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "load_1m",
+                        unit: None,
+                        description: Some("Load average over the last 1 minute"),
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "load_5m",
+                        unit: None,
+                        description: Some("Load average over the last 5 minutes"),
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "load_15m",
+                        unit: None,
+                        description: Some("Load average over the last 15 minutes"),
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "steal_percent",
+                        unit: Some("%"),
+                        description: Some("Linux only: hypervisor steal time"),
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "iowait_percent",
+                        unit: Some("%"),
+                        description: Some("Linux only: time idle waiting for I/O"),
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "guest_percent",
+                        unit: Some("%"),
+                        description: Some("Linux only: time running a guest VM"),
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "context_switches_per_sec",
+                        unit: Some("/s"),
+                        description: Some("Linux only: kernel-wide context switches"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "process_forks_per_sec",
+                        unit: Some("/s"),
+                        description: Some("Linux only: process forks per second"),
+                        value_type: "int",
+                    },
+                ],
+                labels: vec![],
+            },
+            NamespaceSchemaDto {
+                name: "memory",
+                description: "Memory pressure and paging counters",
+                dynamic_metrics: false,
+                metrics: vec![
+                    MetricSchemaDto {
+                        name: "used_bytes",
+                        unit: Some("bytes"),
+                        description: None,
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "available_bytes",
+                        unit: Some("bytes"),
+                        description: None,
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "cached_bytes",
+                        unit: Some("bytes"),
+                        description: Some("Linux: Cached+Buffers+SReclaimable"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "swap_used_bytes",
+                        unit: Some("bytes"),
+                        description: None,
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "page_faults_minor_per_sec",
+                        unit: Some("/s"),
+                        description: Some("Linux only"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "page_faults_major_per_sec",
+                        unit: Some("/s"),
+                        description: Some("Linux only — disk-backed faults"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "swap_in_pages_per_sec",
+                        unit: Some("/s"),
+                        description: Some("Linux only — active thrashing if >0"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "swap_out_pages_per_sec",
+                        unit: Some("/s"),
+                        description: Some("Linux only"),
+                        value_type: "int",
+                    },
+                ],
+                labels: vec![],
+            },
+            NamespaceSchemaDto {
+                name: "disk",
+                description: "Per-mount usage and I/O. Container-runtime overlay mounts are filtered server-side.",
+                dynamic_metrics: false,
+                metrics: vec![
+                    MetricSchemaDto {
+                        name: "used_bytes",
+                        unit: Some("bytes"),
+                        description: None,
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "available_bytes",
+                        unit: Some("bytes"),
+                        description: None,
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "read_bytes_per_sec",
+                        unit: Some("bytes/s"),
+                        description: None,
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "write_bytes_per_sec",
+                        unit: Some("bytes/s"),
+                        description: None,
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "inode_used_percent",
+                        unit: Some("%"),
+                        description: Some("Linux only via statvfs"),
+                        value_type: "float",
+                    },
+                ],
+                labels: vec![LabelSchemaDto {
+                    name: "mount_point",
+                    required: false,
+                    values: None,
+                    source: Some(LabelSourceDto {
+                        endpoint: "/system/info",
+                        json_path: "hardware.disks[].mount_point",
+                    }),
+                }],
+            },
+            NamespaceSchemaDto {
+                name: "network",
+                description: "Per-NIC byte/packet rates. veth/docker/br/tap interfaces are filtered server-side.",
+                dynamic_metrics: false,
+                metrics: vec![
+                    MetricSchemaDto {
+                        name: "rx_bytes_per_sec",
+                        unit: Some("bytes/s"),
+                        description: None,
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "tx_bytes_per_sec",
+                        unit: Some("bytes/s"),
+                        description: None,
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "rx_packets_per_sec",
+                        unit: Some("/s"),
+                        description: None,
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "tx_packets_per_sec",
+                        unit: Some("/s"),
+                        description: None,
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "errors_in_per_sec",
+                        unit: Some("/s"),
+                        description: Some("Frames dropped on receive"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "errors_out_per_sec",
+                        unit: Some("/s"),
+                        description: Some("Frames dropped on transmit"),
+                        value_type: "int",
+                    },
+                ],
+                labels: vec![LabelSchemaDto {
+                    name: "interface_name",
+                    required: false,
+                    values: None,
+                    source: Some(LabelSourceDto {
+                        endpoint: "/system/info",
+                        json_path: "hardware.network_interfaces[].name",
+                    }),
+                }],
+            },
+            NamespaceSchemaDto {
+                name: "pressure",
+                description: "PSI (Linux 4.20+) saturation averages. Empty on non-Linux hosts.",
+                dynamic_metrics: false,
+                metrics: vec![
+                    MetricSchemaDto {
+                        name: "some_avg10",
+                        unit: Some("%"),
+                        description: Some("≥1 task stalled, 10s average"),
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "some_avg60",
+                        unit: Some("%"),
+                        description: Some("60s average"),
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "some_avg300",
+                        unit: Some("%"),
+                        description: Some("300s average"),
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "full_avg10",
+                        unit: Some("%"),
+                        description: Some("All tasks stalled, 10s — not emitted for cpu"),
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "full_avg60",
+                        unit: Some("%"),
+                        description: None,
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "full_avg300",
+                        unit: Some("%"),
+                        description: None,
+                        value_type: "float",
+                    },
+                ],
+                labels: vec![LabelSchemaDto {
+                    name: "resource",
+                    required: false,
+                    values: Some(&["cpu", "memory", "io"]),
+                    source: None,
+                }],
+            },
+            NamespaceSchemaDto {
+                name: "components",
+                description: "Hardware sensor readings. Empty on hosts without exposed sensors.",
+                dynamic_metrics: false,
+                metrics: vec![
+                    MetricSchemaDto {
+                        name: "temperature_c",
+                        unit: Some("°C"),
+                        description: None,
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "max_c",
+                        unit: Some("°C"),
+                        description: Some("Highest seen since boot"),
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "critical_c",
+                        unit: Some("°C"),
+                        description: Some("Vendor-declared shutdown threshold"),
+                        value_type: "float",
+                    },
+                ],
+                labels: vec![LabelSchemaDto {
+                    name: "label",
+                    required: false,
+                    values: None,
+                    source: None,
+                }],
+            },
+            NamespaceSchemaDto {
+                name: "probe",
+                description: "Metrics emitted by user-defined probe scripts. Metric name is whatever the script reported.",
+                dynamic_metrics: true,
+                metrics: vec![],
+                labels: vec![LabelSchemaDto {
+                    name: "probe_name",
+                    required: false,
+                    values: None,
+                    source: Some(LabelSourceDto {
+                        endpoint: "/probes",
+                        json_path: "probes[].name",
+                    }),
+                }],
+            },
+            NamespaceSchemaDto {
+                name: "service",
+                description: "Live OS service state. Resolver returns 1 when Running, 0 otherwise; the actual state name (failed/stopped/...) is included in the notification body.",
+                dynamic_metrics: false,
+                metrics: vec![MetricSchemaDto {
+                    name: "up",
+                    unit: None,
+                    description: Some("1 if Running, 0 otherwise"),
+                    value_type: "bool",
+                }],
+                labels: vec![LabelSchemaDto {
+                    name: "unit",
+                    required: true,
+                    values: None,
+                    source: Some(LabelSourceDto {
+                        endpoint: "/services",
+                        json_path: "services[].name",
+                    }),
+                }],
+            },
+        ],
+        comparators: vec![
+            ComparatorSchemaDto {
+                op: ">",
+                display: "greater than",
+            },
+            ComparatorSchemaDto {
+                op: ">=",
+                display: "greater than or equal",
+            },
+            ComparatorSchemaDto {
+                op: "<",
+                display: "less than",
+            },
+            ComparatorSchemaDto {
+                op: "<=",
+                display: "less than or equal",
+            },
+            ComparatorSchemaDto {
+                op: "==",
+                display: "equals",
+            },
+            ComparatorSchemaDto {
+                op: "!=",
+                display: "not equal",
+            },
+        ],
+    }
 }

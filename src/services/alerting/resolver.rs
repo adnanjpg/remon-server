@@ -19,10 +19,12 @@
 //! flow through `bind`.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use sqlx::SqlitePool;
 
 use super::expression::MetricRef;
+use crate::platform::services::ServiceManager;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedSample {
@@ -30,6 +32,9 @@ pub struct ResolvedSample {
     /// the `alert_state` table's `label_set` column.
     pub label_set: String,
     pub value: f64,
+    /// Optional human-readable detail (e.g. `service.up` carries the
+    /// state name). Numeric namespaces leave this `None`.
+    pub meta: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -119,10 +124,30 @@ const PRESSURE_I64: &[&str] = &[];
 const COMPONENTS_FIELDS: &[&str] = &["temperature_c", "max_c", "critical_c"];
 const COMPONENTS_I64: &[&str] = &[];
 
+// Live-check namespace; resolved via ServiceManager, not the DB.
+const SERVICE_FIELDS: &[&str] = &["up"];
+
 // ===== Public entry =====
 
+/// DB-only entry. Service-namespace rules error out here; use
+/// [`resolve_with_state`] for those.
 pub async fn resolve(
     pool: &SqlitePool,
+    metric: &MetricRef,
+) -> Result<Vec<ResolvedSample>, ResolveError> {
+    resolve_inner(pool, None, metric).await
+}
+
+pub async fn resolve_with_state(
+    state: &crate::state::AppState,
+    metric: &MetricRef,
+) -> Result<Vec<ResolvedSample>, ResolveError> {
+    resolve_inner(&state.db, Some(&state.service_manager), metric).await
+}
+
+async fn resolve_inner(
+    pool: &SqlitePool,
+    services: Option<&Arc<dyn ServiceManager>>,
     metric: &MetricRef,
 ) -> Result<Vec<ResolvedSample>, ResolveError> {
     match metric.namespace.as_str() {
@@ -175,6 +200,12 @@ pub async fn resolve(
             .await
         }
         "probe" => resolve_probe(pool, metric).await,
+        "service" => match services {
+            Some(sm) => resolve_service(sm.as_ref(), metric).await,
+            None => Err(ResolveError::msg(
+                "namespace 'service' requires runtime context; use resolve_with_state",
+            )),
+        },
         other => Err(ResolveError::msg(format!("unknown namespace '{}'", other))),
     }
 }
@@ -220,6 +251,7 @@ async fn resolve_unkeyed(
         .map(|v| ResolvedSample {
             label_set: "{}".to_string(),
             value: v,
+            meta: None,
         })
         .into_iter()
         .collect())
@@ -301,6 +333,7 @@ async fn resolve_keyed(
             ResolvedSample {
                 label_set: canonical_labels(&labels),
                 value: v,
+                meta: None,
             }
         })
         .collect())
@@ -400,9 +433,55 @@ async fn resolve_probe(
             ResolvedSample {
                 label_set: canonical_labels(&labels),
                 value,
+                meta: None,
             }
         })
         .collect())
+}
+
+// ===== Service namespace =====
+
+async fn resolve_service(
+    services: &dyn ServiceManager,
+    metric: &MetricRef,
+) -> Result<Vec<ResolvedSample>, ResolveError> {
+    let _ = check_field(metric, SERVICE_FIELDS)?;
+
+    let unit = metric.labels.get("unit").ok_or_else(|| {
+        ResolveError::msg("namespace 'service' requires a `unit` label, e.g. service.up{unit=\"nginx.service\"}")
+    })?;
+    if metric.labels.len() > 1 {
+        return Err(ResolveError::msg(
+            "namespace 'service' supports only the `unit` label",
+        ));
+    }
+
+    let svc = services
+        .get(unit)
+        .await
+        .map_err(|e| ResolveError::msg(format!("service '{}' lookup failed: {}", unit, e)))?;
+
+    use crate::platform::services::ServiceState;
+    let up = matches!(svc.state, ServiceState::Running);
+    let state_name = match svc.state {
+        ServiceState::Running => "running",
+        ServiceState::Stopped => "stopped",
+        ServiceState::Starting => "starting",
+        ServiceState::Stopping => "stopping",
+        ServiceState::Paused => "paused",
+        ServiceState::Failed => "failed",
+        ServiceState::Reloading => "reloading",
+        ServiceState::Unknown => "unknown",
+    };
+
+    let mut labels = BTreeMap::new();
+    labels.insert("unit".to_string(), unit.clone());
+
+    Ok(vec![ResolvedSample {
+        label_set: canonical_labels(&labels),
+        value: if up { 1.0 } else { 0.0 },
+        meta: Some(state_name.to_string()),
+    }])
 }
 
 // ===== helpers =====

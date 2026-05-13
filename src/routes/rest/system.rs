@@ -1,19 +1,4 @@
-//! System info endpoint.
-//!
-//! `GET /system/info` returns the host header data the UI needs to draw a
-//! "this machine" panel: hostname / OS / kernel / uptime / CPU model / core
-//! count / total RAM / disk inventory / NIC inventory.
-//!
-//! Hardware inventory is read once at boot from `AppState.hardware_info`
-//! (an `Arc<HardwareInfo>`) so per-request cost stays in the microsecond
-//! range. The description block (`hostname`, `os`, `os_version`, `kernel`,
-//! `uptime_secs`) is computed fresh every call — the underlying sysinfo
-//! reads are cheap and `uptime_secs` is genuinely volatile.
-//!
-//! Hot-plug events (USB disk, new NIC) are not reflected until restart.
-//! That trade-off is intentional: hardware refresh on every poll would be
-//! wasteful, and a dedicated refresh endpoint can be added later without
-//! breaking this contract.
+//! `GET /system/info`.
 
 use axum::{Json, extract::State};
 use std::sync::Arc;
@@ -31,8 +16,11 @@ pub async fn get_system_info(
     _claims: Claims,
     State(state): State<Arc<AppState>>,
 ) -> AppResult<Json<SystemInfoResponse>> {
-    // Description: cheap to recompute every call; uptime_secs is volatile.
     let desc = system_svc::get_description();
+    let hardware = state
+        .hardware_info
+        .get_or_init(system_svc::init_hardware_info)
+        .await;
 
     Ok(Json(SystemInfoResponse {
         description: SystemDescriptionDto {
@@ -50,7 +38,7 @@ pub async fn get_system_info(
             .to_string(),
             built_at: env!("BUILD_TIME").parse().unwrap_or(0),
         },
-        hardware: hardware_info_to_dto(&state.hardware_info),
+        hardware: hardware_info_to_dto(hardware),
     }))
 }
 

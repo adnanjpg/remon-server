@@ -131,13 +131,14 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/system/info", get(system::get_system_info))
         // Runtime configuration
         .route("/config", get(admin::get_config).patch(admin::patch_config))
-        // Alert engine v2: rule CRUD + active-state + event log
+        // Alert engine: rule CRUD + active-state + event log
         .route(
             "/alerts",
             get(alerts::list_alerts).post(alerts::create_alert),
         )
         .route("/alerts/state", get(alerts::list_active_state))
         .route("/alerts/events", get(alerts::list_recent_events))
+        .route("/alerts/schema", get(alerts::get_alerts_schema))
         .route(
             "/alerts/{id}",
             get(alerts::get_alert)
