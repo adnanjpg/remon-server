@@ -33,7 +33,10 @@ serde_yaml_ng = "0.10"
 cron = "0.16.0"
 thiserror = "2"
 sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio", "migrate"] }
-sysinfo = "0.39.1"
+# Pinned to a post-0.39.1 main commit for the Windows PDH-skip fix
+# (GuillaumeGomez/sysinfo#1664). Revert to a crates.io release once the
+# next sysinfo version is published.
+sysinfo = { git = "https://github.com/GuillaumeGomez/sysinfo", rev = "4154d8d188d3863d70d0000024bed94cce17cec2" }
 totp-rs = "5.5"
 log = "0.4"
 blake3 = "1.5"

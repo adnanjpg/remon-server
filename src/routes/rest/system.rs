@@ -17,10 +17,7 @@ pub async fn get_system_info(
     State(state): State<Arc<AppState>>,
 ) -> AppResult<Json<SystemInfoResponse>> {
     let desc = system_svc::get_description();
-    let hardware = state
-        .hardware_info
-        .get_or_init(system_svc::init_hardware_info)
-        .await;
+    let hardware = state.hardware_info.as_ref();
 
     Ok(Json(SystemInfoResponse {
         description: SystemDescriptionDto {

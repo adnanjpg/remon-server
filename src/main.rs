@@ -194,14 +194,7 @@ async fn main() {
         std::process::exit(1);
     }
 
-    let local_hardware: Arc<tokio::sync::OnceCell<crate::models::system::HardwareInfo>> =
-        Arc::default();
-    {
-        let cell = Arc::clone(&local_hardware);
-        tokio::spawn(async move {
-            let _ = cell.get_or_init(system_svc::init_hardware_info).await;
-        });
-    }
+    let local_hardware = Arc::new(system_svc::get_hardware_info());
 
     // Layered config: TOML defaults are already in `config`; DB row in
     // `server_config` overrides selected fields at boot. The DB row is

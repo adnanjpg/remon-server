@@ -13,7 +13,7 @@ pub fn get_description() -> SystemDescription {
         os: System::name().unwrap_or_else(|| "unknown".into()),
         os_version: System::os_version().unwrap_or_else(|| "unknown".into()),
         kernel: System::kernel_version().unwrap_or_else(|| "unknown".into()),
-        uptime_secs: System::uptime(),
+        uptime_secs: System::uptime().unwrap_or(0),
     }
 }
 
@@ -73,15 +73,12 @@ pub fn get_hardware_info() -> HardwareInfo {
     }
 }
 
-/// `OnceCell::get_or_init` wrapper that runs sysinfo on the blocking pool.
-pub async fn init_hardware_info() -> HardwareInfo {
-    tokio::task::spawn_blocking(get_hardware_info)
-        .await
-        .expect("hardware info collection should not panic")
-}
-
 pub fn get_cpu_stats(sys: &System, timestamp: i64) -> CpuStats {
-    let load_avg = System::load_average();
+    let load_avg = System::load_average().unwrap_or(sysinfo::LoadAvg {
+        one: 0.0,
+        five: 0.0,
+        fifteen: 0.0,
+    });
 
     let per_core: Vec<CoreStats> = sys
         .cpus()

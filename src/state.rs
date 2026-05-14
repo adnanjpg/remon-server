@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 
 use sqlx::SqlitePool;
-use tokio::sync::{Mutex, Notify, OnceCell, RwLock, broadcast};
+use tokio::sync::{Mutex, Notify, RwLock, broadcast};
 
 use crate::config::AuthConfig;
 use crate::models::process::ProcessList;
@@ -102,9 +102,9 @@ pub struct AppState {
     #[cfg(feature = "docker")]
     pub docker_exec_enabled: Arc<AtomicBool>,
 
-    /// Hardware inventory, lazily filled by a boot-time warmup task.
-    /// Static for the server's lifetime — hot-plug requires a restart.
-    pub hardware_info: Arc<OnceCell<HardwareInfo>>,
+    /// Hardware inventory captured at boot. Static for the server's
+    /// lifetime — hot-plug requires a restart.
+    pub hardware_info: Arc<HardwareInfo>,
 
     /// Platform service manager — systemd / OpenRC on Linux, SCM (via
     /// PowerShell shell-out) on Windows, `Unsupported` fallback elsewhere.
@@ -142,7 +142,7 @@ impl AppState {
         processes_cache_ttl_ms: u64,
         #[cfg(feature = "docker")] collector_docker_interval_ms: u64,
         #[cfg(feature = "docker")] docker_exec_enabled: bool,
-        hardware_info: Arc<OnceCell<HardwareInfo>>,
+        hardware_info: Arc<HardwareInfo>,
         service_manager: Arc<dyn ServiceManager>,
         probe_registry: ProbeRegistry,
         notify: Arc<NotificationManager>,
