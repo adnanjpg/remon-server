@@ -146,6 +146,10 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
                 .delete(alerts::delete_alert),
         )
         .route("/alerts/{id}/events", get(alerts::list_events_for_rule))
+        .route(
+            "/alerts/{id}/silence",
+            post(alerts::silence_alert).delete(alerts::unsilence_alert),
+        )
         // Time-series history
         .route("/metrics/cpu", get(metrics::cpu_history))
         .route("/metrics/cpu/cores", get(metrics::cpu_cores_history))
@@ -157,6 +161,7 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
             get(metrics::pressure_history),
         )
         .route("/metrics/components", get(metrics::components_history))
+        .route("/metrics/batch", get(metrics::batch_history))
         .route("/processes", get(process::get_processes))
         .route("/processes/{pid}", delete(process::delete_process))
         // Init-system services (systemd / OpenRC / Windows SCM)

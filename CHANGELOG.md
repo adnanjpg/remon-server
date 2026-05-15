@@ -3,6 +3,36 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.8] - 2026-05-15
+
+### Added
+
+- **`GET /metrics/batch`** — fetch many time-series resources in a single request. `?resources=cpu,memory,disk,network,components,cpu_cores` (whitelist, max 8, no duplicates). Window via `?span=1h|30m|24h|7d|<seconds>` or the existing `?start=&end=` (mutually exclusive). Shared `?resolution=` and `?limit=` apply to every series; `cpu_cores` ignores resolution (no rollup). Per-resource reads run in parallel on the same SQLite pool. Aimed at mobile clients — collapses N dashboard requests into one round trip, one JWT header, one envelope. Pressure / probe metrics stay out of batch (sub-key shape doesn't fit a comma list).
+- Response shape: `{ start, end, resolution, series: [{ resource, points }, ...] }`. `series` order mirrors the request. New `BatchSeries` enum is `#[serde(tag = "resource")]` so future resources stay additive.
+
+## [0.7.7] - 2026-05-15
+
+### Security
+
+- **Webhook channel: default-deny private / loopback ranges.** Webhook URLs that resolve to `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16` (incl. cloud metadata `169.254.169.254`), `0.0.0.0`, `255.255.255.255`, multicast/documentation v4 ranges, `::1`, `::`, `fe80::/10`, `fc00::/7`, multicast v6, or any `::ffff:<private-v4>` mapped address are now rejected at create-time (400 BAD_REQUEST) and at send-time (re-resolved each invocation as a DNS-rebinding defense). Closes the SSRF gap noted under v0.7.4 "Loopback / RFC1918 blocking is not enabled by default."
+- Two override knobs under `[notifications.webhook]`: `allow_private_targets: bool = false` (master switch for dev / homelab), `allowed_private_hosts: Vec<String> = []` (production allow-list, case-insensitive exact hostname match).
+- **Breaking default for upgraders**: an existing webhook channel that targets a private address will be skipped at boot with a single warn line (`Skipping webhook channel '<name>': … — see CONFIG.md`) and will refuse to send. To preserve the prior behavior set `allow_private_targets = true` in config, or migrate the trusted host to `allowed_private_hosts`.
+
+### Changed
+
+- `POST /notifications/channels` and `PUT /notifications/channels/{id}` now validate the webhook URL against the SSRF policy before persisting. Previously bad URLs were inserted silently and only skipped at reload — fixed.
+
+## [0.7.6] - 2026-05-15
+
+### Added
+
+- **Alert silence** — temporarily suppress `Fired` notifications without disabling the rule. `POST /alerts/{id}/silence { "duration_secs": N }` mutes for N seconds; `DELETE /alerts/{id}/silence` lifts immediately. `PATCH /alerts/{id}` also accepts a `silenced_until` field (absolute timestamp; `null` to clear). State transitions and `alert_events` history continue while silenced — the suppressed fires are recorded with `notified: false`. `Resolved` notifications are never silenced. Channel-agnostic: the gate sits before fanout, so FCM and WebPush silence uniformly.
+- `silenced_until: Option<i64>` field on the `AlertRuleDto` response (unix epoch seconds; `null` when not silenced).
+
+### Changed
+
+- `alert_rules` schema gained a nullable `silenced_until INTEGER` column (migration `0002_alert_silence.sql`).
+
 ## [0.7.4] - 2026-05-11
 
 ### Added

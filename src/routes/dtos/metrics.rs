@@ -170,3 +170,42 @@ pub struct ComponentsHistoryResponse {
     pub resolution: String,
     pub points: Vec<ComponentPoint>,
 }
+
+// ===== Batch =====
+
+/// Query for `GET /metrics/batch`. Collapses N per-resource requests into
+/// one — saves cellular radio wake-ups and JWT/envelope overhead.
+#[derive(Debug, Deserialize)]
+pub struct BatchMetricsQuery {
+    /// Comma-separated, e.g. `cpu,memory,disk`. Whitelist enforced.
+    pub resources: String,
+    /// Relative window: `30m`, `1h`, `24h`, `7d`, or raw seconds.
+    /// Mutually exclusive with `start`/`end`.
+    pub span: Option<String>,
+    pub start: Option<i64>,
+    pub end: Option<i64>,
+    pub resolution: Option<String>,
+    pub limit: Option<u32>,
+}
+
+/// Tagged on `resource` so new variants (probe, pressure) stay additive.
+#[derive(Debug, Serialize)]
+#[serde(tag = "resource", rename_all = "snake_case")]
+pub enum BatchSeries {
+    Cpu { points: Vec<CpuPoint> },
+    CpuCores { points: Vec<CpuCorePoint> },
+    Memory { points: Vec<MemoryPoint> },
+    Disk { points: Vec<DiskPoint> },
+    Network { points: Vec<NetworkPoint> },
+    Components { points: Vec<ComponentPoint> },
+}
+
+#[derive(Debug, Serialize)]
+pub struct BatchMetricsResponse {
+    pub start: i64,
+    pub end: i64,
+    /// Resolution applied to every series — one per request, like the
+    /// single-resource endpoints.
+    pub resolution: String,
+    pub series: Vec<BatchSeries>,
+}

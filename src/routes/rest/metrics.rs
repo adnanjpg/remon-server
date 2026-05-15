@@ -8,10 +8,10 @@ use std::sync::Arc;
 
 use crate::error::{AppError, AppResult};
 use crate::routes::dtos::metrics::{
-    ComponentPoint, ComponentsHistoryResponse, CpuCorePoint, CpuCoresHistoryResponse,
-    CpuHistoryResponse, CpuPoint, DiskHistoryResponse, DiskPoint, MemoryHistoryResponse,
-    MemoryPoint, MetricsRangeQuery, NetworkHistoryResponse, NetworkPoint, PressureHistoryResponse,
-    PressurePoint,
+    BatchMetricsQuery, BatchMetricsResponse, BatchSeries, ComponentPoint,
+    ComponentsHistoryResponse, CpuCorePoint, CpuCoresHistoryResponse, CpuHistoryResponse, CpuPoint,
+    DiskHistoryResponse, DiskPoint, MemoryHistoryResponse, MemoryPoint, MetricsRangeQuery,
+    NetworkHistoryResponse, NetworkPoint, PressureHistoryResponse, PressurePoint,
 };
 use crate::routes::extractors::Claims;
 use crate::state::AppState;
@@ -294,4 +294,244 @@ pub async fn components_history(
         .collect();
 
     Ok(Json(ComponentsHistoryResponse { resolution, points }))
+}
+
+// ===== Batch =====
+
+/// Whitelist for `?resources=`. Pressure/probe stay out of MVP — they
+/// need a sub-key (`pressure:cpu`, `probe:nginx:rps`) the simple
+/// comma-list shape can't express cleanly.
+pub const BATCH_RESOURCES: &[&str] = &[
+    "cpu",
+    "cpu_cores",
+    "memory",
+    "disk",
+    "network",
+    "components",
+];
+
+/// Hard cap on how many series one batch can carry. Worst case = 8 ×
+/// MAX_LIMIT rows; well past dashboard needs and prevents accidental
+/// `resources=...` strings that fan out the SQL pool.
+const MAX_BATCH_RESOURCES: usize = 8;
+
+/// Parse `1h`, `30m`, `24h`, `7d`, `60s`, or raw seconds.
+fn parse_span(s: &str) -> AppResult<i64> {
+    let s = s.trim();
+    let (num_part, mult) = match s.chars().last() {
+        Some('s') | Some('S') => (&s[..s.len() - 1], 1i64),
+        Some('m') | Some('M') => (&s[..s.len() - 1], 60),
+        Some('h') | Some('H') => (&s[..s.len() - 1], 3600),
+        Some('d') | Some('D') => (&s[..s.len() - 1], 86400),
+        Some(c) if c.is_ascii_digit() => (s, 1),
+        _ => return Err(AppError::BadRequest(format!("invalid span '{}'", s))),
+    };
+    let n: i64 = num_part
+        .parse()
+        .map_err(|_| AppError::BadRequest(format!("invalid span '{}'", s)))?;
+    if n <= 0 {
+        return Err(AppError::BadRequest("span must be > 0".into()));
+    }
+    n.checked_mul(mult)
+        .ok_or_else(|| AppError::BadRequest(format!("span too large: {}", s)))
+}
+
+/// GET /metrics/batch — fetch many resources in one round trip.
+pub async fn batch_history(
+    _claims: Claims,
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<BatchMetricsQuery>,
+) -> AppResult<Json<BatchMetricsResponse>> {
+    // Window: span XOR start/end. Both supplied is ambiguous → 400.
+    if q.span.is_some() && (q.start.is_some() || q.end.is_some()) {
+        return Err(AppError::BadRequest(
+            "use either `span` or `start`/`end`, not both".into(),
+        ));
+    }
+    let now = chrono::Utc::now().timestamp();
+    let (start, end) = if let Some(span_str) = q.span.as_deref() {
+        let span = parse_span(span_str)?;
+        (now - span, now)
+    } else {
+        let end = q.end.unwrap_or(now);
+        let start = q.start.unwrap_or(end - DEFAULT_SPAN_SECS);
+        (start, end)
+    };
+    if end < start {
+        return Err(AppError::BadRequest("end must be >= start".into()));
+    }
+
+    let resolution = match q.resolution.as_deref() {
+        Some(r) if KNOWN_RESOLUTIONS.contains(&r) => r.to_string(),
+        Some(other) => {
+            return Err(AppError::BadRequest(format!(
+                "unknown resolution '{}'; expected one of {:?}",
+                other, KNOWN_RESOLUTIONS
+            )));
+        }
+        None => pick_resolution(end - start).to_string(),
+    };
+    let limit = q.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
+
+    // Validate `resources`: non-empty, <= cap, no dupes, all whitelisted.
+    // Order preserved so `series` mirrors the request — easier to debug.
+    let requested: Vec<&str> = q
+        .resources
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if requested.is_empty() {
+        return Err(AppError::BadRequest("`resources` must not be empty".into()));
+    }
+    if requested.len() > MAX_BATCH_RESOURCES {
+        return Err(AppError::BadRequest(format!(
+            "too many resources (max {})",
+            MAX_BATCH_RESOURCES
+        )));
+    }
+    for (i, r) in requested.iter().enumerate() {
+        if !BATCH_RESOURCES.contains(r) {
+            return Err(AppError::BadRequest(format!(
+                "unknown resource '{}'; expected one of {:?}",
+                r, BATCH_RESOURCES
+            )));
+        }
+        if requested[..i].contains(r) {
+            return Err(AppError::BadRequest(format!("duplicate resource '{}'", r)));
+        }
+    }
+
+    // Run per-resource reads in parallel. Cores has no rollup so it
+    // ignores `resolution` — repo handles that.
+    let repo = MetricsRepository::new(state.db.clone());
+    let mut futs: Vec<futures_util::future::BoxFuture<'_, AppResult<BatchSeries>>> =
+        Vec::with_capacity(requested.len());
+    for r in &requested {
+        let res = resolution.clone();
+        let repo = &repo;
+        futs.push(match *r {
+            "cpu" => Box::pin(async move {
+                let rows = repo.read_cpu(&res, start, end, limit).await?;
+                Ok(BatchSeries::Cpu {
+                    points: rows
+                        .into_iter()
+                        .map(
+                            |(ts, usage, l1, l5, l15, steal, iowait, guest, ctxt, forks)| {
+                                CpuPoint {
+                                    timestamp: ts,
+                                    usage_percent: usage,
+                                    load_1m: l1,
+                                    load_5m: l5,
+                                    load_15m: l15,
+                                    steal_percent: steal,
+                                    iowait_percent: iowait,
+                                    guest_percent: guest,
+                                    context_switches_per_sec: ctxt,
+                                    process_forks_per_sec: forks,
+                                }
+                            },
+                        )
+                        .collect(),
+                })
+            }),
+            "cpu_cores" => Box::pin(async move {
+                let rows = repo.read_cpu_cores(start, end, limit).await?;
+                Ok(BatchSeries::CpuCores {
+                    points: rows
+                        .into_iter()
+                        .map(|(ts, idx, usage, freq)| CpuCorePoint {
+                            timestamp: ts,
+                            core_index: idx,
+                            usage_percent: usage,
+                            freq_mhz: freq,
+                        })
+                        .collect(),
+                })
+            }),
+            "memory" => Box::pin(async move {
+                let rows = repo.read_memory(&res, start, end, limit).await?;
+                Ok(BatchSeries::Memory {
+                    points: rows
+                        .into_iter()
+                        .map(
+                            |(ts, used, avail, cached, swap, pf_min, pf_maj, sw_in, sw_out)| {
+                                MemoryPoint {
+                                    timestamp: ts,
+                                    used_bytes: used,
+                                    available_bytes: avail,
+                                    cached_bytes: cached,
+                                    swap_used_bytes: swap,
+                                    page_faults_minor_per_sec: pf_min,
+                                    page_faults_major_per_sec: pf_maj,
+                                    swap_in_pages_per_sec: sw_in,
+                                    swap_out_pages_per_sec: sw_out,
+                                }
+                            },
+                        )
+                        .collect(),
+                })
+            }),
+            "disk" => Box::pin(async move {
+                let rows = repo.read_disk(&res, start, end, limit).await?;
+                Ok(BatchSeries::Disk {
+                    points: rows
+                        .into_iter()
+                        .map(|(ts, mp, used, avail, rbps, wbps, inode)| DiskPoint {
+                            timestamp: ts,
+                            mount_point: mp,
+                            used_bytes: used,
+                            available_bytes: avail,
+                            read_bytes_per_sec: rbps,
+                            write_bytes_per_sec: wbps,
+                            inode_used_percent: inode,
+                        })
+                        .collect(),
+                })
+            }),
+            "network" => Box::pin(async move {
+                let rows = repo.read_network(&res, start, end, limit).await?;
+                Ok(BatchSeries::Network {
+                    points: rows
+                        .into_iter()
+                        .map(|(ts, iface, rx, tx, rxp, txp, ein, eout)| NetworkPoint {
+                            timestamp: ts,
+                            interface_name: iface,
+                            rx_bytes_per_sec: rx,
+                            tx_bytes_per_sec: tx,
+                            rx_packets_per_sec: rxp,
+                            tx_packets_per_sec: txp,
+                            errors_in_per_sec: ein,
+                            errors_out_per_sec: eout,
+                        })
+                        .collect(),
+                })
+            }),
+            "components" => Box::pin(async move {
+                let rows = repo.read_components(&res, start, end, limit).await?;
+                Ok(BatchSeries::Components {
+                    points: rows
+                        .into_iter()
+                        .map(|(ts, label, temp, max, crit)| ComponentPoint {
+                            timestamp: ts,
+                            label,
+                            temperature_c: temp,
+                            max_c: max,
+                            critical_c: crit,
+                        })
+                        .collect(),
+                })
+            }),
+            // Whitelist already checked above.
+            other => unreachable!("unvalidated resource slipped through: {}", other),
+        });
+    }
+
+    let series = futures_util::future::try_join_all(futs).await?;
+    Ok(Json(BatchMetricsResponse {
+        start,
+        end,
+        resolution,
+        series,
+    }))
 }
