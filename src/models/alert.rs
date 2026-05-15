@@ -90,6 +90,10 @@ pub struct AlertRule {
     pub for_duration_secs: i64,
     pub eval_interval_secs: i64,
     pub cooldown_secs: i64,
+    /// When set, suppresses Fired notification fanouts until `now >= silenced_until`.
+    /// State transitions and event history continue. Resolved notifications are
+    /// never gated by silence.
+    pub silenced_until: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }

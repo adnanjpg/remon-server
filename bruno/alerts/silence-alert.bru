@@ -1,0 +1,49 @@
+meta {
+  name: Silence Alert Rule
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{baseUrl}}/alerts/{{alert_id}}/silence
+  body: json
+  auth: bearer
+}
+
+body:json {
+  {
+    "duration_secs": 7200
+  }
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Temporarily mute Fired notifications for one rule. The evaluator keeps
+  running: state transitions still happen, fired/resolved rows still get
+  written to alert_events (with `notified: false` while silenced), and
+  Resolved push notifications still go through — recovery is never
+  silenced. Channel-agnostic: gates FCM, WebPush, and any other channel
+  at the same point.
+
+  Body shape:
+    duration_secs — required, seconds from now. Range: 1..2592000 (30 days).
+
+  Versus disable (`PATCH /alerts/{id}` with `enabled: false`): silence
+  keeps the rule evaluating and writing history; disable stops it
+  entirely. Use silence for maintenance windows and known-temporary
+  noise; use disable for "stop checking this for now."
+
+  Versus cooldown (`cooldown_secs`): cooldown is post-fire backoff and
+  doesn't suppress the first fire; silence is operator-initiated and
+  blocks all fires within the window.
+
+  Response: 200 OK with the updated AlertRuleDto (echo includes the new
+  `silenced_until` unix timestamp).
+
+  Errors:
+    400 BAD_REQUEST — duration out of range
+    404 NOT_FOUND   — no such rule
+}

@@ -25,7 +25,7 @@ use crate::routes::dtos::alerts::{
     AlertEventDto, AlertRuleDto, AlertStateDto, AlertsSchemaResponse, ComparatorSchemaDto,
     CreateAlertRuleRequest, LabelSchemaDto, LabelSourceDto, ListAlertEventsResponse,
     ListAlertRulesResponse, ListAlertStateResponse, MetricSchemaDto, NamespaceSchemaDto,
-    UpdateAlertRuleRequest, state_dto_from,
+    SilenceAlertRequest, UpdateAlertRuleRequest, state_dto_from,
 };
 use crate::routes::extractors::Claims;
 use crate::services::alerting::{expression, resolver};
@@ -43,6 +43,13 @@ const MIN_EVAL_INTERVAL: i64 = 3;
 const MAX_EVAL_INTERVAL: i64 = 3600;
 const MAX_FOR_DURATION: i64 = 86_400; // 24h
 const MAX_COOLDOWN: i64 = 86_400;
+
+/// Smallest meaningful silence window — anything shorter is almost
+/// certainly a client bug. Server treats negatives and zero as 400.
+const MIN_SILENCE_DURATION: i64 = 1;
+/// 30-day ceiling. Guards against an accidentally-permanent silence;
+/// operators who truly want "never alert" should `enabled=false` instead.
+const MAX_SILENCE_DURATION: i64 = 30 * 86_400;
 
 #[derive(Debug, Deserialize)]
 pub struct EventsQuery {
@@ -135,6 +142,7 @@ pub async fn create_alert(
         for_duration_secs: req.for_duration_secs,
         eval_interval_secs: req.eval_interval_secs,
         cooldown_secs: req.cooldown_secs,
+        silenced_until: None,
     };
     let id = repo.insert(&upsert).await?;
     let stored = repo
@@ -182,6 +190,9 @@ pub async fn update_alert(
     if let Some(v) = req.cooldown_secs {
         current.cooldown_secs = v;
     }
+    if let Some(v) = req.silenced_until {
+        current.silenced_until = v;
+    }
 
     validate(
         &state,
@@ -201,6 +212,7 @@ pub async fn update_alert(
         for_duration_secs: current.for_duration_secs,
         eval_interval_secs: current.eval_interval_secs,
         cooldown_secs: current.cooldown_secs,
+        silenced_until: current.silenced_until,
     };
     let updated = repo.update(id, &merged).await?;
     if !updated {
@@ -221,6 +233,52 @@ pub async fn delete_alert(
     let repo = AlertRepository::new(state.db.clone());
     let removed = repo.delete(id).await?;
     if !removed {
+        return Err(AppError::NotFound(format!("Alert rule {}", id)));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ===== Silence =====
+
+/// Temporarily suppress Fired notifications for one rule. The evaluator
+/// keeps running — state transitions and event history continue, and
+/// Resolved notifications still go through.
+pub async fn silence_alert(
+    _claims: Claims,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(req): Json<SilenceAlertRequest>,
+) -> AppResult<Json<AlertRuleDto>> {
+    if !(MIN_SILENCE_DURATION..=MAX_SILENCE_DURATION).contains(&req.duration_secs) {
+        return Err(AppError::BadRequest(format!(
+            "duration_secs {} out of range [{}..{}]",
+            req.duration_secs, MIN_SILENCE_DURATION, MAX_SILENCE_DURATION
+        )));
+    }
+    let until = chrono::Utc::now().timestamp() + req.duration_secs;
+
+    let repo = AlertRepository::new(state.db.clone());
+    let updated = repo.set_silence(id, Some(until)).await?;
+    if !updated {
+        return Err(AppError::NotFound(format!("Alert rule {}", id)));
+    }
+    let stored = repo
+        .get(id)
+        .await?
+        .ok_or_else(|| AppError::Internal("silenced rule not readable".into()))?;
+    Ok(Json(stored.into()))
+}
+
+/// Lift any active silence on a rule. Idempotent — returns 204 even if
+/// the rule wasn't silenced.
+pub async fn unsilence_alert(
+    _claims: Claims,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> AppResult<StatusCode> {
+    let repo = AlertRepository::new(state.db.clone());
+    let updated = repo.set_silence(id, None).await?;
+    if !updated {
         return Err(AppError::NotFound(format!("Alert rule {}", id)));
     }
     Ok(StatusCode::NO_CONTENT)

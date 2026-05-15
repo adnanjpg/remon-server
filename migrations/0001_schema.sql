@@ -312,6 +312,11 @@ CREATE TABLE alert_rules (
     eval_interval_secs INTEGER NOT NULL DEFAULT 10
                          CHECK (eval_interval_secs >= 3 AND eval_interval_secs <= 3600),
     cooldown_secs      INTEGER NOT NULL DEFAULT 900,
+    -- Unix epoch seconds; NULL = not silenced. Evaluator gates Fired
+    -- notifications when `now < silenced_until`; state transitions and
+    -- event history continue regardless. Resolved notifications are NOT
+    -- silenced — recovery is always delivered.
+    silenced_until     INTEGER,
     created_at         INTEGER NOT NULL DEFAULT (unixepoch()),
     updated_at         INTEGER NOT NULL DEFAULT (unixepoch())
 );

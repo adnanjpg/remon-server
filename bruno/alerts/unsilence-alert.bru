@@ -1,0 +1,25 @@
+meta {
+  name: Unsilence Alert Rule
+  type: http
+  seq: 11
+}
+
+delete {
+  url: {{baseUrl}}/alerts/{{alert_id}}/silence
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  Lift any active silence on a rule. The next Pending → Firing transition
+  will notify again (subject to cooldown).
+
+  Idempotent: returns 204 even if the rule wasn't silenced.
+
+  Errors:
+    404 NOT_FOUND — no such rule
+}

@@ -177,10 +177,25 @@ async fn evaluate_once(
         // to prevent re-firing on a transient DB error.
         let (event_type, notify_intent) = match (prior_state, next.state) {
             (AlertLifecycle::Pending, AlertLifecycle::Firing) => {
+                let silenced = rule
+                    .silenced_until
+                    .map(|until| now < until)
+                    .unwrap_or(false);
                 let cooled_in = prior_last_notified
                     .map(|last| now - last < rule.cooldown_secs)
                     .unwrap_or(false);
-                if cooled_in {
+                if silenced {
+                    // Silence-suppressed: leave `last_notified_at` untouched so the
+                    // next genuine fire after the window ends isn't also gated by
+                    // cooldown. Event row still gets recorded with notified=false.
+                    debug!(
+                        "Alert rule '{}' label={} fire suppressed by silence (until {})",
+                        rule.name,
+                        sample.label_set,
+                        rule.silenced_until.unwrap_or(0)
+                    );
+                    (Some(AlertEventType::Fired), false)
+                } else if cooled_in {
                     debug!(
                         "Alert rule '{}' label={} fire suppressed by cooldown",
                         rule.name, sample.label_set
@@ -192,7 +207,7 @@ async fn evaluate_once(
             }
             (AlertLifecycle::Firing, AlertLifecycle::Ok) => {
                 // Resolves always notify — recovery is more useful than
-                // spam-protected here.
+                // spam-protected here, and silence does NOT gate recovery.
                 (Some(AlertEventType::Resolved), true)
             }
             _ => (None, false),

@@ -30,6 +30,7 @@ pub struct UpsertAlertRule {
     pub for_duration_secs: i64,
     pub eval_interval_secs: i64,
     pub cooldown_secs: i64,
+    pub silenced_until: Option<i64>,
 }
 
 impl AlertRepository {
@@ -50,13 +51,14 @@ impl AlertRepository {
             i64,
             i64,
             i64,
+            Option<i64>,
             i64,
             i64,
         )> = sqlx::query_as(
             r#"
             SELECT id, name, description, enabled, expression, severity,
                    for_duration_secs, eval_interval_secs, cooldown_secs,
-                   created_at, updated_at
+                   silenced_until, created_at, updated_at
               FROM alert_rules
              ORDER BY id ASC
             "#,
@@ -77,13 +79,14 @@ impl AlertRepository {
             i64,
             i64,
             i64,
+            Option<i64>,
             i64,
             i64,
         )> = sqlx::query_as(
             r#"
             SELECT id, name, description, enabled, expression, severity,
                    for_duration_secs, eval_interval_secs, cooldown_secs,
-                   created_at, updated_at
+                   silenced_until, created_at, updated_at
               FROM alert_rules
              WHERE enabled = 1
              ORDER BY id ASC
@@ -105,13 +108,14 @@ impl AlertRepository {
             i64,
             i64,
             i64,
+            Option<i64>,
             i64,
             i64,
         )> = sqlx::query_as(
             r#"
             SELECT id, name, description, enabled, expression, severity,
                    for_duration_secs, eval_interval_secs, cooldown_secs,
-                   created_at, updated_at
+                   silenced_until, created_at, updated_at
               FROM alert_rules
              WHERE id = ?
             "#,
@@ -128,8 +132,8 @@ impl AlertRepository {
             INSERT INTO alert_rules
                 (name, description, enabled, expression, severity,
                  for_duration_secs, eval_interval_secs, cooldown_secs,
-                 created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
+                 silenced_until, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
             "#,
         )
         .bind(&rule.name)
@@ -140,6 +144,7 @@ impl AlertRepository {
         .bind(rule.for_duration_secs)
         .bind(rule.eval_interval_secs)
         .bind(rule.cooldown_secs)
+        .bind(rule.silenced_until)
         .execute(&self.pool)
         .await?;
         Ok(r.last_insert_rowid())
@@ -157,6 +162,7 @@ impl AlertRepository {
                 for_duration_secs  = ?,
                 eval_interval_secs = ?,
                 cooldown_secs      = ?,
+                silenced_until     = ?,
                 updated_at         = unixepoch()
               WHERE id = ?
             "#,
@@ -169,6 +175,26 @@ impl AlertRepository {
         .bind(rule.for_duration_secs)
         .bind(rule.eval_interval_secs)
         .bind(rule.cooldown_secs)
+        .bind(rule.silenced_until)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    /// Targeted silence write. Used by `POST/DELETE /alerts/{id}/silence`
+    /// so a silence toggle doesn't have to round-trip the full rule body
+    /// and can't accidentally stomp a concurrent PATCH.
+    pub async fn set_silence(&self, id: i64, until: Option<i64>) -> AppResult<bool> {
+        let r = sqlx::query(
+            r#"
+            UPDATE alert_rules
+               SET silenced_until = ?,
+                   updated_at     = unixepoch()
+             WHERE id = ?
+            "#,
+        )
+        .bind(until)
         .bind(id)
         .execute(&self.pool)
         .await?;
@@ -393,6 +419,7 @@ fn decode_rule(
         i64,
         i64,
         i64,
+        Option<i64>,
         i64,
         i64,
     ),
@@ -407,6 +434,7 @@ fn decode_rule(
         for_duration_secs,
         eval_interval_secs,
         cooldown_secs,
+        silenced_until,
         created_at,
         updated_at,
     ) = row;
@@ -420,6 +448,7 @@ fn decode_rule(
         for_duration_secs,
         eval_interval_secs,
         cooldown_secs,
+        silenced_until,
         created_at,
         updated_at,
     })

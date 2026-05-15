@@ -28,7 +28,14 @@ docs {
 
   Body fields (all optional):
     name, description, enabled, expression, severity,
-    for_duration_secs, eval_interval_secs, cooldown_secs
+    for_duration_secs, eval_interval_secs, cooldown_secs,
+    silenced_until
+
+  `silenced_until` is an absolute unix-epoch timestamp (or null to clear).
+  Prefer `POST/DELETE /alerts/{id}/silence` when the intent is just to
+  silence the rule — those endpoints take a relative `duration_secs`,
+  skip expression revalidation, and won't accidentally stomp a concurrent
+  full-rule edit.
 
   Server re-runs full validation against the merged result, so an
   invalid expression or out-of-range duration after the merge fails

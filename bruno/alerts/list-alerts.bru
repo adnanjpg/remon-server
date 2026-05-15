@@ -20,7 +20,11 @@ docs {
   Each rule:
     { id, name, description, enabled, expression, severity,
       for_duration_secs, eval_interval_secs, cooldown_secs,
-      created_at, updated_at }
+      silenced_until, created_at, updated_at }
+
+  `silenced_until` is a unix-epoch timestamp; `null` (or past) means
+  notifications are NOT silenced. See `/alerts/{id}/silence` for the
+  dedicated silence endpoint.
 
   Expression grammar:
     `<ns>.<field>{<labels>} <cmp> <number>`

@@ -19,6 +19,7 @@ pub struct AlertRuleDto {
     pub for_duration_secs: i64,
     pub eval_interval_secs: i64,
     pub cooldown_secs: i64,
+    pub silenced_until: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -35,6 +36,7 @@ impl From<AlertRule> for AlertRuleDto {
             for_duration_secs: r.for_duration_secs,
             eval_interval_secs: r.eval_interval_secs,
             cooldown_secs: r.cooldown_secs,
+            silenced_until: r.silenced_until,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
@@ -73,6 +75,18 @@ pub struct UpdateAlertRuleRequest {
     pub for_duration_secs: Option<i64>,
     pub eval_interval_secs: Option<i64>,
     pub cooldown_secs: Option<i64>,
+    /// Absolute unix-epoch timestamp. `Some(None)` clears the silence.
+    /// Prefer the dedicated `POST/DELETE /alerts/{id}/silence` endpoints
+    /// when the intent is just "silence this rule" — that path doesn't
+    /// re-validate the entire expression.
+    pub silenced_until: Option<Option<i64>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SilenceAlertRequest {
+    /// How long the silence should last, from now. Validated server-side
+    /// against `MIN_SILENCE_DURATION` / `MAX_SILENCE_DURATION`.
+    pub duration_secs: i64,
 }
 
 fn default_true() -> bool {
