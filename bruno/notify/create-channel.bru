@@ -47,5 +47,12 @@ docs {
 
   min_severity: "warn" | "crit" — omit to receive all alerts.
 
+  Webhook SSRF policy: the URL is resolved at create-time. If it points
+  to a loopback / RFC1918 / link-local / ULA address (or a hostname
+  that resolves to one) the request is rejected with 400. To allow
+  internal targets, either flip `notifications.webhook.allow_private_targets`
+  in server config, or list trusted hostnames under
+  `notifications.webhook.allowed_private_hosts`. See CONFIG.md.
+
   201 Created → body is the channel object; id saved to channel_id env var.
 }

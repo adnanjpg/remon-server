@@ -1,6 +1,7 @@
 pub mod channel;
 pub mod channels;
 pub mod types;
+pub mod url_policy;
 
 pub use types::{Notification, NotificationEvent, Severity};
 
@@ -13,6 +14,7 @@ use tokio::sync::RwLock;
 
 use crate::config::NotificationsConfig;
 use crate::notify::channel::NotificationChannel;
+use crate::notify::url_policy::{WebhookPolicy, check_url};
 use crate::services::webpush::VapidKeyPair;
 use crate::storage::repositories::NotificationChannelRepository;
 
@@ -70,9 +72,29 @@ impl NotificationManager {
         let repo = NotificationChannelRepository::new(self.pool.clone());
         let rows = repo.list_enabled().await?;
 
+        // One policy per reload pass — cheap to clone the Arc into each
+        // webhook channel.
+        let webhook_policy = Arc::new(WebhookPolicy::from_credentials(&self.credentials.webhook));
+
         let mut slots = Vec::new();
         for row in rows {
             let config: serde_json::Value = serde_json::from_str(&row.config).unwrap_or_default();
+
+            // Boot-time audit: surface webhook channels that the current
+            // policy would block, before the first alert fires. The channel
+            // is still skipped (not loaded) — operator must fix config or
+            // delete the channel.
+            if row.r#type == "webhook" {
+                let url = config["url"].as_str().unwrap_or("");
+                if let Err(e) = check_url(url, &webhook_policy).await {
+                    warn!(
+                        "Skipping webhook channel '{}': {} — \
+                         see CONFIG.md [notifications.webhook] for allow-list options",
+                        row.name, e
+                    );
+                    continue;
+                }
+            }
 
             match channels::build_channel(
                 &row.r#type,
@@ -81,6 +103,7 @@ impl NotificationManager {
                 self.http.clone(),
                 self.pool.clone(),
                 &self.vapid,
+                &webhook_policy,
             ) {
                 Ok(ch) => slots.push(ChannelSlot {
                     id: row.id,
@@ -133,6 +156,13 @@ impl NotificationManager {
             total += res.unwrap_or(0);
         }
         total
+    }
+
+    /// Snapshot of the current webhook SSRF policy, derived from server
+    /// config. Used by REST create / update handlers to fail-fast at 400
+    /// before persisting a channel row that would be blocked anyway.
+    pub fn webhook_policy(&self) -> WebhookPolicy {
+        WebhookPolicy::from_credentials(&self.credentials.webhook)
     }
 
     /// Send a test notification to a single channel by ID.

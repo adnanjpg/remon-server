@@ -12,6 +12,7 @@ use sqlx::SqlitePool;
 
 use crate::config::NotificationsConfig;
 use crate::notify::channel::{ChannelError, NotificationChannel};
+use crate::notify::url_policy::WebhookPolicy;
 use crate::services::webpush::VapidKeyPair;
 
 use fcm::FcmChannel;
@@ -22,9 +23,12 @@ use webpush::WebPushChannel;
 
 /// Build a channel instance from a DB row.
 ///
-/// `channel_type` — one of "fcm" | "telegram" | "ntfy" | "webhook".
-/// `config`       — parsed JSON from `notification_channels.config`.
-/// `credentials`  — server-side secrets loaded from config files / env vars.
+/// `channel_type`   — one of "fcm" | "telegram" | "ntfy" | "webhook" | "web-push".
+/// `config`         — parsed JSON from `notification_channels.config`.
+/// `credentials`    — server-side secrets loaded from config files / env vars.
+/// `webhook_policy` — SSRF / private-range gate applied to webhook URLs at
+///                    send time. Shared across all webhook channels in one
+///                    reload pass.
 ///
 /// Returns `Err(ChannelError::Config)` if required fields are missing or
 /// the credential path can't be read. The manager logs the error and skips
@@ -36,6 +40,7 @@ pub fn build_channel(
     http: Client,
     pool: SqlitePool,
     vapid: &Arc<VapidKeyPair>,
+    webhook_policy: &Arc<WebhookPolicy>,
 ) -> Result<Box<dyn NotificationChannel>, ChannelError> {
     match channel_type {
         "fcm" => {
@@ -90,7 +95,12 @@ pub fn build_channel(
             } else {
                 credentials.webhook.secret.clone()
             };
-            Ok(Box::new(WebhookChannel::new(url, secret, http)?))
+            Ok(Box::new(WebhookChannel::new(
+                url,
+                secret,
+                http,
+                Arc::clone(webhook_policy),
+            )?))
         }
 
         other => Err(ChannelError::Config(format!(

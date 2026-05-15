@@ -116,6 +116,18 @@ pub struct WebhookCredentials {
     /// Optional secret sent as `Authorization: Bearer <secret>`.
     #[serde(default)]
     pub secret: Option<String>,
+    /// SSRF policy master switch. When false (default) webhook URLs that
+    /// resolve to loopback, RFC1918, link-local, ULA, or other non-global
+    /// addresses are rejected at create-time and at send-time. Flip to
+    /// true only on isolated dev / homelab boxes.
+    #[serde(default)]
+    pub allow_private_targets: bool,
+    /// Hostname allow-list — webhook URLs whose host matches one of these
+    /// entries (case-insensitive exact match) bypass the private-address
+    /// check. Use this for narrowly-scoped exceptions in production
+    /// (e.g. "mattermost.internal") instead of the master switch.
+    #[serde(default)]
+    pub allowed_private_hosts: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

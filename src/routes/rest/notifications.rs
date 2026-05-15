@@ -6,6 +6,7 @@ use axum::{
 use std::sync::Arc;
 
 use crate::error::{AppError, AppResult};
+use crate::notify::url_policy;
 use crate::routes::dtos::notifications::{
     ChannelResponse, CreateChannelRequest, ListChannelsResponse, TestChannelResponse,
     UpdateChannelRequest,
@@ -13,6 +14,28 @@ use crate::routes::dtos::notifications::{
 use crate::routes::extractors::Claims;
 use crate::state::AppState;
 use crate::storage::repositories::NotificationChannelRepository;
+
+/// Webhook-specific config validation. Run before DB insert / update so a
+/// channel that would be blocked at send time never gets persisted.
+async fn validate_webhook_config(
+    state: &AppState,
+    channel_type: &str,
+    config: &serde_json::Value,
+) -> AppResult<()> {
+    if channel_type != "webhook" {
+        return Ok(());
+    }
+    let url = config["url"].as_str().unwrap_or("");
+    if url.is_empty() {
+        return Err(AppError::BadRequest(
+            "webhook channel config requires non-empty 'url'".to_string(),
+        ));
+    }
+    let policy = state.notify.webhook_policy();
+    url_policy::check_url(url, &policy)
+        .await
+        .map_err(AppError::BadRequest)
+}
 
 fn to_response(row: crate::storage::repositories::NotificationChannelRow) -> ChannelResponse {
     ChannelResponse {
@@ -44,6 +67,7 @@ pub async fn create_channel(
     Json(body): Json<CreateChannelRequest>,
 ) -> AppResult<(StatusCode, Json<ChannelResponse>)> {
     body.validate().map_err(AppError::BadRequest)?;
+    validate_webhook_config(&state, &body.r#type, &body.config).await?;
 
     let config_str =
         serde_json::to_string(&body.config).map_err(|e| AppError::BadRequest(e.to_string()))?;
@@ -76,10 +100,18 @@ pub async fn update_channel(
 ) -> AppResult<Json<ChannelResponse>> {
     body.validate().map_err(AppError::BadRequest)?;
 
+    let repo = NotificationChannelRepository::new(state.db.clone());
+    let existing = repo
+        .get(id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("notification channel".to_string()))?;
+
+    // Type is immutable on update — re-validate against the stored type.
+    validate_webhook_config(&state, &existing.r#type, &body.config).await?;
+
     let config_str =
         serde_json::to_string(&body.config).map_err(|e| AppError::BadRequest(e.to_string()))?;
 
-    let repo = NotificationChannelRepository::new(state.db.clone());
     let found = repo
         .update(
             id,
