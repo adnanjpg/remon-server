@@ -35,7 +35,7 @@ Server-side credentials. Channel targets (chat_id, topic, URL) are managed via `
 - `[notifications.fcm]` — `service_account_path`
 - `[notifications.telegram]` — `bot_token`
 - `[notifications.ntfy]` — `token` (optional, for auth'd servers)
-- `[notifications.webhook]` — `secret` (optional, sent as `Authorization: Bearer`)
+- `[notifications.webhook]` — `secret` (optional, sent as `Authorization: Bearer`); SSRF policy: `allow_private_targets` (default `false` — webhook URLs that resolve to loopback / RFC1918 / link-local / ULA ranges are rejected at create-time and send-time), `allowed_private_hosts` (default `[]` — case-insensitive hostname exceptions, no CIDR). Threat model: an operator account with channel-CRUD permission could otherwise use the server's network position to probe internal services or exfiltrate cloud metadata (e.g. `169.254.169.254`). For dev/homelab convenience set `allow_private_targets = true`; for production prefer the per-host allow-list. Multi-entry allow-list is best set via TOML (the env var override accepts a single value).
 
 ### `[docker]`
 - `socket_path` — custom socket (empty = use `DOCKER_HOST` env or platform default). Useful for Podman: `/run/podman/podman.sock`

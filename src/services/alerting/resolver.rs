@@ -448,7 +448,9 @@ async fn resolve_service(
     let _ = check_field(metric, SERVICE_FIELDS)?;
 
     let unit = metric.labels.get("unit").ok_or_else(|| {
-        ResolveError::msg("namespace 'service' requires a `unit` label, e.g. service.up{unit=\"nginx.service\"}")
+        ResolveError::msg(
+            "namespace 'service' requires a `unit` label, e.g. service.up{unit=\"nginx.service\"}",
+        )
     })?;
     if metric.labels.len() > 1 {
         return Err(ResolveError::msg(
