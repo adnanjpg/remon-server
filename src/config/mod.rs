@@ -136,12 +136,9 @@ pub struct DockerConfig {
     /// Master kill-switch for the WebSocket /docker/.../exec endpoint.
     /// When false the upgrade refuses with 503 — handy for production where
     /// exec is operationally too risky regardless of token possession.
-    #[serde(default = "default_true")]
+    /// Defaults to false; opt-in explicitly in config.toml to enable.
+    #[serde(default)]
     pub exec_enabled: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 /// CORS policy.
