@@ -181,18 +181,20 @@ pub async fn disk_history(
 
     let points: Vec<DiskPoint> = rows
         .into_iter()
-        .map(|(ts, mp, used, avail, rbps, wbps, inode, riops, wiops, util)| DiskPoint {
-            timestamp: ts,
-            mount_point: mp,
-            used_bytes: used,
-            available_bytes: avail,
-            read_bytes_per_sec: rbps,
-            write_bytes_per_sec: wbps,
-            inode_used_percent: inode,
-            read_iops: riops,
-            write_iops: wiops,
-            io_util_percent: util,
-        })
+        .map(
+            |(ts, mp, used, avail, rbps, wbps, inode, riops, wiops, util)| DiskPoint {
+                timestamp: ts,
+                mount_point: mp,
+                used_bytes: used,
+                available_bytes: avail,
+                read_bytes_per_sec: rbps,
+                write_bytes_per_sec: wbps,
+                inode_used_percent: inode,
+                read_iops: riops,
+                write_iops: wiops,
+                io_util_percent: util,
+            },
+        )
         .collect();
 
     Ok(Json(DiskHistoryResponse { resolution, points }))
@@ -422,7 +424,20 @@ pub async fn batch_history(
                     points: rows
                         .into_iter()
                         .map(
-                            |(ts, usage, l1, l5, l15, steal, iowait, guest, user, system, ctxt, forks)| {
+                            |(
+                                ts,
+                                usage,
+                                l1,
+                                l5,
+                                l15,
+                                steal,
+                                iowait,
+                                guest,
+                                user,
+                                system,
+                                ctxt,
+                                forks,
+                            )| {
                                 CpuPoint {
                                     timestamp: ts,
                                     usage_percent: usage,
@@ -484,18 +499,22 @@ pub async fn batch_history(
                 Ok(BatchSeries::Disk {
                     points: rows
                         .into_iter()
-                        .map(|(ts, mp, used, avail, rbps, wbps, inode, riops, wiops, util)| DiskPoint {
-                            timestamp: ts,
-                            mount_point: mp,
-                            used_bytes: used,
-                            available_bytes: avail,
-                            read_bytes_per_sec: rbps,
-                            write_bytes_per_sec: wbps,
-                            inode_used_percent: inode,
-                            read_iops: riops,
-                            write_iops: wiops,
-                            io_util_percent: util,
-                        })
+                        .map(
+                            |(ts, mp, used, avail, rbps, wbps, inode, riops, wiops, util)| {
+                                DiskPoint {
+                                    timestamp: ts,
+                                    mount_point: mp,
+                                    used_bytes: used,
+                                    available_bytes: avail,
+                                    read_bytes_per_sec: rbps,
+                                    write_bytes_per_sec: wbps,
+                                    inode_used_percent: inode,
+                                    read_iops: riops,
+                                    write_iops: wiops,
+                                    io_util_percent: util,
+                                }
+                            },
+                        )
                         .collect(),
                 })
             }),

@@ -13,7 +13,7 @@ pub fn get_description() -> SystemDescription {
         os: System::name().unwrap_or_else(|| "unknown".into()),
         os_version: System::os_version().unwrap_or_else(|| "unknown".into()),
         kernel: System::kernel_version().unwrap_or_else(|| "unknown".into()),
-        uptime_secs: System::uptime()
+        uptime_secs: System::uptime(),
     }
 }
 

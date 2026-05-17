@@ -268,7 +268,9 @@ async fn enrich_linux(
                     if is_partition {
                         continue;
                     }
-                    if let Some(rates) = system_linux::compute_disk_io_rates(prev_entry, cur_entry, interval_secs) {
+                    if let Some(rates) =
+                        system_linux::compute_disk_io_rates(prev_entry, cur_entry, interval_secs)
+                    {
                         // Assign to first unset disk entry as a best-effort match.
                         // On single-disk systems this is always correct; on multi-disk
                         // systems with mount-to-device ambiguity it may misattribute.

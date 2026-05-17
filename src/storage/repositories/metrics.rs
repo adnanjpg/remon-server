@@ -465,14 +465,41 @@ impl MetricsRepository {
         start: i64,
         end: i64,
         limit: u32,
-    ) -> AppResult<Vec<(i64, String, i64, i64, i64, i64, Option<f64>, Option<i64>, Option<i64>, Option<f64>)>> {
+    ) -> AppResult<
+        Vec<(
+            i64,
+            String,
+            i64,
+            i64,
+            i64,
+            i64,
+            Option<f64>,
+            Option<i64>,
+            Option<i64>,
+            Option<f64>,
+        )>,
+    > {
         // Disk has N rows per timestamp (one per mount). A flat
         // `LIMIT N` would chop off the most recent timestamps once
         // N × mount_count exceeds the limit, leaving the client with
         // an incomplete tail and a visible gap in the sparkline.
         // Pick the most recent `limit` distinct timestamps first, then
         // join all mount rows for them.
-        let rows = sqlx::query_as::<_, (i64, String, i64, i64, i64, i64, Option<f64>, Option<i64>, Option<i64>, Option<f64>)>(
+        let rows = sqlx::query_as::<
+            _,
+            (
+                i64,
+                String,
+                i64,
+                i64,
+                i64,
+                i64,
+                Option<f64>,
+                Option<i64>,
+                Option<i64>,
+                Option<f64>,
+            ),
+        >(
             r#"
             SELECT timestamp, mount_point, used_bytes, available_bytes,
                    read_bytes_per_sec, write_bytes_per_sec, inode_used_percent,

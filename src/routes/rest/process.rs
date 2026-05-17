@@ -92,7 +92,11 @@ pub async fn get_processes(
         "memory" => processes.sort_unstable_by(|a, b| b.memory_bytes.cmp(&a.memory_bytes)),
         "pid" => processes.sort_unstable_by_key(|p| p.pid),
         "name" => processes.sort_unstable_by(|a, b| a.name.cmp(&b.name)),
-        _ => processes.sort_unstable_by(|a, b| b.cpu_percent.partial_cmp(&a.cpu_percent).unwrap_or(std::cmp::Ordering::Equal)),
+        _ => processes.sort_unstable_by(|a, b| {
+            b.cpu_percent
+                .partial_cmp(&a.cpu_percent)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
     }
 
     let filtered_total = processes.len();

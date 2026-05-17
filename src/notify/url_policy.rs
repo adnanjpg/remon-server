@@ -131,7 +131,7 @@ fn is_blocked_ipv4(ip: &Ipv4Addr) -> bool {
         || ip.is_unspecified()    // 0.0.0.0
         || ip.is_broadcast()      // 255.255.255.255
         || ip.is_multicast()      // 224/4
-        || ip.is_documentation()  // 192.0.2 / 198.51.100 / 203.0.113
+        || ip.is_documentation() // 192.0.2 / 198.51.100 / 203.0.113
 }
 
 fn is_blocked_ipv6(ip: &Ipv6Addr) -> bool {
@@ -254,11 +254,7 @@ mod tests {
         // if `metrics.lan` doesn't resolve in CI we accept it.
         assert!(check_url("http://metrics.lan/hook", &p).await.is_ok());
         // Case-insensitive.
-        assert!(
-            check_url("http://mattermost.internal/x", &p)
-                .await
-                .is_ok()
-        );
+        assert!(check_url("http://mattermost.internal/x", &p).await.is_ok());
         // Different host still rejected.
         assert!(check_url("http://10.0.0.5/x", &p).await.is_err());
     }

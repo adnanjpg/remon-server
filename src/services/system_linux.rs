@@ -193,7 +193,10 @@ pub fn compute_cpu_extras(prev: ProcStatSnapshot, cur: ProcStatSnapshot) -> Opti
         iowait_percent: pct(cur.iowait, prev.iowait),
         guest_percent: pct(cur.guest, prev.guest),
         user_percent: pct(cur.user + cur.nice, prev.user + prev.nice),
-        system_percent: pct(cur.system + cur.irq + cur.softirq, prev.system + prev.irq + prev.softirq),
+        system_percent: pct(
+            cur.system + cur.irq + cur.softirq,
+            prev.system + prev.irq + prev.softirq,
+        ),
     })
 }
 
@@ -225,7 +228,14 @@ pub fn read_diskstats() -> Option<std::collections::HashMap<String, DiskstatEntr
         let reads_completed: u64 = cols[3].parse().unwrap_or(0);
         let writes_completed: u64 = cols[7].parse().unwrap_or(0);
         let time_io_ms: u64 = cols[12].parse().unwrap_or(0); // weighted I/O time (ms)
-        map.insert(name, DiskstatEntry { reads_completed, writes_completed, time_io_ms });
+        map.insert(
+            name,
+            DiskstatEntry {
+                reads_completed,
+                writes_completed,
+                time_io_ms,
+            },
+        );
     }
     Some(map)
 }
