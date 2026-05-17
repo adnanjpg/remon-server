@@ -2,7 +2,6 @@
 name = "remon-server"
 version = "0.7.8"
 edition = "2024"
-rust-version = "1.87"
 
 [profile.release]
 opt-level = 3
