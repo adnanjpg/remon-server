@@ -15,7 +15,7 @@ auth:bearer {
 }
 
 docs {
-  Re-scan `configs/probes/*.yaml` on the server. Diffs the on-disk
+  Re-scan `probes/` on the server. Diffs the on-disk
   manifest set against the running registry, restarts probes whose
   manifest hash changed, aborts probes whose manifest disappeared,
   starts new ones, leaves unchanged ones alone.

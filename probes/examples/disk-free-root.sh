@@ -1,7 +1,7 @@
 #!/bin/sh
 # Inline-header probe: reports free space on `/`.
 #
-# Move/copy this file to configs/probes/disk-free-root.sh (drop the
+# Move/copy this file to probes/disk-free-root.sh (drop the
 # `examples/` parent), `chmod +x`, then either restart the server or
 # POST /admin/probes/reload.
 #
