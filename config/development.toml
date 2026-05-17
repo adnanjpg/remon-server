@@ -1,8 +1,5 @@
 # Development environment configuration
-# Overrides default.toml settings for local development
-
-[server]
-port = 8080
+# Overrides default.toml settings for local development.
 
 [logging]
 level = "debug"

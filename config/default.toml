@@ -1,117 +1,68 @@
-# Default configuration for remon-server
-# This file contains base settings that can be overridden by environment-specific configs
+# Default configuration for remon-server.
+# Override per-environment in config/development.toml or config/production.toml,
+# or at runtime via REMON__<SECTION>__<KEY> environment variables.
+# Set RUN_ENV=production to load config/production.toml on top of this file.
 
 [server]
 port = 8080
 host = "0.0.0.0"
-# Set to true ONLY when the server runs behind a reverse proxy that
-# overwrites or appends `X-Forwarded-For` on its own (Caddy with the
-# default `reverse_proxy` directive, nginx with
-# `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`, etc.).
-# When true the per-IP rate limiter and audit log read the forwarded
-# address; when false they use the TCP peer.
-# Leaving this false while behind a proxy is safe but collapses every
-# client into the proxy's IP. Setting it true while exposed directly is
-# *not* safe — any caller can spoof the header.
+# Set true only when behind a reverse proxy that sets X-Forwarded-For.
+# Leaving false while behind a proxy is safe but collapses all clients to
+# the proxy IP. Setting true while exposed directly allows header spoofing.
 trusted_proxy = false
 
 [database]
-# SQLite connection settings
 path = "./db/monitor.sqlite3"
 folder_path = "./db"
-# WAL allows multiple concurrent readers + one writer. 5 connections lets
-# HTTP handlers, SSE evaluators, and background tasks read in parallel
-# without queueing on a single pool slot. Writes still serialize per
-# SQLite's single-writer model, so going much higher buys little.
 max_connections = 5
 
 [auth]
-# JWT secret - should be overridden in production via environment variable
+# REQUIRED: change before running in production. Env: REMON__AUTH__JWT_SECRET
 jwt_secret = "d3f4ult"
-
-# Token TTLs — uncomment to override defaults
-# access_token_ttl_secs  = 3600      # 1 hour
-# refresh_token_ttl_secs = 2592000   # 30 days
-# pairing_code_ttl_secs  = 300       # 5 minutes
+access_token_ttl_secs = 3600    # 1 hour
+refresh_token_ttl_secs = 2592000 # 30 days
+pairing_code_ttl_secs = 300     # 5 minutes
 
 [monitoring]
-# Minimum log level to persist to database: "error", "warn", "info", "debug", "trace"
-log_insertion_level = "warn"
-# Application name used in logs
+log_insertion_level = "warn" # error | warn | info | debug | trace
 app_name = "remon"
 
 [logging]
-# Application logging configuration
-level = "info"
-format = "compact"
-
-# ── Notification channel credentials ────────────────────────────────────────
-# Sensitive values — override via environment variables in production:
-#   REMON__NOTIFICATIONS__FCM__SERVICE_ACCOUNT_PATH
-#   REMON__NOTIFICATIONS__TELEGRAM__BOT_TOKEN
-#   REMON__NOTIFICATIONS__NTFY__TOKEN
-#   REMON__NOTIFICATIONS__WEBHOOK__SECRET
-#
-# Channel targets (chat_id, topic, url) are managed via
-# POST /notifications/channels — never stored here.
+level = "info"   # error | warn | info | debug | trace
+format = "compact" # compact | pretty | json
 
 [notifications.fcm]
+# Env: REMON__NOTIFICATIONS__FCM__SERVICE_ACCOUNT_PATH
 service_account_path = ""
 
 [notifications.telegram]
+# Env: REMON__NOTIFICATIONS__TELEGRAM__BOT_TOKEN
 bot_token = ""
 
 [notifications.ntfy]
-# token = ""  # uncomment if your ntfy server requires auth
+# Env: REMON__NOTIFICATIONS__NTFY__TOKEN
+# token = ""
 
 [notifications.webhook]
-# secret = ""  # uncomment to send Authorization: Bearer <secret>
-
-# SSRF guard. By default webhook URLs that resolve to loopback, RFC1918,
-# link-local (incl. cloud metadata 169.254.169.254), or ULA addresses are
-# rejected at create-time and at send-time. Two override knobs:
-#
-# `allow_private_targets = true` lifts the entire check — only use on dev /
-# homelab boxes where the server has no internet adjacency.
-#
-# `allowed_private_hosts = ["mattermost.internal", "10.0.5.20"]` is the
-# production-friendly path: list each trusted internal host explicitly.
-# Hostname match is case-insensitive and exact (no CIDR, no wildcards).
-#
-# allow_private_targets = false
+# Env: REMON__NOTIFICATIONS__WEBHOOK__SECRET
+# secret = ""
+# SSRF guard: rejects private/loopback targets by default.
+# allow_private_targets = true  — lifts the check entirely (dev/homelab only).
+# allowed_private_hosts = ["mattermost.internal"]  — per-host exceptions.
+allow_private_targets = false
 # allowed_private_hosts = []
 
 [cors]
-# Allowed origins for browser clients.
-#
-# `allow_any_origin = true` mirrors `Access-Control-Allow-Origin: *` and is
-# only safe when no cookie/credentialed flow is in play (we don't have one;
-# auth is via Authorization: Bearer header).
-#
-# In production, set `allow_any_origin = false` and enumerate the actual
-# frontend origins in `allowed_origins`, e.g.:
-#   allow_any_origin = false
-#   allowed_origins  = ["https://app.example.com"]
+# Set false in production and list allowed origins below.
+# Env: REMON__CORS__ALLOW_ANY_ORIGIN
 allow_any_origin = false
-allowed_origins  = []
+# allowed_origins = ["https://app.example.com"]
+allowed_origins = []
 
 [docker]
-# Container runtime socket path
-# Leave empty for default: unix:///var/run/docker.sock (Linux/Mac) or npipe:////./pipe/docker_engine (Windows)
-#
-# Docker examples:
-#   Linux/Mac: socket_path = "" (uses default)
-#   Windows:   socket_path = "" (uses default npipe)
-#   TCP:       socket_path = "tcp://localhost:2375"
-#
-# Podman examples:
-#   Rootless: socket_path = "/run/user/1000/podman/podman.sock"
-#   Rootful:  socket_path = "/run/podman/podman.sock"
-#   macOS:    socket_path = "/var/run/docker.sock" (podman machine)
-#
+# Leave empty for platform default (Docker or Podman socket).
+# Env: REMON__DOCKER__SOCKET_PATH
 socket_path = ""
-# WebSocket /docker/containers/{id}/exec endpoint kill-switch.
-# Set to false in production unless interactive shells into containers
-# are an explicit, audited workflow — any device with a valid access
-# token can otherwise reach root inside privileged containers.
-exec_enabled = true
+# Keep false in production — any valid token can exec into privileged containers.
+# Env: REMON__DOCKER__EXEC_ENABLED
+exec_enabled = false
