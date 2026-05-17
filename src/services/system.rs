@@ -105,6 +105,8 @@ pub fn get_cpu_stats(sys: &System, timestamp: i64) -> CpuStats {
         steal_percent: None,
         iowait_percent: None,
         guest_percent: None,
+        user_percent: None,
+        system_percent: None,
         context_switches_per_sec: None,
         process_forks_per_sec: None,
     }
@@ -205,7 +207,10 @@ pub fn get_disk_stats(disks: &Disks, interval_secs: f64, timestamp: i64) -> Vec<
                 read_bytes_per_sec: read_per_sec,
                 write_bytes_per_sec: write_per_sec,
                 timestamp,
-                inode_used_percent: None, // patched by the collector on Linux
+                inode_used_percent: None,
+                read_iops: None,
+                write_iops: None,
+                io_util_percent: None,
             }
         })
         .collect()

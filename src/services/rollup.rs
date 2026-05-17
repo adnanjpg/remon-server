@@ -205,10 +205,12 @@ async fn aggregate_one_bucket(
             INSERT OR REPLACE INTO metrics_cpu
               (resolution, timestamp, usage_percent, load_1m, load_5m, load_15m,
                steal_percent, iowait_percent, guest_percent,
+               user_percent, system_percent,
                context_switches_per_sec, process_forks_per_sec)
             SELECT ?, ?,
                    AVG(usage_percent), AVG(load_1m), AVG(load_5m), AVG(load_15m),
                    AVG(steal_percent), AVG(iowait_percent), AVG(guest_percent),
+                   AVG(user_percent), AVG(system_percent),
                    CAST(AVG(context_switches_per_sec) AS INTEGER),
                    CAST(AVG(process_forks_per_sec)    AS INTEGER)
               FROM metrics_cpu
@@ -244,13 +246,16 @@ async fn aggregate_one_bucket(
             INSERT OR REPLACE INTO metrics_disk
               (resolution, timestamp, mount_point,
                used_bytes, available_bytes, read_bytes_per_sec, write_bytes_per_sec,
-               inode_used_percent)
+               inode_used_percent, read_iops, write_iops, io_util_percent)
             SELECT ?, ?, mount_point,
                    CAST(AVG(used_bytes) AS INTEGER),
                    CAST(AVG(available_bytes) AS INTEGER),
                    CAST(AVG(read_bytes_per_sec) AS INTEGER),
                    CAST(AVG(write_bytes_per_sec) AS INTEGER),
-                   AVG(inode_used_percent)
+                   AVG(inode_used_percent),
+                   CAST(AVG(read_iops) AS INTEGER),
+                   CAST(AVG(write_iops) AS INTEGER),
+                   AVG(io_util_percent)
               FROM metrics_disk
              WHERE resolution = ? AND timestamp >= ? AND timestamp < ?
              GROUP BY mount_point

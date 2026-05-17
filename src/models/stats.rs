@@ -17,6 +17,12 @@ pub struct CpuStats {
     /// `/proc/stat` 9th column (guest): CPU time this kernel spent running
     /// a guest VM. Non-zero only when this host *is* a hypervisor. Linux only.
     pub guest_percent: Option<f64>,
+    /// Time spent in user-space (including nice). Linux: `/proc/stat`
+    /// columns 1+2; Windows/macOS: sysinfo global cpu_usage minus system.
+    pub user_percent: Option<f64>,
+    /// Time spent in kernel-space (system + irq + softirq). Linux:
+    /// `/proc/stat` columns 3+6+7; cross-platform approximation elsewhere.
+    pub system_percent: Option<f64>,
     /// Kernel-wide context switches per second (`/proc/stat ctxt` delta).
     /// Tens of thousands is normal; a sudden spike with no workload change
     /// is the classic signature of thread thrash. Linux only.
@@ -75,10 +81,15 @@ pub struct DiskStats {
     pub read_bytes_per_sec: u64,
     pub write_bytes_per_sec: u64,
     pub timestamp: i64,
-    /// Filesystem inode utilization (0.0..=100.0). A volume can run out of
-    /// inodes long before it runs out of bytes (lots of tiny files), so
-    /// this is its own saturation signal. Linux only (statvfs).
+    /// Filesystem inode utilization (0.0..=100.0). Linux only (statvfs).
     pub inode_used_percent: Option<f64>,
+    /// Read I/O operations per second. Linux only (/proc/diskstats).
+    pub read_iops: Option<u64>,
+    /// Write I/O operations per second. Linux only (/proc/diskstats).
+    pub write_iops: Option<u64>,
+    /// Percentage of time the device had at least one I/O in flight (0..=100).
+    /// Analogous to `%util` in iostat. Linux only (/proc/diskstats).
+    pub io_util_percent: Option<f64>,
 }
 
 /// Network statistics

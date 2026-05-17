@@ -146,6 +146,8 @@ CREATE TABLE metrics_cpu (
     steal_percent             REAL,
     iowait_percent            REAL,
     guest_percent             REAL,
+    user_percent              REAL,
+    system_percent            REAL,
     context_switches_per_sec  INTEGER,
     process_forks_per_sec     INTEGER,
     PRIMARY KEY (resolution, timestamp)
@@ -182,6 +184,9 @@ CREATE TABLE metrics_disk (
     read_bytes_per_sec  INTEGER NOT NULL DEFAULT 0,
     write_bytes_per_sec INTEGER NOT NULL DEFAULT 0,
     inode_used_percent  REAL,
+    read_iops           INTEGER,
+    write_iops          INTEGER,
+    io_util_percent     REAL,
     PRIMARY KEY (resolution, timestamp, mount_point)
 ) WITHOUT ROWID;
 

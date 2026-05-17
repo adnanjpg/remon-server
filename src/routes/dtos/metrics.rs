@@ -35,6 +35,10 @@ pub struct CpuPoint {
     /// Linux-only: time the kernel ran a guest VM. Non-zero only when
     /// this host *is* a hypervisor.
     pub guest_percent: Option<f64>,
+    /// Linux-only: user+nice CPU time as percent of total.
+    pub user_percent: Option<f64>,
+    /// Linux-only: kernel CPU time (system+irq+softirq) as percent of total.
+    pub system_percent: Option<f64>,
     /// Linux-only: kernel-wide context switches per second.
     pub context_switches_per_sec: Option<i64>,
     /// Linux-only: process forks per second (clone() syscall rate).
@@ -103,6 +107,12 @@ pub struct DiskPoint {
     /// Linux-only (statvfs): 0..=100. A volume can run out of inodes long
     /// before bytes when there are millions of small files.
     pub inode_used_percent: Option<f64>,
+    /// Linux-only (/proc/diskstats): read I/O operations per second.
+    pub read_iops: Option<i64>,
+    /// Linux-only (/proc/diskstats): write I/O operations per second.
+    pub write_iops: Option<i64>,
+    /// Linux-only (/proc/diskstats): percent of wall-clock time the device had I/O in flight.
+    pub io_util_percent: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]

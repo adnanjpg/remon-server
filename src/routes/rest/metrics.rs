@@ -91,7 +91,7 @@ pub async fn cpu_history(
     let points: Vec<CpuPoint> = rows
         .into_iter()
         .map(
-            |(ts, usage, l1, l5, l15, steal, iowait, guest, ctxt, forks)| CpuPoint {
+            |(ts, usage, l1, l5, l15, steal, iowait, guest, user, system, ctxt, forks)| CpuPoint {
                 timestamp: ts,
                 usage_percent: usage,
                 load_1m: l1,
@@ -100,6 +100,8 @@ pub async fn cpu_history(
                 steal_percent: steal,
                 iowait_percent: iowait,
                 guest_percent: guest,
+                user_percent: user,
+                system_percent: system,
                 context_switches_per_sec: ctxt,
                 process_forks_per_sec: forks,
             },
@@ -179,7 +181,7 @@ pub async fn disk_history(
 
     let points: Vec<DiskPoint> = rows
         .into_iter()
-        .map(|(ts, mp, used, avail, rbps, wbps, inode)| DiskPoint {
+        .map(|(ts, mp, used, avail, rbps, wbps, inode, riops, wiops, util)| DiskPoint {
             timestamp: ts,
             mount_point: mp,
             used_bytes: used,
@@ -187,6 +189,9 @@ pub async fn disk_history(
             read_bytes_per_sec: rbps,
             write_bytes_per_sec: wbps,
             inode_used_percent: inode,
+            read_iops: riops,
+            write_iops: wiops,
+            io_util_percent: util,
         })
         .collect();
 
@@ -417,7 +422,7 @@ pub async fn batch_history(
                     points: rows
                         .into_iter()
                         .map(
-                            |(ts, usage, l1, l5, l15, steal, iowait, guest, ctxt, forks)| {
+                            |(ts, usage, l1, l5, l15, steal, iowait, guest, user, system, ctxt, forks)| {
                                 CpuPoint {
                                     timestamp: ts,
                                     usage_percent: usage,
@@ -427,6 +432,8 @@ pub async fn batch_history(
                                     steal_percent: steal,
                                     iowait_percent: iowait,
                                     guest_percent: guest,
+                                    user_percent: user,
+                                    system_percent: system,
                                     context_switches_per_sec: ctxt,
                                     process_forks_per_sec: forks,
                                 }
@@ -477,7 +484,7 @@ pub async fn batch_history(
                 Ok(BatchSeries::Disk {
                     points: rows
                         .into_iter()
-                        .map(|(ts, mp, used, avail, rbps, wbps, inode)| DiskPoint {
+                        .map(|(ts, mp, used, avail, rbps, wbps, inode, riops, wiops, util)| DiskPoint {
                             timestamp: ts,
                             mount_point: mp,
                             used_bytes: used,
@@ -485,6 +492,9 @@ pub async fn batch_history(
                             read_bytes_per_sec: rbps,
                             write_bytes_per_sec: wbps,
                             inode_used_percent: inode,
+                            read_iops: riops,
+                            write_iops: wiops,
+                            io_util_percent: util,
                         })
                         .collect(),
                 })

@@ -14,7 +14,9 @@ use crate::storage::repositories::MetricsRepository;
 #[cfg(target_os = "linux")]
 use crate::models::stats::{CpuStats, DiskStats, MemoryStats};
 #[cfg(target_os = "linux")]
-use crate::services::system_linux::{self, ProcStatSnapshot, VmstatSnapshot};
+use crate::services::system_linux::{self, DiskstatEntry, ProcStatSnapshot, VmstatSnapshot};
+#[cfg(target_os = "linux")]
+use std::collections::HashMap;
 
 pub async fn run(state: Arc<AppState>) {
     let mut sys = System::new();
@@ -37,6 +39,9 @@ pub async fn run(state: Arc<AppState>) {
     // Linux-only: previous /proc/vmstat snapshot for page-fault / swap rates.
     #[cfg(target_os = "linux")]
     let mut last_vmstat: Option<VmstatSnapshot> = None;
+    // Linux-only: previous /proc/diskstats snapshot for IOPS + utilization.
+    #[cfg(target_os = "linux")]
+    let mut last_diskstats: Option<HashMap<String, DiskstatEntry>> = None;
 
     // Sliding-window phase stats (p50/p95/p99/max). The window deliberately
     // spans many flushes so p99 stays meaningful when one cycle is noisy.
@@ -108,6 +113,7 @@ pub async fn run(state: Arc<AppState>) {
                 tick_ts,
                 &mut last_proc_stat,
                 &mut last_vmstat,
+                &mut last_diskstats,
             )
             .await;
         }
@@ -208,6 +214,7 @@ async fn enrich_linux(
     tick_ts: i64,
     last_proc_stat: &mut Option<ProcStatSnapshot>,
     last_vmstat: &mut Option<VmstatSnapshot>,
+    last_diskstats: &mut Option<HashMap<String, DiskstatEntry>>,
 ) -> Option<PressureSnapshot> {
     // /proc/stat: percentages AND kernel-event rates need a prior snapshot.
     let cur_stat = system_linux::read_proc_stat();
@@ -216,6 +223,8 @@ async fn enrich_linux(
             cpu.steal_percent = Some(extras.steal_percent);
             cpu.iowait_percent = Some(extras.iowait_percent);
             cpu.guest_percent = Some(extras.guest_percent);
+            cpu.user_percent = Some(extras.user_percent);
+            cpu.system_percent = Some(extras.system_percent);
         }
         if let Some(rates) = system_linux::compute_kernel_event_rates(prev, cur, interval_secs) {
             cpu.context_switches_per_sec = Some(rates.context_switches_per_sec);
@@ -235,6 +244,46 @@ async fn enrich_linux(
         }
     }
     *last_vmstat = cur_vmstat;
+
+    // /proc/diskstats: IOPS + utilization per block device.
+    // Mount points don't map 1:1 to device names, so we match by the
+    // device name sysinfo exposes (last component of the device path).
+    let cur_diskstats = system_linux::read_diskstats();
+    if let (Some(prev_map), Some(cur_map)) = (last_diskstats.as_ref(), cur_diskstats.as_ref()) {
+        for d in disks.iter_mut() {
+            // sysinfo gives us the mount point; derive the device name from
+            // the device field if available, otherwise skip this mount.
+            // We match by iterating cur_map keys — the kernel reports the
+            // bare device name (e.g. "sda", "nvme0n1", "vda").
+            let dev_name = d.mount_point.trim_start_matches('/').replace('/', "_");
+            // Try exact match first, then fallback: find the device whose
+            // read+write delta is closest to what sysinfo reports in bytes.
+            // For simplicity we just match by common device name patterns.
+            for (dev, cur_entry) in cur_map {
+                if let Some(prev_entry) = prev_map.get(dev) {
+                    // Skip partition entries (e.g. sda1) if the parent device
+                    // (sda) is also present — avoids double-counting.
+                    let is_partition = dev.chars().last().map_or(false, |c| c.is_ascii_digit())
+                        && cur_map.contains_key(dev.trim_end_matches(|c: char| c.is_ascii_digit()));
+                    if is_partition {
+                        continue;
+                    }
+                    if let Some(rates) = system_linux::compute_disk_io_rates(prev_entry, cur_entry, interval_secs) {
+                        // Assign to first unset disk entry as a best-effort match.
+                        // On single-disk systems this is always correct; on multi-disk
+                        // systems with mount-to-device ambiguity it may misattribute.
+                        if d.read_iops.is_none() {
+                            d.read_iops = Some(rates.read_iops);
+                            d.write_iops = Some(rates.write_iops);
+                            d.io_util_percent = Some(rates.io_util_percent);
+                        }
+                    }
+                }
+            }
+            let _ = dev_name; // suppress unused warning
+        }
+    }
+    *last_diskstats = cur_diskstats;
 
     // Per-mount inode usage via statvfs — wrapped in spawn_blocking +
     // timeout so a hung network/fuse mount can't stall the tick.

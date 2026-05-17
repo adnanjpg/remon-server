@@ -173,6 +173,10 @@ pub struct CpuExtras {
     pub steal_percent: f64,
     pub iowait_percent: f64,
     pub guest_percent: f64,
+    /// User + nice time. The htop/Task Manager "user" band.
+    pub user_percent: f64,
+    /// system + irq + softirq time. The htop/Task Manager "kernel" band.
+    pub system_percent: f64,
 }
 
 /// Compute per-tick percentages from two consecutive snapshots. Returns
@@ -188,6 +192,68 @@ pub fn compute_cpu_extras(prev: ProcStatSnapshot, cur: ProcStatSnapshot) -> Opti
         steal_percent: pct(cur.steal, prev.steal),
         iowait_percent: pct(cur.iowait, prev.iowait),
         guest_percent: pct(cur.guest, prev.guest),
+        user_percent: pct(cur.user + cur.nice, prev.user + prev.nice),
+        system_percent: pct(cur.system + cur.irq + cur.softirq, prev.system + prev.irq + prev.softirq),
+    })
+}
+
+// ── Disk IOPS via /proc/diskstats ──────────────────────────────────────────
+
+/// Monotonic counters for one block device from `/proc/diskstats`.
+/// Fields map to columns 1, 5, 9, 13 of the kernel ABI (0-indexed).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DiskstatEntry {
+    pub reads_completed: u64,
+    pub writes_completed: u64,
+    /// Milliseconds the device had at least one I/O in flight (column 9).
+    pub time_io_ms: u64,
+}
+
+/// Read `/proc/diskstats` and return a map of device-name → entry.
+/// Returns None if the file can't be read; individual malformed lines
+/// are skipped silently.
+pub fn read_diskstats() -> Option<std::collections::HashMap<String, DiskstatEntry>> {
+    let content = fs::read_to_string("/proc/diskstats").ok()?;
+    let mut map = std::collections::HashMap::new();
+    for line in content.lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        // /proc/diskstats has at least 14 columns per line.
+        if cols.len() < 14 {
+            continue;
+        }
+        let name = cols[2].to_string();
+        let reads_completed: u64 = cols[3].parse().unwrap_or(0);
+        let writes_completed: u64 = cols[7].parse().unwrap_or(0);
+        let time_io_ms: u64 = cols[12].parse().unwrap_or(0); // weighted I/O time (ms)
+        map.insert(name, DiskstatEntry { reads_completed, writes_completed, time_io_ms });
+    }
+    Some(map)
+}
+
+/// Per-second IOPS and utilization computed from two consecutive diskstat snapshots.
+#[derive(Debug, Clone, Copy)]
+pub struct DiskIoRates {
+    pub read_iops: u64,
+    pub write_iops: u64,
+    /// 0.0..=100.0 — percentage of wall-clock time the device was busy.
+    pub io_util_percent: f64,
+}
+
+pub fn compute_disk_io_rates(
+    prev: &DiskstatEntry,
+    cur: &DiskstatEntry,
+    interval_secs: f64,
+) -> Option<DiskIoRates> {
+    if interval_secs <= 0.0 {
+        return None;
+    }
+    let rate = |a: u64, b: u64| (a.saturating_sub(b) as f64 / interval_secs) as u64;
+    let io_ms_d = cur.time_io_ms.saturating_sub(prev.time_io_ms) as f64;
+    let util = (io_ms_d / (interval_secs * 1000.0) * 100.0).min(100.0);
+    Some(DiskIoRates {
+        read_iops: rate(cur.reads_completed, prev.reads_completed),
+        write_iops: rate(cur.writes_completed, prev.writes_completed),
+        io_util_percent: util,
     })
 }
 

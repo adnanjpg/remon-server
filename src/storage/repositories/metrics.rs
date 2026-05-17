@@ -50,8 +50,9 @@ impl MetricsRepository {
             INSERT INTO metrics_cpu
               (resolution, timestamp, usage_percent, load_1m, load_5m, load_15m,
                steal_percent, iowait_percent, guest_percent,
+               user_percent, system_percent,
                context_switches_per_sec, process_forks_per_sec)
-            VALUES ('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(resolution, timestamp) DO NOTHING
             "#,
         )
@@ -63,6 +64,8 @@ impl MetricsRepository {
         .bind(cpu.steal_percent)
         .bind(cpu.iowait_percent)
         .bind(cpu.guest_percent)
+        .bind(cpu.user_percent)
+        .bind(cpu.system_percent)
         .bind(cpu.context_switches_per_sec.map(|v| v as i64))
         .bind(cpu.process_forks_per_sec.map(|v| v as i64))
         .execute(&mut *tx)
@@ -140,13 +143,13 @@ impl MetricsRepository {
                 "INSERT INTO metrics_disk \
                  (resolution, timestamp, mount_point, \
                   used_bytes, available_bytes, read_bytes_per_sec, write_bytes_per_sec, \
-                  inode_used_percent) VALUES ",
+                  inode_used_percent, read_iops, write_iops, io_util_percent) VALUES ",
             );
             for i in 0..disks.len() {
                 if i > 0 {
                     sql.push_str(", ");
                 }
-                sql.push_str("('raw', ?, ?, ?, ?, ?, ?, ?)");
+                sql.push_str("('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
             }
             sql.push_str(" ON CONFLICT(resolution, timestamp, mount_point) DO NOTHING");
             let mut q = sqlx::query(&sql);
@@ -160,7 +163,10 @@ impl MetricsRepository {
                     .bind(d.available_bytes as i64)
                     .bind(d.read_bytes_per_sec as i64)
                     .bind(d.write_bytes_per_sec as i64)
-                    .bind(d.inode_used_percent);
+                    .bind(d.inode_used_percent)
+                    .bind(d.read_iops.map(|v| v as i64))
+                    .bind(d.write_iops.map(|v| v as i64))
+                    .bind(d.io_util_percent);
             }
             let r = q.execute(&mut *tx).await?;
             note_collision(
@@ -317,6 +323,8 @@ impl MetricsRepository {
             Option<f64>,
             Option<f64>,
             Option<f64>,
+            Option<f64>,
+            Option<f64>,
             Option<i64>,
             Option<i64>,
         )>,
@@ -336,6 +344,8 @@ impl MetricsRepository {
                 Option<f64>,
                 Option<f64>,
                 Option<f64>,
+                Option<f64>,
+                Option<f64>,
                 Option<i64>,
                 Option<i64>,
             ),
@@ -343,6 +353,7 @@ impl MetricsRepository {
             r#"
             SELECT timestamp, usage_percent, load_1m, load_5m, load_15m,
                    steal_percent, iowait_percent, guest_percent,
+                   user_percent, system_percent,
                    context_switches_per_sec, process_forks_per_sec
               FROM metrics_cpu
              WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
@@ -454,17 +465,18 @@ impl MetricsRepository {
         start: i64,
         end: i64,
         limit: u32,
-    ) -> AppResult<Vec<(i64, String, i64, i64, i64, i64, Option<f64>)>> {
+    ) -> AppResult<Vec<(i64, String, i64, i64, i64, i64, Option<f64>, Option<i64>, Option<i64>, Option<f64>)>> {
         // Disk has N rows per timestamp (one per mount). A flat
         // `LIMIT N` would chop off the most recent timestamps once
         // N × mount_count exceeds the limit, leaving the client with
         // an incomplete tail and a visible gap in the sparkline.
         // Pick the most recent `limit` distinct timestamps first, then
         // join all mount rows for them.
-        let rows = sqlx::query_as::<_, (i64, String, i64, i64, i64, i64, Option<f64>)>(
+        let rows = sqlx::query_as::<_, (i64, String, i64, i64, i64, i64, Option<f64>, Option<i64>, Option<i64>, Option<f64>)>(
             r#"
             SELECT timestamp, mount_point, used_bytes, available_bytes,
-                   read_bytes_per_sec, write_bytes_per_sec, inode_used_percent
+                   read_bytes_per_sec, write_bytes_per_sec, inode_used_percent,
+                   read_iops, write_iops, io_util_percent
               FROM metrics_disk
              WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
                AND timestamp IN (
