@@ -13,7 +13,7 @@ pub fn get_description() -> SystemDescription {
         os: System::name().unwrap_or_else(|| "unknown".into()),
         os_version: System::os_version().unwrap_or_else(|| "unknown".into()),
         kernel: System::kernel_version().unwrap_or_else(|| "unknown".into()),
-        uptime_secs: System::uptime().unwrap_or(0),
+        uptime_secs: System::uptime()
     }
 }
 
@@ -74,11 +74,7 @@ pub fn get_hardware_info() -> HardwareInfo {
 }
 
 pub fn get_cpu_stats(sys: &System, timestamp: i64) -> CpuStats {
-    let load_avg = System::load_average().unwrap_or(sysinfo::LoadAvg {
-        one: 0.0,
-        five: 0.0,
-        fifteen: 0.0,
-    });
+    let load_avg = System::load_average();
 
     let per_core: Vec<CoreStats> = sys
         .cpus()

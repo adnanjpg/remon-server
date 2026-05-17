@@ -20,7 +20,7 @@ config = "0.15"
 axum = { version = "0.8.9", features = ["ws"] }
 tower = "0.5.3"
 tower-http = { version = "0.6.10", features = ["trace", "compression-gzip", "compression-br", "compression-zstd", "cors", "limit", "timeout"] }
-jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
+jsonwebtoken = { version = "10.4", features = ["rust_crypto"] }
 reqwest = { version = "0.13", default-features = false, features = [
     "rustls",
     "json",
@@ -33,10 +33,7 @@ serde_yaml_ng = "0.10"
 cron = "0.16.0"
 thiserror = "2"
 sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio", "migrate"] }
-# Pinned to a post-0.39.1 main commit for the Windows PDH-skip fix
-# (GuillaumeGomez/sysinfo#1664). Revert to a crates.io release once the
-# next sysinfo version is published.
-sysinfo = { git = "https://github.com/GuillaumeGomez/sysinfo", rev = "4154d8d188d3863d70d0000024bed94cce17cec2" }
+sysinfo = { version = "0.39.2" }
 totp-rs = "5.5"
 log = "0.4"
 blake3 = "1.5"
