@@ -10,10 +10,35 @@ use std::sync::atomic::Ordering;
 use sysinfo::{MINIMUM_CPU_UPDATE_INTERVAL, ProcessesToUpdate, System};
 
 use crate::error::{AppError, AppResult};
-use crate::models::process::ProcessList;
+use crate::models::process::{ProcessList, ProcessState};
 use crate::routes::{dtos::process::GetProcessesResponse, extractors::Claims};
 use crate::services::process;
 use crate::state::AppState;
+
+#[derive(Debug, Deserialize)]
+pub struct GetProcessesQuery {
+    /// Filter by process name (case-insensitive substring match).
+    pub search: Option<String>,
+    /// Filter by state: running | sleeping | stopped | zombie | idle
+    pub state: Option<String>,
+    /// Sort field: cpu (default) | memory | pid | name
+    #[serde(default = "default_sort")]
+    pub sort: String,
+    /// Maximum number of processes to return (default: 100, max: 1000).
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+    /// Zero-based offset for pagination.
+    #[serde(default)]
+    pub offset: usize,
+}
+
+fn default_sort() -> String {
+    "cpu".to_string()
+}
+
+fn default_limit() -> usize {
+    100
+}
 
 #[derive(Debug, Deserialize)]
 pub struct KillProcessQuery {
@@ -24,32 +49,67 @@ pub struct KillProcessQuery {
     pub signal: Option<i32>,
 }
 
-/// GET /processes — return the latest process snapshot.
-///
-/// Reads from `state.processes_latest` when fresh; otherwise refreshes the
-/// snapshot on demand. The refresh is serialized by
-/// `state.processes_refresh_lock` so a burst of callers does not multiply
-/// the full process-table scan.
-///
-/// Cold/stale refresh pays sysinfo's warm-up cost: two process refreshes
-/// spaced one `MINIMUM_CPU_UPDATE_INTERVAL` apart give meaningful CPU%;
-/// doing them back-to-back would zero everything out.
+/// GET /processes — return the latest process snapshot with optional filtering and pagination.
 pub async fn get_processes(
     _claims: Claims,
     State(state): State<Arc<AppState>>,
+    Query(q): Query<GetProcessesQuery>,
 ) -> Json<GetProcessesResponse> {
     let start = std::time::Instant::now();
 
     let process_list = get_or_refresh_processes(&state).await;
+    let total = process_list.processes.len();
+
+    let limit = q.limit.min(1000);
+
+    let mut processes: Vec<_> = process_list
+        .processes
+        .into_iter()
+        .filter(|p| {
+            if let Some(ref s) = q.search {
+                if !p.name.to_lowercase().contains(&s.to_lowercase()) {
+                    return false;
+                }
+            }
+            if let Some(ref state_filter) = q.state {
+                let matches = matches!(
+                    (&p.state, state_filter.to_lowercase().as_str()),
+                    (ProcessState::Running, "running")
+                        | (ProcessState::Sleeping, "sleeping")
+                        | (ProcessState::Stopped, "stopped")
+                        | (ProcessState::Zombie, "zombie")
+                        | (ProcessState::Idle, "idle")
+                );
+                if !matches {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+
+    match q.sort.as_str() {
+        "memory" => processes.sort_unstable_by(|a, b| b.memory_bytes.cmp(&a.memory_bytes)),
+        "pid" => processes.sort_unstable_by_key(|p| p.pid),
+        "name" => processes.sort_unstable_by(|a, b| a.name.cmp(&b.name)),
+        _ => processes.sort_unstable_by(|a, b| b.cpu_percent.partial_cmp(&a.cpu_percent).unwrap_or(std::cmp::Ordering::Equal)),
+    }
+
+    let filtered_total = processes.len();
+    let processes: Vec<_> = processes.into_iter().skip(q.offset).take(limit).collect();
 
     debug!(
-        "get_processes[{}] took: {:?}",
-        process_list.processes.len(),
+        "get_processes total={} filtered={} returned={} took={:?}",
+        total,
+        filtered_total,
+        processes.len(),
         start.elapsed()
     );
 
     Json(GetProcessesResponse {
-        processes: process_list.processes,
+        processes,
+        total,
+        filtered_total,
     })
 }
 
