@@ -17,11 +17,9 @@ pub struct CpuStats {
     /// `/proc/stat` 9th column (guest): CPU time this kernel spent running
     /// a guest VM. Non-zero only when this host *is* a hypervisor. Linux only.
     pub guest_percent: Option<f64>,
-    /// Time spent in user-space (including nice). Linux: `/proc/stat`
-    /// columns 1+2; Windows/macOS: sysinfo global cpu_usage minus system.
+    /// User-space CPU time (user + nice) as percent of total. Linux only.
     pub user_percent: Option<f64>,
-    /// Time spent in kernel-space (system + irq + softirq). Linux:
-    /// `/proc/stat` columns 3+6+7; cross-platform approximation elsewhere.
+    /// Kernel-space CPU time (system + irq + softirq) as percent of total. Linux only.
     pub system_percent: Option<f64>,
     /// Kernel-wide context switches per second (`/proc/stat ctxt` delta).
     /// Tens of thousands is normal; a sudden spike with no workload change
