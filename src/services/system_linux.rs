@@ -42,6 +42,7 @@ pub struct ProcStatSnapshot {
 
 impl ProcStatSnapshot {
     pub fn total(&self) -> u64 {
+        // guest time is already counted inside user/nice — don't add it again.
         self.user
             + self.nice
             + self.system
@@ -50,7 +51,6 @@ impl ProcStatSnapshot {
             + self.irq
             + self.softirq
             + self.steal
-            + self.guest
     }
 }
 
