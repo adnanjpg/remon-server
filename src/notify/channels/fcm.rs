@@ -49,17 +49,19 @@ pub struct FcmChannel {
 }
 
 impl FcmChannel {
-    pub fn new(
+    pub async fn new(
         service_account_path: &str,
         http: Client,
         pool: SqlitePool,
     ) -> Result<Self, ChannelError> {
-        let json_str = std::fs::read_to_string(service_account_path).map_err(|e| {
-            ChannelError::Config(format!(
-                "cannot read FCM service account '{}': {}",
-                service_account_path, e
-            ))
-        })?;
+        let json_str = tokio::fs::read_to_string(service_account_path)
+            .await
+            .map_err(|e| {
+                ChannelError::Config(format!(
+                    "cannot read FCM service account '{}': {}",
+                    service_account_path, e
+                ))
+            })?;
 
         #[derive(Deserialize)]
         struct SaJson {

@@ -104,7 +104,9 @@ impl NotificationManager {
                 self.pool.clone(),
                 &self.vapid,
                 &webhook_policy,
-            ) {
+            )
+            .await
+            {
                 Ok(ch) => slots.push(ChannelSlot {
                     id: row.id,
                     name: row.name,

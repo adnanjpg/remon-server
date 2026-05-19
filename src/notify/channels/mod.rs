@@ -33,7 +33,7 @@ use webpush::WebPushChannel;
 /// Returns `Err(ChannelError::Config)` if required fields are missing or
 /// the credential path can't be read. The manager logs the error and skips
 /// the channel rather than crashing.
-pub fn build_channel(
+pub async fn build_channel(
     channel_type: &str,
     config: &Value,
     credentials: &NotificationsConfig,
@@ -50,7 +50,7 @@ pub fn build_channel(
                     "FCM requires notifications.fcm.service_account_path to be set".to_string(),
                 ));
             }
-            Ok(Box::new(FcmChannel::new(path, http, pool)?))
+            Ok(Box::new(FcmChannel::new(path, http, pool).await?))
         }
 
         "web-push" => {
