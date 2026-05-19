@@ -40,6 +40,11 @@ const PROBE_PERMITS: usize = 5;
 static PROBE_GATE: LazyLock<Arc<Semaphore>> =
     LazyLock::new(|| Arc::new(Semaphore::new(PROBE_PERMITS)));
 
+/// Grace window for an aborted probe task to drop its DB connection and
+/// file handles before the replacement spawns. Windows file locks are
+/// mandatory — parallel runs can hit "process cannot access file".
+const ABORTED_TASK_GRACE: Duration = Duration::from_secs(2);
+
 /// Compute the next fire time for a schedule from "now". Always returns
 /// `Some` for `Interval` (mathematically determinate) and may return
 /// `None` for a `Cron` whose next match doesn't exist within ~10y from
@@ -314,17 +319,16 @@ pub async fn load_and_spawn(
             continue;
         }
 
-        // Otherwise: abort old task (if any) and spawn fresh.
-        {
+        // Otherwise: abort old task (if any) and spawn fresh. The wait is
+        // done outside the registry lock so readers aren't blocked for up
+        // to ABORTED_TASK_GRACE.
+        let aborted_task = {
             let mut reg = registry.write().await;
-            if let Some(entry) = reg.probes.remove(&manifest.name) {
-                if let Some(task) = entry.task {
-                    task.abort();
-                    // Wait briefly so the old task releases file handles and DB
-                    // connections before the replacement starts.
-                    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), task).await;
-                }
-            }
+            reg.probes.remove(&manifest.name).and_then(|e| e.task)
+        };
+        if let Some(task) = aborted_task {
+            task.abort();
+            let _ = tokio::time::timeout(ABORTED_TASK_GRACE, task).await;
         }
 
         let manifest_for_task = manifest.clone();
