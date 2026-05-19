@@ -62,23 +62,22 @@ pub async fn get_processes(
 
     let limit = q.limit.min(1000);
 
-    // `process_list` is shared via `Arc`, so iterate by reference and
-    // clone only the entries that pass the filter — for small filter
-    // result sets this is strictly less work than the previous
-    // `into_iter` that consumed the whole Vec from an owned snapshot
-    // (which itself was a deep clone of the cache).
+    // Fold filter inputs once; the closure runs per-process.
+    let search_needle = q.search.as_deref().map(str::to_lowercase);
+    let state_needle = q.state.as_deref().map(str::to_ascii_lowercase);
+
     let mut processes: Vec<_> = process_list
         .processes
         .iter()
         .filter(|p| {
-            if let Some(ref s) = q.search {
-                if !p.name.to_lowercase().contains(&s.to_lowercase()) {
+            if let Some(needle) = &search_needle {
+                if !p.name.to_lowercase().contains(needle) {
                     return false;
                 }
             }
-            if let Some(ref state_filter) = q.state {
+            if let Some(sf) = state_needle.as_deref() {
                 let matches = matches!(
-                    (&p.state, state_filter.to_lowercase().as_str()),
+                    (&p.state, sf),
                     (ProcessState::Running, "running")
                         | (ProcessState::Sleeping, "sleeping")
                         | (ProcessState::Stopped, "stopped")
