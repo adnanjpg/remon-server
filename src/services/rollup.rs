@@ -224,10 +224,11 @@ async fn aggregate_one_bucket(
             r#"
             INSERT OR REPLACE INTO metrics_memory
               (resolution, timestamp,
-               used_bytes, available_bytes, cached_bytes, swap_used_bytes,
+               total_bytes, used_bytes, available_bytes, cached_bytes, swap_used_bytes,
                page_faults_minor_per_sec, page_faults_major_per_sec,
                swap_in_pages_per_sec, swap_out_pages_per_sec)
             SELECT ?, ?,
+                   CAST(AVG(total_bytes) AS INTEGER),
                    CAST(AVG(used_bytes) AS INTEGER),
                    CAST(AVG(available_bytes) AS INTEGER),
                    CAST(AVG(cached_bytes) AS INTEGER),
@@ -245,9 +246,10 @@ async fn aggregate_one_bucket(
             r#"
             INSERT OR REPLACE INTO metrics_disk
               (resolution, timestamp, mount_point,
-               used_bytes, available_bytes, read_bytes_per_sec, write_bytes_per_sec,
+               total_bytes, used_bytes, available_bytes, read_bytes_per_sec, write_bytes_per_sec,
                inode_used_percent, read_iops, write_iops, io_util_percent)
             SELECT ?, ?, mount_point,
+                   CAST(AVG(total_bytes) AS INTEGER),
                    CAST(AVG(used_bytes) AS INTEGER),
                    CAST(AVG(available_bytes) AS INTEGER),
                    CAST(AVG(read_bytes_per_sec) AS INTEGER),

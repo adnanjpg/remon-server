@@ -72,6 +72,7 @@ pub struct CpuCoresHistoryResponse {
 #[derive(Debug, Serialize)]
 pub struct MemoryPoint {
     pub timestamp: i64,
+    pub total_bytes: i64,
     pub used_bytes: i64,
     pub available_bytes: i64,
     pub cached_bytes: i64,
@@ -100,6 +101,7 @@ pub struct MemoryHistoryResponse {
 pub struct DiskPoint {
     pub timestamp: i64,
     pub mount_point: String,
+    pub total_bytes: i64,
     pub used_bytes: i64,
     pub available_bytes: i64,
     pub read_bytes_per_sec: i64,

@@ -151,8 +151,9 @@ pub async fn memory_history(
     let points: Vec<MemoryPoint> = rows
         .into_iter()
         .map(
-            |(ts, used, avail, cached, swap, pf_min, pf_maj, sw_in, sw_out)| MemoryPoint {
+            |(ts, used, avail, cached, swap, total, pf_min, pf_maj, sw_in, sw_out)| MemoryPoint {
                 timestamp: ts,
+                total_bytes: total,
                 used_bytes: used,
                 available_bytes: avail,
                 cached_bytes: cached,
@@ -182,9 +183,10 @@ pub async fn disk_history(
     let points: Vec<DiskPoint> = rows
         .into_iter()
         .map(
-            |(ts, mp, used, avail, rbps, wbps, inode, riops, wiops, util)| DiskPoint {
+            |(ts, mp, total, used, avail, rbps, wbps, inode, riops, wiops, util)| DiskPoint {
                 timestamp: ts,
                 mount_point: mp,
+                total_bytes: total,
                 used_bytes: used,
                 available_bytes: avail,
                 read_bytes_per_sec: rbps,
@@ -477,9 +479,21 @@ pub async fn batch_history(
                     points: rows
                         .into_iter()
                         .map(
-                            |(ts, used, avail, cached, swap, pf_min, pf_maj, sw_in, sw_out)| {
+                            |(
+                                ts,
+                                used,
+                                avail,
+                                cached,
+                                swap,
+                                total,
+                                pf_min,
+                                pf_maj,
+                                sw_in,
+                                sw_out,
+                            )| {
                                 MemoryPoint {
                                     timestamp: ts,
+                                    total_bytes: total,
                                     used_bytes: used,
                                     available_bytes: avail,
                                     cached_bytes: cached,
@@ -500,10 +514,23 @@ pub async fn batch_history(
                     points: rows
                         .into_iter()
                         .map(
-                            |(ts, mp, used, avail, rbps, wbps, inode, riops, wiops, util)| {
+                            |(
+                                ts,
+                                mp,
+                                total,
+                                used,
+                                avail,
+                                rbps,
+                                wbps,
+                                inode,
+                                riops,
+                                wiops,
+                                util,
+                            )| {
                                 DiskPoint {
                                     timestamp: ts,
                                     mount_point: mp,
+                                    total_bytes: total,
                                     used_bytes: used,
                                     available_bytes: avail,
                                     read_bytes_per_sec: rbps,

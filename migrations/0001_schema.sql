@@ -164,6 +164,7 @@ CREATE TABLE metrics_cpu_cores (
 CREATE TABLE metrics_memory (
     resolution                 TEXT    NOT NULL REFERENCES resolutions(name),
     timestamp                  INTEGER NOT NULL,
+    total_bytes                INTEGER NOT NULL,
     used_bytes                 INTEGER NOT NULL,
     available_bytes            INTEGER NOT NULL,
     cached_bytes               INTEGER NOT NULL,
@@ -179,6 +180,7 @@ CREATE TABLE metrics_disk (
     resolution          TEXT    NOT NULL REFERENCES resolutions(name),
     timestamp           INTEGER NOT NULL,
     mount_point         TEXT    NOT NULL,
+    total_bytes          INTEGER NOT NULL,
     used_bytes          INTEGER NOT NULL,
     available_bytes     INTEGER NOT NULL,
     read_bytes_per_sec  INTEGER NOT NULL DEFAULT 0,

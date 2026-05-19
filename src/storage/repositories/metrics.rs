@@ -110,15 +110,16 @@ impl MetricsRepository {
         let r = sqlx::query(
             r#"
             INSERT INTO metrics_memory
-              (resolution, timestamp, used_bytes, available_bytes,
+              (resolution, timestamp, total_bytes, used_bytes, available_bytes,
                cached_bytes, swap_used_bytes,
                page_faults_minor_per_sec, page_faults_major_per_sec,
                swap_in_pages_per_sec, swap_out_pages_per_sec)
-            VALUES ('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(resolution, timestamp) DO NOTHING
             "#,
         )
         .bind(memory.timestamp)
+        .bind(memory.total_bytes as i64)
         .bind(memory.used_bytes as i64)
         .bind(memory.available_bytes as i64)
         .bind(memory.cached_bytes as i64)
@@ -142,14 +143,14 @@ impl MetricsRepository {
             sql.push_str(
                 "INSERT INTO metrics_disk \
                  (resolution, timestamp, mount_point, \
-                  used_bytes, available_bytes, read_bytes_per_sec, write_bytes_per_sec, \
+                  total_bytes, used_bytes, available_bytes, read_bytes_per_sec, write_bytes_per_sec, \
                   inode_used_percent, read_iops, write_iops, io_util_percent) VALUES ",
             );
             for i in 0..disks.len() {
                 if i > 0 {
                     sql.push_str(", ");
                 }
-                sql.push_str("('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                sql.push_str("('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
             }
             sql.push_str(" ON CONFLICT(resolution, timestamp, mount_point) DO NOTHING");
             let mut q = sqlx::query(&sql);
@@ -159,6 +160,7 @@ impl MetricsRepository {
                 q = q
                     .bind(d.timestamp)
                     .bind(&d.mount_point)
+                    .bind(d.total_bytes as i64)
                     .bind(d.used_bytes as i64)
                     .bind(d.available_bytes as i64)
                     .bind(d.read_bytes_per_sec as i64)
@@ -417,6 +419,7 @@ impl MetricsRepository {
             i64,
             i64,
             i64,
+            i64,
             Option<i64>,
             Option<i64>,
             Option<i64>,
@@ -433,6 +436,7 @@ impl MetricsRepository {
                 i64,
                 i64,
                 i64,
+                i64,
                 Option<i64>,
                 Option<i64>,
                 Option<i64>,
@@ -441,6 +445,7 @@ impl MetricsRepository {
         >(
             r#"
             SELECT timestamp, used_bytes, available_bytes, cached_bytes, swap_used_bytes,
+                   total_bytes,
                    page_faults_minor_per_sec, page_faults_major_per_sec,
                    swap_in_pages_per_sec, swap_out_pages_per_sec
               FROM metrics_memory
@@ -473,6 +478,7 @@ impl MetricsRepository {
             i64,
             i64,
             i64,
+            i64,
             Option<f64>,
             Option<i64>,
             Option<i64>,
@@ -494,6 +500,7 @@ impl MetricsRepository {
                 i64,
                 i64,
                 i64,
+                i64,
                 Option<f64>,
                 Option<i64>,
                 Option<i64>,
@@ -501,7 +508,9 @@ impl MetricsRepository {
             ),
         >(
             r#"
-            SELECT timestamp, mount_point, used_bytes, available_bytes,
+            SELECT timestamp, mount_point,
+                   total_bytes,
+                   used_bytes, available_bytes,
                    read_bytes_per_sec, write_bytes_per_sec, inode_used_percent,
                    read_iops, write_iops, io_util_percent
               FROM metrics_disk
