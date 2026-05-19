@@ -68,7 +68,11 @@ pub struct AppState {
     pub pairing_state: RwLock<Option<PairingState>>,
 
     pub stats_tx: broadcast::Sender<StatsEvent>,
-    pub processes_tx: broadcast::Sender<ProcessList>,
+    /// Process snapshots are wrapped in `Arc` so a broadcast fan-out and
+    /// the latest-snapshot cache share one heap allocation per refresh
+    /// (process lists routinely run into the hundreds of entries — each
+    /// `ProcessInfo` carries a name, exe path and `Vec<String>` cmd).
+    pub processes_tx: broadcast::Sender<Arc<ProcessList>>,
 
     /// Most recent stats tick — primer source for new SSE subscribers.
     pub stats_latest: Arc<RwLock<Option<AllStats>>>,
@@ -83,7 +87,7 @@ pub struct AppState {
     /// Latest process snapshot. `GET /processes` refreshes on demand when
     /// the cache is stale; no background scan, since sysinfo's process
     /// enumeration is expensive.
-    pub processes_latest: Arc<RwLock<Option<ProcessList>>>,
+    pub processes_latest: Arc<RwLock<Option<Arc<ProcessList>>>>,
     /// Serializes on-demand process refreshes so a burst of `/processes`
     /// requests cannot all pay the full sysinfo scan at once.
     pub processes_refresh_lock: Arc<Mutex<()>>,

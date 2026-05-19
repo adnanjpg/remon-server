@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 /// CPU statistics
@@ -164,26 +166,38 @@ pub struct ComponentsSnapshot {
     pub timestamp: i64,
 }
 
-/// All stats combined
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// All stats combined.
+///
+/// Fields are wrapped in `Arc` so the primer-cache snapshot and the
+/// broadcast events share the same heap-allocated payloads — a new
+/// subscriber-tick fans out as N refcount bumps instead of N deep clones
+/// of every Vec/String inside.
+///
+/// Not `Deserialize`: `Arc<T>: Deserialize` requires serde's `rc`
+/// feature and no caller of this struct decodes it from JSON anyway.
+#[derive(Debug, Clone, Serialize)]
 pub struct AllStats {
-    pub cpu: CpuStats,
-    pub memory: MemoryStats,
-    pub disks: Vec<DiskStats>,
-    pub network: Vec<NetworkStats>,
-    pub pressure: Option<PressureSnapshot>,
-    pub components: Option<ComponentsSnapshot>,
+    pub cpu: Arc<CpuStats>,
+    pub memory: Arc<MemoryStats>,
+    pub disks: Arc<Vec<DiskStats>>,
+    pub network: Arc<Vec<NetworkStats>>,
+    pub pressure: Option<Arc<PressureSnapshot>>,
+    pub components: Option<Arc<ComponentsSnapshot>>,
 }
 
-/// Stats event for broadcast channel
+/// Stats event for broadcast channel.
+///
+/// Variants hold `Arc<T>` so `tokio::sync::broadcast`'s per-receiver clone
+/// is just a refcount bump — receivers that filter out the event (e.g.
+/// `/sse/stats/cpu` discarding `Memory`) pay nothing for the payload.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", content = "data")]
 pub enum StatsEvent {
-    Cpu(CpuStats),
-    Memory(MemoryStats),
-    Disk(Vec<DiskStats>),
-    Network(Vec<NetworkStats>),
-    All(AllStats),
-    Pressure(PressureSnapshot),
-    Components(ComponentsSnapshot),
+    Cpu(Arc<CpuStats>),
+    Memory(Arc<MemoryStats>),
+    Disk(Arc<Vec<DiskStats>>),
+    Network(Arc<Vec<NetworkStats>>),
+    All(Arc<AllStats>),
+    Pressure(Arc<PressureSnapshot>),
+    Components(Arc<ComponentsSnapshot>),
 }

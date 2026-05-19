@@ -65,9 +65,15 @@ pub async fn run(state: Arc<AppState>) {
         // request that lands during the broadcast send still sees fresh
         // data. Both are best-effort — broadcast errors when there are no
         // subscribers, which is the normal case today.
+        //
+        // The snapshot is wrapped in `Arc` so the cache write and the
+        // broadcast send share one heap allocation. The broadcast channel
+        // itself stores `Arc<ProcessList>`, so per-receiver delivery is
+        // also a refcount bump rather than a deep clone of the Vec.
         let t_publish = Instant::now();
-        *state.processes_latest.write().await = Some(process_list.clone());
-        let _ = state.processes_tx.send(process_list);
+        let process_arc = Arc::new(process_list);
+        *state.processes_latest.write().await = Some(Arc::clone(&process_arc));
+        let _ = state.processes_tx.send(process_arc);
         let publish_dur = t_publish.elapsed();
 
         tick_stats.record(&[refresh_dur, compute_dur, publish_dur]);

@@ -62,9 +62,14 @@ pub async fn get_processes(
 
     let limit = q.limit.min(1000);
 
+    // `process_list` is shared via `Arc`, so iterate by reference and
+    // clone only the entries that pass the filter — for small filter
+    // result sets this is strictly less work than the previous
+    // `into_iter` that consumed the whole Vec from an owned snapshot
+    // (which itself was a deep clone of the cache).
     let mut processes: Vec<_> = process_list
         .processes
-        .into_iter()
+        .iter()
         .filter(|p| {
             if let Some(ref s) = q.search {
                 if !p.name.to_lowercase().contains(&s.to_lowercase()) {
@@ -86,6 +91,7 @@ pub async fn get_processes(
             }
             true
         })
+        .cloned()
         .collect();
 
     match q.sort.as_str() {
@@ -117,7 +123,7 @@ pub async fn get_processes(
     })
 }
 
-async fn get_or_refresh_processes(state: &AppState) -> ProcessList {
+async fn get_or_refresh_processes(state: &AppState) -> Arc<ProcessList> {
     if let Some(cached) = fresh_cached_processes(state).await {
         return cached;
     }
@@ -129,13 +135,13 @@ async fn get_or_refresh_processes(state: &AppState) -> ProcessList {
         return cached;
     }
 
-    let refreshed = refresh_process_snapshot().await;
-    *state.processes_latest.write().await = Some(refreshed.clone());
-    let _ = state.processes_tx.send(refreshed.clone());
+    let refreshed = Arc::new(refresh_process_snapshot().await);
+    *state.processes_latest.write().await = Some(Arc::clone(&refreshed));
+    let _ = state.processes_tx.send(Arc::clone(&refreshed));
     refreshed
 }
 
-async fn fresh_cached_processes(state: &AppState) -> Option<ProcessList> {
+async fn fresh_cached_processes(state: &AppState) -> Option<Arc<ProcessList>> {
     let now = chrono::Utc::now().timestamp();
     let ttl_secs =
         ((state.processes_cache_ttl_ms.load(Ordering::Relaxed) + 999) / 1000).max(1) as i64;

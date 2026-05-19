@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use sysinfo::{Components, Disks, Networks, System};
 
 use crate::models::stats::{
@@ -375,11 +377,11 @@ pub fn get_all_stats(
 ) -> AllStats {
     let timestamp = chrono::Utc::now().timestamp();
     AllStats {
-        cpu: get_cpu_stats(sys, timestamp),
-        memory: get_memory_stats(sys, timestamp),
+        cpu: Arc::new(get_cpu_stats(sys, timestamp)),
+        memory: Arc::new(get_memory_stats(sys, timestamp)),
         pressure: None,
         components: None,
-        disks: get_disk_stats(disks, interval_secs, timestamp),
-        network: get_network_stats(networks, interval_secs, timestamp),
+        disks: Arc::new(get_disk_stats(disks, interval_secs, timestamp)),
+        network: Arc::new(get_network_stats(networks, interval_secs, timestamp)),
     }
 }

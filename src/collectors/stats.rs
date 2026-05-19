@@ -121,41 +121,57 @@ pub async fn run(state: Arc<AppState>) {
         {
             pressure_snapshot = None;
         }
+
+        // Move each owned metric into an `Arc` once, post-enrich. From this
+        // point on, the broadcast send, the primer-cache write and every
+        // SSE receiver pulling from the broadcast all share the same heap
+        // allocation per metric — clones become atomic refcount bumps
+        // instead of deep copies of the inner Vec/String. With N
+        // subscribers fanning out we save (N - 1) deep clones per metric
+        // per tick.
+        let cpu = Arc::new(cpu_stats);
+        let memory = Arc::new(memory_stats);
+        let disks_arc = Arc::new(disk_stats);
+        let network = Arc::new(network_stats);
+        let pressure = pressure_snapshot.map(Arc::new);
+        // The DB layer always wants the full components snapshot; the
+        // broadcast/cache path only emits one when the list is non-empty.
+        // Both share the same `Arc`.
+        let components_full = Arc::new(components_snapshot);
+        let components_event =
+            (!components_full.components.is_empty()).then(|| Arc::clone(&components_full));
+
         let compute_dur = t_compute.elapsed();
 
         // ── Phase: broadcast ────────────────────────────────────────────
         // Empty Components frames are dropped.
         let t_broadcast = Instant::now();
-        let _ = state.stats_tx.send(StatsEvent::Cpu(cpu_stats.clone()));
+        let _ = state.stats_tx.send(StatsEvent::Cpu(Arc::clone(&cpu)));
+        let _ = state.stats_tx.send(StatsEvent::Memory(Arc::clone(&memory)));
         let _ = state
             .stats_tx
-            .send(StatsEvent::Memory(memory_stats.clone()));
-        let _ = state.stats_tx.send(StatsEvent::Disk(disk_stats.clone()));
+            .send(StatsEvent::Disk(Arc::clone(&disks_arc)));
         let _ = state
             .stats_tx
-            .send(StatsEvent::Network(network_stats.clone()));
-        if let Some(p) = pressure_snapshot.clone() {
-            let _ = state.stats_tx.send(StatsEvent::Pressure(p));
+            .send(StatsEvent::Network(Arc::clone(&network)));
+        if let Some(p) = pressure.as_ref() {
+            let _ = state.stats_tx.send(StatsEvent::Pressure(Arc::clone(p)));
         }
-        let components_event = if components_snapshot.components.is_empty() {
-            None
-        } else {
-            Some(components_snapshot.clone())
-        };
-        if let Some(c) = components_event.clone() {
-            let _ = state.stats_tx.send(StatsEvent::Components(c));
+        if let Some(c) = components_event.as_ref() {
+            let _ = state.stats_tx.send(StatsEvent::Components(Arc::clone(c)));
         }
         let broadcast_dur = t_broadcast.elapsed();
 
         // SSE primer cache. Written after broadcast to preserve the
         // invariant that a live subscriber never sees a frame the cache
-        // hasn't seen.
+        // hasn't seen. Every field is an `Arc::clone` — the bundle and
+        // the in-flight broadcast events share storage.
         let bundle = AllStats {
-            cpu: cpu_stats.clone(),
-            memory: memory_stats.clone(),
-            disks: disk_stats.clone(),
-            network: network_stats.clone(),
-            pressure: pressure_snapshot.clone(),
+            cpu: Arc::clone(&cpu),
+            memory: Arc::clone(&memory),
+            disks: Arc::clone(&disks_arc),
+            network: Arc::clone(&network),
+            pressure: pressure.clone(),
             components: components_event,
         };
         *state.stats_latest.write().await = Some(bundle);
@@ -164,12 +180,12 @@ pub async fn run(state: Arc<AppState>) {
         let t_db = Instant::now();
         if let Err(e) = metrics_repo
             .insert_raw_tick(
-                &cpu_stats,
-                &memory_stats,
-                &disk_stats,
-                &network_stats,
-                pressure_snapshot.as_ref(),
-                Some(&components_snapshot),
+                &cpu,
+                &memory,
+                &disks_arc,
+                &network,
+                pressure.as_deref(),
+                Some(&components_full),
             )
             .await
         {
@@ -182,8 +198,8 @@ pub async fn run(state: Arc<AppState>) {
 
         debug!(
             "Stats collected: CPU {:.1}%, Memory {:.1}%",
-            cpu_stats.usage_percent,
-            (memory_stats.used_bytes as f64 / memory_stats.total_bytes.max(1) as f64) * 100.0
+            cpu.usage_percent,
+            (memory.used_bytes as f64 / memory.total_bytes.max(1) as f64) * 100.0
         );
 
         // Rebuild on interval change to avoid an immediate double-fire.
