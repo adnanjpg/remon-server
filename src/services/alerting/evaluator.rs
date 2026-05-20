@@ -61,11 +61,13 @@ async fn run_supervisor(state: Arc<AppState>) {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let repo = AlertRepository::new(state.db.clone());
-    let rules = match repo.list_enabled().await {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("Alert evaluator: load rules failed: {:?}", e);
-            return;
+    let rules = loop {
+        match repo.list_enabled().await {
+            Ok(r) => break r,
+            Err(e) => {
+                warn!("Alert evaluator: load rules failed, retrying: {:?}", e);
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
         }
     };
 
