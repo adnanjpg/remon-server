@@ -19,6 +19,7 @@
 //! flow through `bind`.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
@@ -368,7 +369,11 @@ async fn resolve_probe(
     // we want (rule's labels must be present in the row).
     let mut json_clauses = String::new();
     for k in json_filters.keys() {
-        json_clauses.push_str(&format!(" AND json_extract(labels, '$.{}') = ?", k));
+        let _ = write!(
+            &mut json_clauses,
+            " AND json_extract(labels, '$.{}') = ?",
+            k
+        );
     }
 
     let probe_clause = if probe_name_filter.is_some() {

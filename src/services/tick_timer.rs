@@ -17,6 +17,7 @@
 //! one-off spikes.
 
 use std::collections::VecDeque;
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use log::debug;
@@ -111,10 +112,11 @@ impl TickStats {
             if i > 0 {
                 line.push(' ');
             }
-            line.push_str(&format!(
+            let _ = write!(
+                &mut line,
                 "{}={{p50={} p95={} p99={} max={}}}",
                 phase.name, p50, p95, p99, max
-            ));
+            );
         }
         debug!(
             "{} tick μs (window={} samples): {}",
