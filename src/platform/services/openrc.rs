@@ -128,7 +128,7 @@ impl ServiceManager for OpenRcManager {
                     name: name.clone(),
                     description: None,
                     state: state.clone(),
-                    raw_state: format!("{:?}", state).to_lowercase(),
+                    raw_state: state.as_str().to_string(),
                     enabled_at_boot,
                     backend: ServiceBackend::OpenRc,
                 }

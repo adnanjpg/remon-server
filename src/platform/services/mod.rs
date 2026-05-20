@@ -28,6 +28,21 @@ pub enum ServiceState {
     Unknown,
 }
 
+impl ServiceState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ServiceState::Running => "running",
+            ServiceState::Stopped => "stopped",
+            ServiceState::Starting => "starting",
+            ServiceState::Stopping => "stopping",
+            ServiceState::Paused => "paused",
+            ServiceState::Failed => "failed",
+            ServiceState::Reloading => "reloading",
+            ServiceState::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ServiceBackend {
@@ -35,6 +50,17 @@ pub enum ServiceBackend {
     OpenRc,
     WindowsScm,
     Unknown,
+}
+
+impl ServiceBackend {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ServiceBackend::Systemd => "systemd",
+            ServiceBackend::OpenRc => "openrc",
+            ServiceBackend::WindowsScm => "windowsscm",
+            ServiceBackend::Unknown => "unknown",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

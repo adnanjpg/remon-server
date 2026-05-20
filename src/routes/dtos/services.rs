@@ -19,10 +19,10 @@ impl From<Service> for ServiceDto {
         Self {
             name: s.name,
             description: s.description,
-            state: state_to_str(&s.state).to_string(),
+            state: s.state.as_str().to_string(),
             raw_state: s.raw_state,
             enabled_at_boot: s.enabled_at_boot,
-            backend: format!("{:?}", s.backend).to_lowercase(),
+            backend: s.backend.as_str().to_string(),
         }
     }
 }
@@ -81,7 +81,7 @@ impl From<TimerUnit> for TimerDto {
             name: t.name,
             service: t.service,
             description: t.description,
-            state: state_to_str(&t.state).to_string(),
+            state: t.state.as_str().to_string(),
             raw_state: t.raw_state,
             enabled_at_boot: t.enabled_at_boot,
             next_run: t.next_run,
@@ -96,19 +96,6 @@ pub struct ListTimersResponse {
 }
 
 // ===== Helpers =====
-
-fn state_to_str(s: &ServiceState) -> &'static str {
-    match s {
-        ServiceState::Running => "running",
-        ServiceState::Stopped => "stopped",
-        ServiceState::Starting => "starting",
-        ServiceState::Stopping => "stopping",
-        ServiceState::Paused => "paused",
-        ServiceState::Failed => "failed",
-        ServiceState::Reloading => "reloading",
-        ServiceState::Unknown => "unknown",
-    }
-}
 
 fn parse_state_param(s: &str) -> Option<ServiceState> {
     match s {
