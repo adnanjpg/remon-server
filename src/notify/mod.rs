@@ -147,9 +147,10 @@ impl NotificationManager {
         }
 
         let mut join_set = tokio::task::JoinSet::new();
+        let notif = Arc::new(notification.clone());
 
         for (name, channel) in targets {
-            let notif = notification.clone();
+            let notif = Arc::clone(&notif);
             join_set.spawn(async move { send_with_retry(&name, &channel, &notif).await });
         }
 
