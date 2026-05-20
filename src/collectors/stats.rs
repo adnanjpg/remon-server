@@ -65,6 +65,10 @@ pub async fn run(state: Arc<AppState>) {
     // `refresh(true)` re-enumerates hot-plug entries; `refresh(false)`
     // only updates counters. Hot-plug is rare relative to the tick rate.
     const DISCOVERY_EVERY_N_TICKS: u32 = 15;
+    // Components refresh hits WMI/COM on Windows and is by far the heaviest
+    // sysinfo call on that platform. Temperatures don't change fast enough
+    // to justify per-tick polling; skip on most ticks.
+    const COMPONENTS_REFRESH_EVERY_N_TICKS: u32 = 30;
     let mut tick_count: u32 = 0;
 
     // MissedTickBehavior::Skip: drop overrun ticks, don't burst-catch up.
@@ -104,8 +108,11 @@ pub async fn run(state: Arc<AppState>) {
         let t = Instant::now();
         networks.refresh(do_discovery);
         let d_net = t.elapsed();
+        let do_comp = tick_count.is_multiple_of(COMPONENTS_REFRESH_EVERY_N_TICKS);
         let t = Instant::now();
-        components.refresh(do_discovery);
+        if do_comp {
+            components.refresh(do_discovery);
+        }
         let d_comp = t.elapsed();
 
         // ── Phase: compute ──────────────────────────────────────────────
