@@ -132,7 +132,7 @@ impl NotificationManager {
                 .iter()
                 .filter(|s| {
                     s.min_severity
-                        .map_or(true, |min| severity_gte(notification.severity, min))
+                        .is_none_or(|min| severity_gte(notification.severity, min))
                 })
                 .map(|s| (s.name.clone(), Arc::clone(&s.inner)))
                 .collect()
@@ -151,7 +151,7 @@ impl NotificationManager {
 
         for (name, channel) in targets {
             let notif = Arc::clone(&notif);
-            join_set.spawn(async move { send_with_retry(&name, &channel, &notif).await });
+            join_set.spawn(async move { send_with_retry(&name, &*channel, &notif).await });
         }
 
         let mut total = 0usize;
@@ -205,14 +205,12 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 /// enough that we don't hammer a struggling upstream.
 const RETRY_BACKOFF: Duration = Duration::from_millis(500);
 
-/// Best-effort send with one retry. Catches the transient class of
-/// failures (TCP reset, DNS blip, 503) that previously dropped alert
-/// notifications permanently. Permanent failures (auth, malformed
-/// config) burn the same 5 s twice — acceptable since alert fanout
-/// already runs concurrently per channel.
+/// Best-effort send with one retry on transient failures (TCP reset, DNS
+/// blip, 503). Permanent failures (auth, malformed config) burn the same
+/// per-attempt timeout twice — acceptable since channels fan out concurrently.
 async fn send_with_retry(
     name: &str,
-    channel: &Arc<dyn NotificationChannel>,
+    channel: &dyn NotificationChannel,
     notif: &Notification,
 ) -> usize {
     let attempt_once = || async {
