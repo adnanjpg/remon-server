@@ -45,9 +45,19 @@ pub async fn run(state: Arc<AppState>) {
 
     // Sliding-window phase stats (p50/p95/p99/max). The window deliberately
     // spans many flushes so p99 stays meaningful when one cycle is noisy.
+    // refresh_* are split per sysinfo call so the heavy one stands out.
     let mut tick_stats = TickStats::new(
         "stats",
-        &["refresh", "compute", "broadcast", "db_write"],
+        &[
+            "refresh_cpu",
+            "refresh_mem",
+            "refresh_disks",
+            "refresh_net",
+            "refresh_comp",
+            "compute",
+            "broadcast",
+            "db_write",
+        ],
         600,
         30,
     );
@@ -82,13 +92,21 @@ pub async fn run(state: Arc<AppState>) {
         // ── Phase: refresh ──────────────────────────────────────────────
         tick_count = tick_count.wrapping_add(1);
         let do_discovery = tick_count.is_multiple_of(DISCOVERY_EVERY_N_TICKS);
-        let t_refresh = Instant::now();
+        let t = Instant::now();
         sys.refresh_cpu_all();
+        let d_cpu = t.elapsed();
+        let t = Instant::now();
         sys.refresh_memory();
+        let d_mem = t.elapsed();
+        let t = Instant::now();
         disks.refresh(do_discovery);
+        let d_disks = t.elapsed();
+        let t = Instant::now();
         networks.refresh(do_discovery);
+        let d_net = t.elapsed();
+        let t = Instant::now();
         components.refresh(do_discovery);
-        let refresh_dur = t_refresh.elapsed();
+        let d_comp = t.elapsed();
 
         // ── Phase: compute ──────────────────────────────────────────────
         let t_compute = Instant::now();
@@ -193,7 +211,16 @@ pub async fn run(state: Arc<AppState>) {
         }
         let db_write_dur = t_db.elapsed();
 
-        tick_stats.record(&[refresh_dur, compute_dur, broadcast_dur, db_write_dur]);
+        tick_stats.record(&[
+            d_cpu,
+            d_mem,
+            d_disks,
+            d_net,
+            d_comp,
+            compute_dur,
+            broadcast_dur,
+            db_write_dur,
+        ]);
         tick_stats.flush_if_needed();
 
         debug!(

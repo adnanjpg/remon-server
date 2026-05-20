@@ -19,3 +19,12 @@ Cargo.lock.orig
 
 # Temporary files
 temp/
+
+# Profiler artifacts (samply, perf, etc.)
+perf.data
+perf.data.old
+*.svg
+prof.json
+
+# Local-only scratch / experiment scripts.
+/scripts/
