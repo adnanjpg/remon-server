@@ -15,7 +15,7 @@ pub struct ProbeRepository {
     pool: SqlitePool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ProbeDefinitionRow {
     pub name: String,
     pub enabled: bool,
@@ -26,9 +26,10 @@ pub struct ProbeDefinitionRow {
 
 /// One time-series sample returned from `read_metric_history` —
 /// shape matches what `/metrics/probe/{probe}/{metric}` serves.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ProbeMetricSample {
     pub timestamp: i64,
+    #[sqlx(rename = "labels")]
     pub labels_json: String,
     pub value: f64,
 }
@@ -78,7 +79,7 @@ impl ProbeRepository {
              WHERE enabled = 1 AND name NOT IN ({})",
             placeholders
         );
-        let mut q = sqlx::query(&sql);
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
         for n in keep {
             q = q.bind(n);
         }
@@ -87,24 +88,13 @@ impl ProbeRepository {
     }
 
     pub async fn list_all(&self) -> AppResult<Vec<ProbeDefinitionRow>> {
-        let rows: Vec<(String, i64, String, i64, String)> = sqlx::query_as(
+        let rows = sqlx::query_as::<_, ProbeDefinitionRow>(
             "SELECT name, enabled, schedule, timeout_ms, manifest_hash \
              FROM probe_definitions ORDER BY name ASC",
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows
-            .into_iter()
-            .map(
-                |(name, enabled, schedule, timeout_ms, manifest_hash)| ProbeDefinitionRow {
-                    name,
-                    enabled: enabled != 0,
-                    schedule,
-                    timeout_ms,
-                    manifest_hash,
-                },
-            )
-            .collect())
+        Ok(rows)
     }
 
     /// Persist the run-meta row. Called after every probe execution,
@@ -152,7 +142,7 @@ impl ProbeRepository {
             }
             sql.push_str("('raw', ?, ?, ?, ?, ?)");
         }
-        let mut q = sqlx::query(&sql);
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
         for m in metrics {
             let labels = m.labels_canonical();
             q = q
@@ -216,7 +206,7 @@ impl ProbeRepository {
         limit: u32,
     ) -> AppResult<Vec<ProbeMetricSample>> {
         let rows = if let Some(labels) = labels_filter {
-            sqlx::query_as::<_, (i64, String, f64)>(
+            sqlx::query_as::<_, ProbeMetricSample>(
                 r#"
                 SELECT timestamp, labels, value
                   FROM metrics_probe
@@ -237,7 +227,7 @@ impl ProbeRepository {
             .fetch_all(&self.pool)
             .await?
         } else {
-            sqlx::query_as::<_, (i64, String, f64)>(
+            sqlx::query_as::<_, ProbeMetricSample>(
                 r#"
                 SELECT timestamp, labels, value
                   FROM metrics_probe
@@ -258,13 +248,6 @@ impl ProbeRepository {
             .await?
         };
 
-        Ok(rows
-            .into_iter()
-            .map(|(ts, labels, value)| ProbeMetricSample {
-                timestamp: ts,
-                labels_json: labels,
-                value,
-            })
-            .collect())
+        Ok(rows)
     }
 }

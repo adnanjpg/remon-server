@@ -4,7 +4,7 @@ use crate::error::AppResult;
 
 /// One row in the `resolutions` table. The rollup task reads these to learn
 /// which buckets exist and how they chain together (`rollup_from`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Resolution {
     pub name: String,
     pub interval_seconds: i64,
@@ -22,7 +22,7 @@ impl ResolutionRepository {
     }
 
     pub async fn list_all(&self) -> AppResult<Vec<Resolution>> {
-        let rows = sqlx::query_as::<_, (String, i64, Option<String>, bool)>(
+        let rows = sqlx::query_as::<_, Resolution>(
             r#"
             SELECT name, interval_seconds, rollup_from, enabled
               FROM resolutions
@@ -31,16 +31,7 @@ impl ResolutionRepository {
         )
         .fetch_all(&self.pool)
         .await?;
-
-        Ok(rows
-            .into_iter()
-            .map(|r| Resolution {
-                name: r.0,
-                interval_seconds: r.1,
-                rollup_from: r.2,
-                enabled: r.3,
-            })
-            .collect())
+        Ok(rows)
     }
 
     /// Resolutions that have a parent — i.e. the buckets the rollup task

@@ -13,7 +13,7 @@ pub struct Device {
 }
 
 /// Internal device record (includes credential hashes and TOTP secret).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct StoredDevice {
     pub id: String,
     pub name: String,

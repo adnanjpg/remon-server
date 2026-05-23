@@ -236,13 +236,13 @@ async fn resolve_unkeyed(
     );
 
     let value_opt: Option<f64> = if i64_fields.contains(&column) {
-        sqlx::query_scalar::<_, i64>(&sql)
+        sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql.as_str()))
             .fetch_optional(pool)
             .await
             .map_err(|e| ResolveError::msg(e.to_string()))?
             .map(|v| v as f64)
     } else {
-        sqlx::query_scalar::<_, f64>(&sql)
+        sqlx::query_scalar::<_, f64>(sqlx::AssertSqlSafe(sql.as_str()))
             .fetch_optional(pool)
             .await
             .map_err(|e| ResolveError::msg(e.to_string()))?
@@ -306,7 +306,7 @@ async fn resolve_keyed(
     );
 
     let rows: Vec<(String, f64)> = if i64_fields.contains(&column) {
-        let mut q2 = sqlx::query_as::<_, (String, i64)>(&sql);
+        let mut q2 = sqlx::query_as::<_, (String, i64)>(sqlx::AssertSqlSafe(sql.as_str()));
         if let Some(v) = filter_value {
             q2 = q2.bind(v);
         }
@@ -317,7 +317,7 @@ async fn resolve_keyed(
             .map(|(k, v)| (k, v as f64))
             .collect()
     } else {
-        let mut q2 = sqlx::query_as::<_, (String, f64)>(&sql);
+        let mut q2 = sqlx::query_as::<_, (String, f64)>(sqlx::AssertSqlSafe(sql.as_str()));
         if let Some(v) = filter_value {
             q2 = q2.bind(v);
         }
@@ -405,7 +405,7 @@ async fn resolve_probe(
         json_clauses = json_clauses,
     );
 
-    let mut q = sqlx::query_as::<_, (String, String, f64)>(&sql);
+    let mut q = sqlx::query_as::<_, (String, String, f64)>(sqlx::AssertSqlSafe(sql.as_str()));
     q = q.bind(metric_name);
     if let Some(name) = probe_name_filter {
         q = q.bind(name);

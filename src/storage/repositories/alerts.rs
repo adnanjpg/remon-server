@@ -41,20 +41,7 @@ impl AlertRepository {
     // ===== alert_rules =====
 
     pub async fn list(&self) -> AppResult<Vec<AlertRule>> {
-        let rows: Vec<(
-            i64,
-            String,
-            Option<String>,
-            i64,
-            String,
-            String,
-            i64,
-            i64,
-            i64,
-            Option<i64>,
-            i64,
-            i64,
-        )> = sqlx::query_as(
+        let rows = sqlx::query_as::<_, AlertRuleRow>(
             r#"
             SELECT id, name, description, enabled, expression, severity,
                    for_duration_secs, eval_interval_secs, cooldown_secs,
@@ -65,24 +52,11 @@ impl AlertRepository {
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().filter_map(decode_rule).collect())
+        Ok(rows.into_iter().filter_map(AlertRuleRow::decode).collect())
     }
 
     pub async fn list_enabled(&self) -> AppResult<Vec<AlertRule>> {
-        let rows: Vec<(
-            i64,
-            String,
-            Option<String>,
-            i64,
-            String,
-            String,
-            i64,
-            i64,
-            i64,
-            Option<i64>,
-            i64,
-            i64,
-        )> = sqlx::query_as(
+        let rows = sqlx::query_as::<_, AlertRuleRow>(
             r#"
             SELECT id, name, description, enabled, expression, severity,
                    for_duration_secs, eval_interval_secs, cooldown_secs,
@@ -94,24 +68,11 @@ impl AlertRepository {
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().filter_map(decode_rule).collect())
+        Ok(rows.into_iter().filter_map(AlertRuleRow::decode).collect())
     }
 
     pub async fn get(&self, id: i64) -> AppResult<Option<AlertRule>> {
-        let row: Option<(
-            i64,
-            String,
-            Option<String>,
-            i64,
-            String,
-            String,
-            i64,
-            i64,
-            i64,
-            Option<i64>,
-            i64,
-            i64,
-        )> = sqlx::query_as(
+        let row = sqlx::query_as::<_, AlertRuleRow>(
             r#"
             SELECT id, name, description, enabled, expression, severity,
                    for_duration_secs, eval_interval_secs, cooldown_secs,
@@ -123,7 +84,7 @@ impl AlertRepository {
         .bind(id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.and_then(decode_rule))
+        Ok(row.and_then(AlertRuleRow::decode))
     }
 
     pub async fn insert(&self, rule: &UpsertAlertRule) -> AppResult<i64> {
@@ -248,7 +209,7 @@ impl AlertRepository {
     /// the state row is left alone but eventually purged via
     /// `prune_state_for_rule` once the operator confirms.
     pub async fn list_state_for_rule(&self, rule_id: i64) -> AppResult<Vec<AlertStateRow>> {
-        let rows: Vec<(i64, String, String, i64, Option<f64>, i64, Option<i64>)> = sqlx::query_as(
+        let rows = sqlx::query_as::<_, AlertStateRawRow>(
             r#"
             SELECT rule_id, label_set, state, state_since,
                    last_value, last_eval_at, last_notified_at
@@ -259,7 +220,7 @@ impl AlertRepository {
         .bind(rule_id)
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().filter_map(decode_state).collect())
+        Ok(rows.into_iter().filter_map(AlertStateRawRow::decode).collect())
     }
 
     /// All currently-firing or pending state rows, joined with their
@@ -273,17 +234,7 @@ impl AlertRepository {
     pub async fn list_active_state(
         &self,
     ) -> AppResult<Vec<(AlertStateRow, String, AlertSeverity)>> {
-        let rows: Vec<(
-            i64,
-            String,
-            String,
-            i64,
-            Option<f64>,
-            i64,
-            Option<i64>,
-            String,
-            String,
-        )> = sqlx::query_as(
+        let rows = sqlx::query_as::<_, ActiveStateJoinRow>(
             r#"
             SELECT s.rule_id, s.label_set, s.state, s.state_since,
                    s.last_value, s.last_eval_at, s.last_notified_at,
@@ -296,37 +247,7 @@ impl AlertRepository {
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|row| {
-                let (
-                    rule_id,
-                    label_set,
-                    state,
-                    state_since,
-                    last_value,
-                    last_eval_at,
-                    last_notified_at,
-                    name,
-                    severity_str,
-                ) = row;
-                let lifecycle = AlertLifecycle::parse(&state)?;
-                let severity = AlertSeverity::parse(&severity_str)?;
-                Some((
-                    AlertStateRow {
-                        rule_id,
-                        label_set,
-                        state: lifecycle,
-                        state_since,
-                        last_value,
-                        last_eval_at,
-                        last_notified_at,
-                    },
-                    name,
-                    severity,
-                ))
-            })
-            .collect())
+        Ok(rows.into_iter().filter_map(ActiveStateJoinRow::decode).collect())
     }
 
     // ===== alert_events =====
@@ -367,7 +288,7 @@ impl AlertRepository {
         limit: u32,
         offset: u32,
     ) -> AppResult<Vec<AlertEvent>> {
-        let rows: Vec<(i64, i64, String, String, String, i64, Option<f64>, i64)> = sqlx::query_as(
+        let rows = sqlx::query_as::<_, AlertEventRow>(
             r#"
             SELECT id, rule_id, label_set, event_type, severity,
                    occurred_at, metric_value, notified
@@ -382,13 +303,13 @@ impl AlertRepository {
         .bind(offset as i64)
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().filter_map(decode_event).collect())
+        Ok(rows.into_iter().filter_map(AlertEventRow::decode).collect())
     }
 
     /// Cross-rule recent events, newest first. See `events_for_rule` for the
     /// offset semantics.
     pub async fn recent_events(&self, limit: u32, offset: u32) -> AppResult<Vec<AlertEvent>> {
-        let rows: Vec<(i64, i64, String, String, String, i64, Option<f64>, i64)> = sqlx::query_as(
+        let rows = sqlx::query_as::<_, AlertEventRow>(
             r#"
             SELECT id, rule_id, label_set, event_type, severity,
                    occurred_at, metric_value, notified
@@ -401,86 +322,128 @@ impl AlertRepository {
         .bind(offset as i64)
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().filter_map(decode_event).collect())
+        Ok(rows.into_iter().filter_map(AlertEventRow::decode).collect())
     }
 }
 
-// ===== row decoders =====
+// ===== private row types =====
 
-#[allow(clippy::type_complexity)]
-fn decode_rule(
-    row: (
-        i64,
-        String,
-        Option<String>,
-        i64,
-        String,
-        String,
-        i64,
-        i64,
-        i64,
-        Option<i64>,
-        i64,
-        i64,
-    ),
-) -> Option<AlertRule> {
-    let (
-        id,
-        name,
-        description,
-        enabled,
-        expression,
-        severity,
-        for_duration_secs,
-        eval_interval_secs,
-        cooldown_secs,
-        silenced_until,
-        created_at,
-        updated_at,
-    ) = row;
-    Some(AlertRule {
-        id,
-        name,
-        description,
-        enabled: enabled != 0,
-        expression,
-        severity: AlertSeverity::parse(&severity)?,
-        for_duration_secs,
-        eval_interval_secs,
-        cooldown_secs,
-        silenced_until,
-        created_at,
-        updated_at,
-    })
+#[derive(sqlx::FromRow)]
+struct AlertRuleRow {
+    id: i64,
+    name: String,
+    description: Option<String>,
+    enabled: bool,
+    expression: String,
+    severity: String,
+    for_duration_secs: i64,
+    eval_interval_secs: i64,
+    cooldown_secs: i64,
+    silenced_until: Option<i64>,
+    created_at: i64,
+    updated_at: i64,
 }
 
-fn decode_state(
-    row: (i64, String, String, i64, Option<f64>, i64, Option<i64>),
-) -> Option<AlertStateRow> {
-    let (rule_id, label_set, state, state_since, last_value, last_eval_at, last_notified_at) = row;
-    Some(AlertStateRow {
-        rule_id,
-        label_set,
-        state: AlertLifecycle::parse(&state)?,
-        state_since,
-        last_value,
-        last_eval_at,
-        last_notified_at,
-    })
+impl AlertRuleRow {
+    fn decode(self) -> Option<AlertRule> {
+        Some(AlertRule {
+            id: self.id,
+            name: self.name,
+            description: self.description,
+            enabled: self.enabled,
+            expression: self.expression,
+            severity: AlertSeverity::parse(&self.severity)?,
+            for_duration_secs: self.for_duration_secs,
+            eval_interval_secs: self.eval_interval_secs,
+            cooldown_secs: self.cooldown_secs,
+            silenced_until: self.silenced_until,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        })
+    }
 }
 
-fn decode_event(
-    row: (i64, i64, String, String, String, i64, Option<f64>, i64),
-) -> Option<AlertEvent> {
-    let (id, rule_id, label_set, event_type, severity, occurred_at, metric_value, notified) = row;
-    Some(AlertEvent {
-        id,
-        rule_id,
-        label_set,
-        event_type: AlertEventType::parse(&event_type)?,
-        severity: AlertSeverity::parse(&severity)?,
-        occurred_at,
-        metric_value,
-        notified: notified != 0,
-    })
+#[derive(sqlx::FromRow)]
+struct AlertStateRawRow {
+    rule_id: i64,
+    label_set: String,
+    state: String,
+    state_since: i64,
+    last_value: Option<f64>,
+    last_eval_at: i64,
+    last_notified_at: Option<i64>,
+}
+
+impl AlertStateRawRow {
+    fn decode(self) -> Option<AlertStateRow> {
+        Some(AlertStateRow {
+            rule_id: self.rule_id,
+            label_set: self.label_set,
+            state: AlertLifecycle::parse(&self.state)?,
+            state_since: self.state_since,
+            last_value: self.last_value,
+            last_eval_at: self.last_eval_at,
+            last_notified_at: self.last_notified_at,
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct ActiveStateJoinRow {
+    rule_id: i64,
+    label_set: String,
+    state: String,
+    state_since: i64,
+    last_value: Option<f64>,
+    last_eval_at: i64,
+    last_notified_at: Option<i64>,
+    name: String,
+    severity: String,
+}
+
+impl ActiveStateJoinRow {
+    fn decode(self) -> Option<(AlertStateRow, String, AlertSeverity)> {
+        let lifecycle = AlertLifecycle::parse(&self.state)?;
+        let severity = AlertSeverity::parse(&self.severity)?;
+        Some((
+            AlertStateRow {
+                rule_id: self.rule_id,
+                label_set: self.label_set,
+                state: lifecycle,
+                state_since: self.state_since,
+                last_value: self.last_value,
+                last_eval_at: self.last_eval_at,
+                last_notified_at: self.last_notified_at,
+            },
+            self.name,
+            severity,
+        ))
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct AlertEventRow {
+    id: i64,
+    rule_id: i64,
+    label_set: String,
+    event_type: String,
+    severity: String,
+    occurred_at: i64,
+    metric_value: Option<f64>,
+    notified: bool,
+}
+
+impl AlertEventRow {
+    fn decode(self) -> Option<AlertEvent> {
+        Some(AlertEvent {
+            id: self.id,
+            rule_id: self.rule_id,
+            label_set: self.label_set,
+            event_type: AlertEventType::parse(&self.event_type)?,
+            severity: AlertSeverity::parse(&self.severity)?,
+            occurred_at: self.occurred_at,
+            metric_value: self.metric_value,
+            notified: self.notified,
+        })
+    }
 }

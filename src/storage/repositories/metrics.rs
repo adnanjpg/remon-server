@@ -89,7 +89,7 @@ impl MetricsRepository {
                 sql.push_str("(?, ?, ?, ?)");
             }
             sql.push_str(" ON CONFLICT(timestamp, core_index) DO NOTHING");
-            let mut q = sqlx::query(&sql);
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
             for core in &cpu.per_core {
                 q = q
                     .bind(cpu.timestamp)
@@ -153,7 +153,7 @@ impl MetricsRepository {
                 sql.push_str("('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
             }
             sql.push_str(" ON CONFLICT(resolution, timestamp, mount_point) DO NOTHING");
-            let mut q = sqlx::query(&sql);
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
             let mut ts = 0i64;
             for d in disks {
                 ts = d.timestamp;
@@ -196,7 +196,7 @@ impl MetricsRepository {
                 sql.push_str("('raw', ?, ?, ?, ?, ?, ?, ?, ?)");
             }
             sql.push_str(" ON CONFLICT(resolution, timestamp, interface_name) DO NOTHING");
-            let mut q = sqlx::query(&sql);
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
             let mut ts = 0i64;
             for n in networks {
                 ts = n.timestamp;
@@ -235,7 +235,7 @@ impl MetricsRepository {
                     sql.push_str("('raw', ?, ?, ?, ?, ?)");
                 }
                 sql.push_str(" ON CONFLICT(resolution, timestamp, label) DO NOTHING");
-                let mut q = sqlx::query(&sql);
+                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
                 for comp in &c.components {
                     q = q
                         .bind(c.timestamp)
@@ -280,7 +280,7 @@ impl MetricsRepository {
                     sql.push_str("('raw', ?, ?, ?, ?, ?, ?, ?, ?)");
                 }
                 sql.push_str(" ON CONFLICT(resolution, timestamp, resource) DO NOTHING");
-                let mut q = sqlx::query(&sql);
+                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
                 for (resource, ps) in &present {
                     q = q
                         .bind(p.timestamp)
@@ -692,7 +692,7 @@ impl MetricsRepository {
                     "DELETE FROM {} WHERE resolution = ? AND timestamp < ?",
                     table
                 );
-                sqlx::query(&sql)
+                sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
                     .bind(resolution)
                     .bind(cutoff_ts)
                     .execute(&self.pool)

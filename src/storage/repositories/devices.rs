@@ -34,75 +34,24 @@ impl DeviceRepository {
     }
 
     pub async fn get_by_id(&self, id: &str) -> AppResult<Option<StoredDevice>> {
-        let row = sqlx::query_as::<
-            _,
-            (
-                String,
-                String,
-                String,
-                Option<String>,
-                Option<String>,
-                i64,
-                i64,
-                bool,
-            ),
-        >(
-            r#"
-            SELECT id, name, token_hash, totp_secret, last_ip, last_seen, created_at, is_active
-            FROM devices WHERE id = ?
-            "#,
+        let row = sqlx::query_as::<_, StoredDevice>(
+            "SELECT id, name, token_hash, totp_secret, last_ip, last_seen, created_at, is_active
+             FROM devices WHERE id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
         .await?;
-
-        Ok(row.map(|r| StoredDevice {
-            id: r.0,
-            name: r.1,
-            token_hash: r.2,
-            totp_secret: r.3,
-            last_ip: r.4,
-            last_seen: r.5,
-            created_at: r.6,
-            is_active: r.7,
-        }))
+        Ok(row)
     }
 
     pub async fn get_all(&self) -> AppResult<Vec<StoredDevice>> {
-        let rows = sqlx::query_as::<
-            _,
-            (
-                String,
-                String,
-                String,
-                Option<String>,
-                Option<String>,
-                i64,
-                i64,
-                bool,
-            ),
-        >(
-            r#"
-            SELECT id, name, token_hash, totp_secret, last_ip, last_seen, created_at, is_active
-            FROM devices ORDER BY created_at DESC
-            "#,
+        let rows = sqlx::query_as::<_, StoredDevice>(
+            "SELECT id, name, token_hash, totp_secret, last_ip, last_seen, created_at, is_active
+             FROM devices ORDER BY created_at DESC",
         )
         .fetch_all(&self.pool)
         .await?;
-
-        Ok(rows
-            .into_iter()
-            .map(|r| StoredDevice {
-                id: r.0,
-                name: r.1,
-                token_hash: r.2,
-                totp_secret: r.3,
-                last_ip: r.4,
-                last_seen: r.5,
-                created_at: r.6,
-                is_active: r.7,
-            })
-            .collect())
+        Ok(rows)
     }
 
     pub async fn update_last_seen(&self, id: &str, ip: Option<&str>) -> AppResult<()> {
