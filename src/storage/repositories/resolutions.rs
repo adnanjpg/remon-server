@@ -22,12 +22,12 @@ impl ResolutionRepository {
     }
 
     pub async fn list_all(&self) -> AppResult<Vec<Resolution>> {
-        let rows = sqlx::query_as::<_, Resolution>(
-            r#"
-            SELECT name, interval_seconds, rollup_from, enabled
-              FROM resolutions
-             ORDER BY sort_order
-            "#,
+        let rows = sqlx::query_as!(
+            Resolution,
+            r#"SELECT name as "name!", interval_seconds, rollup_from,
+                      enabled as "enabled: bool"
+               FROM resolutions
+              ORDER BY sort_order"#
         )
         .fetch_all(&self.pool)
         .await?;

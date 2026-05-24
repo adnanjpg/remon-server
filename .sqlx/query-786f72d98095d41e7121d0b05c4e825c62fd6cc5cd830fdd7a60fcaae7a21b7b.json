@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT timestamp, labels as labels_json, value\n                   FROM metrics_probe\n                  WHERE resolution = ?\n                    AND probe_name = ? AND metric_name = ? AND labels = ?\n                    AND timestamp >= ? AND timestamp <= ?\n                  ORDER BY timestamp DESC\n                  LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "timestamp",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metrics_probe",
+            "name": "timestamp"
+          }
+        }
+      },
+      {
+        "name": "labels_json",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metrics_probe",
+            "name": "labels"
+          }
+        }
+      },
+      {
+        "name": "value",
+        "ordinal": 2,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "metrics_probe",
+            "name": "value"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "786f72d98095d41e7121d0b05c4e825c62fd6cc5cd830fdd7a60fcaae7a21b7b"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE devices SET web_push_endpoint = ?, web_push_p256dh = ?, web_push_auth = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "26d0404b7c3695f3e514f2a580364f8bb5331bcda218783b7707ee85020082ee"
+}

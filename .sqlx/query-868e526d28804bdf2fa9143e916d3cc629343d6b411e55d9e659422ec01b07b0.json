@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT timestamp, duration_ms, exit_code, message, parse_ok\n               FROM probe_runs\n              WHERE probe_name = ?\n              ORDER BY timestamp DESC\n              LIMIT ? OFFSET ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "timestamp",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "probe_runs",
+            "name": "timestamp"
+          }
+        }
+      },
+      {
+        "name": "duration_ms",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "probe_runs",
+            "name": "duration_ms"
+          }
+        }
+      },
+      {
+        "name": "exit_code",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "probe_runs",
+            "name": "exit_code"
+          }
+        }
+      },
+      {
+        "name": "message",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "probe_runs",
+            "name": "message"
+          }
+        }
+      },
+      {
+        "name": "parse_ok",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "probe_runs",
+            "name": "parse_ok"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "868e526d28804bdf2fa9143e916d3cc629343d6b411e55d9e659422ec01b07b0"
+}

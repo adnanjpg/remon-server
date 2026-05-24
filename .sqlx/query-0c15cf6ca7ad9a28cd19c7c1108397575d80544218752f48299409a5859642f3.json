@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.rule_id as \"rule_id!\", s.label_set as \"label_set!\",\n                    s.state as \"state!\", s.state_since as \"state_since!\",\n                    s.last_value, s.last_eval_at as \"last_eval_at!\", s.last_notified_at,\n                    r.name as \"name!\", r.severity as \"severity!\"\n               FROM alert_state s\n               INNER JOIN alert_rules r ON r.id = s.rule_id\n              WHERE s.state IN ('pending','firing')\n              ORDER BY s.state_since ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "rule_id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_state",
+            "name": "rule_id"
+          }
+        }
+      },
+      {
+        "name": "label_set!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_state",
+            "name": "label_set"
+          }
+        }
+      },
+      {
+        "name": "state!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_state",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "state_since!",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_state",
+            "name": "state_since"
+          }
+        }
+      },
+      {
+        "name": "last_value",
+        "ordinal": 4,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "alert_state",
+            "name": "last_value"
+          }
+        }
+      },
+      {
+        "name": "last_eval_at!",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_state",
+            "name": "last_eval_at"
+          }
+        }
+      },
+      {
+        "name": "last_notified_at",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_state",
+            "name": "last_notified_at"
+          }
+        }
+      },
+      {
+        "name": "name!",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_rules",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "severity!",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_rules",
+            "name": "severity"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      null,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "0c15cf6ca7ad9a28cd19c7c1108397575d80544218752f48299409a5859642f3"
+}

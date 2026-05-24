@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO metrics_memory\n               (resolution, timestamp, total_bytes, used_bytes, available_bytes,\n                cached_bytes, swap_used_bytes,\n                page_faults_minor_per_sec, page_faults_major_per_sec,\n                swap_in_pages_per_sec, swap_out_pages_per_sec)\n             VALUES ('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n             ON CONFLICT(resolution, timestamp) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "96c8951076140b84c2eaa74eb00b984ae75adf478e60d2d556e74ddb97e01a87"
+}

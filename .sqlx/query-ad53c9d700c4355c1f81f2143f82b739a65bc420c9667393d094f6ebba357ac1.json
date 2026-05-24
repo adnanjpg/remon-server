@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT name as \"name!\", interval_seconds, rollup_from,\n                      enabled as \"enabled: bool\"\n               FROM resolutions\n              ORDER BY sort_order",
+  "describe": {
+    "columns": [
+      {
+        "name": "name!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "resolutions",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "interval_seconds",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "resolutions",
+            "name": "interval_seconds"
+          }
+        }
+      },
+      {
+        "name": "rollup_from",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "resolutions",
+            "name": "rollup_from"
+          }
+        }
+      },
+      {
+        "name": "enabled: bool",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "resolutions",
+            "name": "enabled"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "ad53c9d700c4355c1f81f2143f82b739a65bc420c9667393d094f6ebba357ac1"
+}

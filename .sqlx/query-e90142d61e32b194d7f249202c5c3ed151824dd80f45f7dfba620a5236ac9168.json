@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM alert_events WHERE occurred_at < ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "e90142d61e32b194d7f249202c5c3ed151824dd80f45f7dfba620a5236ac9168"
+}

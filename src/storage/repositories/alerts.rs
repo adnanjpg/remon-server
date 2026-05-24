@@ -41,14 +41,13 @@ impl AlertRepository {
     // ===== alert_rules =====
 
     pub async fn list(&self) -> AppResult<Vec<AlertRule>> {
-        let rows = sqlx::query_as::<_, AlertRuleRow>(
-            r#"
-            SELECT id, name, description, enabled, expression, severity,
-                   for_duration_secs, eval_interval_secs, cooldown_secs,
-                   silenced_until, created_at, updated_at
-              FROM alert_rules
-             ORDER BY id ASC
-            "#,
+        let rows = sqlx::query_as!(
+            AlertRuleRow,
+            r#"SELECT id, name, description, enabled as "enabled: bool", expression, severity,
+                    for_duration_secs, eval_interval_secs, cooldown_secs,
+                    silenced_until, created_at, updated_at
+               FROM alert_rules
+              ORDER BY id ASC"#
         )
         .fetch_all(&self.pool)
         .await?;
@@ -56,15 +55,14 @@ impl AlertRepository {
     }
 
     pub async fn list_enabled(&self) -> AppResult<Vec<AlertRule>> {
-        let rows = sqlx::query_as::<_, AlertRuleRow>(
-            r#"
-            SELECT id, name, description, enabled, expression, severity,
-                   for_duration_secs, eval_interval_secs, cooldown_secs,
-                   silenced_until, created_at, updated_at
-              FROM alert_rules
-             WHERE enabled = 1
-             ORDER BY id ASC
-            "#,
+        let rows = sqlx::query_as!(
+            AlertRuleRow,
+            r#"SELECT id, name, description, enabled as "enabled: bool", expression, severity,
+                    for_duration_secs, eval_interval_secs, cooldown_secs,
+                    silenced_until, created_at, updated_at
+               FROM alert_rules
+              WHERE enabled = 1
+              ORDER BY id ASC"#
         )
         .fetch_all(&self.pool)
         .await?;
@@ -72,49 +70,45 @@ impl AlertRepository {
     }
 
     pub async fn get(&self, id: i64) -> AppResult<Option<AlertRule>> {
-        let row = sqlx::query_as::<_, AlertRuleRow>(
-            r#"
-            SELECT id, name, description, enabled, expression, severity,
-                   for_duration_secs, eval_interval_secs, cooldown_secs,
-                   silenced_until, created_at, updated_at
-              FROM alert_rules
-             WHERE id = ?
-            "#,
+        let row = sqlx::query_as!(
+            AlertRuleRow,
+            r#"SELECT id, name, description, enabled as "enabled: bool", expression, severity,
+                    for_duration_secs, eval_interval_secs, cooldown_secs,
+                    silenced_until, created_at, updated_at
+               FROM alert_rules
+              WHERE id = ?"#,
+            id
         )
-        .bind(id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.and_then(AlertRuleRow::decode))
     }
 
     pub async fn insert(&self, rule: &UpsertAlertRule) -> AppResult<i64> {
-        let r = sqlx::query(
-            r#"
-            INSERT INTO alert_rules
+        let r = sqlx::query!(
+            "INSERT INTO alert_rules
                 (name, description, enabled, expression, severity,
                  for_duration_secs, eval_interval_secs, cooldown_secs,
                  silenced_until, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
-            "#,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())",
+            rule.name,
+            rule.description,
+            rule.enabled,
+            rule.expression,
+            rule.severity.as_str(),
+            rule.for_duration_secs,
+            rule.eval_interval_secs,
+            rule.cooldown_secs,
+            rule.silenced_until,
         )
-        .bind(&rule.name)
-        .bind(rule.description.as_deref())
-        .bind(rule.enabled as i64)
-        .bind(&rule.expression)
-        .bind(rule.severity.as_str())
-        .bind(rule.for_duration_secs)
-        .bind(rule.eval_interval_secs)
-        .bind(rule.cooldown_secs)
-        .bind(rule.silenced_until)
         .execute(&self.pool)
         .await?;
         Ok(r.last_insert_rowid())
     }
 
     pub async fn update(&self, id: i64, rule: &UpsertAlertRule) -> AppResult<bool> {
-        let r = sqlx::query(
-            r#"
-            UPDATE alert_rules SET
+        let r = sqlx::query!(
+            "UPDATE alert_rules SET
                 name               = ?,
                 description        = ?,
                 enabled            = ?,
@@ -125,19 +119,18 @@ impl AlertRepository {
                 cooldown_secs      = ?,
                 silenced_until     = ?,
                 updated_at         = unixepoch()
-              WHERE id = ?
-            "#,
+              WHERE id = ?",
+            rule.name,
+            rule.description,
+            rule.enabled,
+            rule.expression,
+            rule.severity.as_str(),
+            rule.for_duration_secs,
+            rule.eval_interval_secs,
+            rule.cooldown_secs,
+            rule.silenced_until,
+            id,
         )
-        .bind(&rule.name)
-        .bind(rule.description.as_deref())
-        .bind(rule.enabled as i64)
-        .bind(&rule.expression)
-        .bind(rule.severity.as_str())
-        .bind(rule.for_duration_secs)
-        .bind(rule.eval_interval_secs)
-        .bind(rule.cooldown_secs)
-        .bind(rule.silenced_until)
-        .bind(id)
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected() > 0)
@@ -147,24 +140,21 @@ impl AlertRepository {
     /// so a silence toggle doesn't have to round-trip the full rule body
     /// and can't accidentally stomp a concurrent PATCH.
     pub async fn set_silence(&self, id: i64, until: Option<i64>) -> AppResult<bool> {
-        let r = sqlx::query(
-            r#"
-            UPDATE alert_rules
-               SET silenced_until = ?,
-                   updated_at     = unixepoch()
-             WHERE id = ?
-            "#,
+        let r = sqlx::query!(
+            "UPDATE alert_rules
+                SET silenced_until = ?,
+                    updated_at     = unixepoch()
+              WHERE id = ?",
+            until,
+            id,
         )
-        .bind(until)
-        .bind(id)
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected() > 0)
     }
 
     pub async fn delete(&self, id: i64) -> AppResult<bool> {
-        let r = sqlx::query("DELETE FROM alert_rules WHERE id = ?")
-            .bind(id)
+        let r = sqlx::query!("DELETE FROM alert_rules WHERE id = ?", id)
             .execute(&self.pool)
             .await?;
         Ok(r.rows_affected() > 0)
@@ -176,27 +166,25 @@ impl AlertRepository {
     /// evaluator calls this on every tick. Idempotent — re-applies the
     /// same state with refreshed last_value / last_eval_at fine.
     pub async fn upsert_state(&self, st: &AlertStateRow) -> AppResult<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO alert_state
+        sqlx::query!(
+            "INSERT INTO alert_state
                 (rule_id, label_set, state, state_since,
                  last_value, last_eval_at, last_notified_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(rule_id, label_set) DO UPDATE SET
-                state            = excluded.state,
-                state_since      = excluded.state_since,
-                last_value       = excluded.last_value,
-                last_eval_at     = excluded.last_eval_at,
-                last_notified_at = COALESCE(excluded.last_notified_at, alert_state.last_notified_at)
-            "#,
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(rule_id, label_set) DO UPDATE SET
+                 state            = excluded.state,
+                 state_since      = excluded.state_since,
+                 last_value       = excluded.last_value,
+                 last_eval_at     = excluded.last_eval_at,
+                 last_notified_at = COALESCE(excluded.last_notified_at, alert_state.last_notified_at)",
+            st.rule_id,
+            st.label_set,
+            st.state.as_str(),
+            st.state_since,
+            st.last_value,
+            st.last_eval_at,
+            st.last_notified_at,
         )
-        .bind(st.rule_id)
-        .bind(&st.label_set)
-        .bind(st.state.as_str())
-        .bind(st.state_since)
-        .bind(st.last_value)
-        .bind(st.last_eval_at)
-        .bind(st.last_notified_at)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -209,15 +197,14 @@ impl AlertRepository {
     /// the state row is left alone but eventually purged via
     /// `prune_state_for_rule` once the operator confirms.
     pub async fn list_state_for_rule(&self, rule_id: i64) -> AppResult<Vec<AlertStateRow>> {
-        let rows = sqlx::query_as::<_, AlertStateRawRow>(
-            r#"
-            SELECT rule_id, label_set, state, state_since,
-                   last_value, last_eval_at, last_notified_at
-              FROM alert_state
-             WHERE rule_id = ?
-            "#,
+        let rows = sqlx::query_as!(
+            AlertStateRawRow,
+            "SELECT rule_id, label_set, state, state_since,
+                    last_value, last_eval_at, last_notified_at
+               FROM alert_state
+              WHERE rule_id = ?",
+            rule_id
         )
-        .bind(rule_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().filter_map(AlertStateRawRow::decode).collect())
@@ -234,16 +221,16 @@ impl AlertRepository {
     pub async fn list_active_state(
         &self,
     ) -> AppResult<Vec<(AlertStateRow, String, AlertSeverity)>> {
-        let rows = sqlx::query_as::<_, ActiveStateJoinRow>(
-            r#"
-            SELECT s.rule_id, s.label_set, s.state, s.state_since,
-                   s.last_value, s.last_eval_at, s.last_notified_at,
-                   r.name, r.severity
-              FROM alert_state s
-              INNER JOIN alert_rules r ON r.id = s.rule_id
-             WHERE s.state IN ('pending','firing')
-             ORDER BY s.state_since ASC
-            "#,
+        let rows = sqlx::query_as!(
+            ActiveStateJoinRow,
+            r#"SELECT s.rule_id as "rule_id!", s.label_set as "label_set!",
+                    s.state as "state!", s.state_since as "state_since!",
+                    s.last_value, s.last_eval_at as "last_eval_at!", s.last_notified_at,
+                    r.name as "name!", r.severity as "severity!"
+               FROM alert_state s
+               INNER JOIN alert_rules r ON r.id = s.rule_id
+              WHERE s.state IN ('pending','firing')
+              ORDER BY s.state_since ASC"#
         )
         .fetch_all(&self.pool)
         .await?;
@@ -261,20 +248,18 @@ impl AlertRepository {
         metric_value: Option<f64>,
         notified: bool,
     ) -> AppResult<i64> {
-        let r = sqlx::query(
-            r#"
-            INSERT INTO alert_events
+        let r = sqlx::query!(
+            "INSERT INTO alert_events
                 (rule_id, label_set, event_type, severity,
                  occurred_at, metric_value, notified)
-            VALUES (?, ?, ?, ?, unixepoch(), ?, ?)
-            "#,
+             VALUES (?, ?, ?, ?, unixepoch(), ?, ?)",
+            rule_id,
+            label_set,
+            event_type.as_str(),
+            severity.as_str(),
+            metric_value,
+            notified,
         )
-        .bind(rule_id)
-        .bind(label_set)
-        .bind(event_type.as_str())
-        .bind(severity.as_str())
-        .bind(metric_value)
-        .bind(notified as i64)
         .execute(&self.pool)
         .await?;
         Ok(r.last_insert_rowid())
@@ -288,19 +273,20 @@ impl AlertRepository {
         limit: u32,
         offset: u32,
     ) -> AppResult<Vec<AlertEvent>> {
-        let rows = sqlx::query_as::<_, AlertEventRow>(
-            r#"
-            SELECT id, rule_id, label_set, event_type, severity,
-                   occurred_at, metric_value, notified
-              FROM alert_events
-             WHERE rule_id = ?
-             ORDER BY occurred_at DESC
-             LIMIT ? OFFSET ?
-            "#,
+        let limit = limit as i64;
+        let offset = offset as i64;
+        let rows = sqlx::query_as!(
+            AlertEventRow,
+            r#"SELECT id, rule_id, label_set, event_type, severity,
+                    occurred_at, metric_value, notified as "notified: bool"
+               FROM alert_events
+              WHERE rule_id = ?
+              ORDER BY occurred_at DESC
+              LIMIT ? OFFSET ?"#,
+            rule_id,
+            limit,
+            offset,
         )
-        .bind(rule_id)
-        .bind(limit as i64)
-        .bind(offset as i64)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().filter_map(AlertEventRow::decode).collect())
@@ -309,17 +295,18 @@ impl AlertRepository {
     /// Cross-rule recent events, newest first. See `events_for_rule` for the
     /// offset semantics.
     pub async fn recent_events(&self, limit: u32, offset: u32) -> AppResult<Vec<AlertEvent>> {
-        let rows = sqlx::query_as::<_, AlertEventRow>(
-            r#"
-            SELECT id, rule_id, label_set, event_type, severity,
-                   occurred_at, metric_value, notified
-              FROM alert_events
-             ORDER BY occurred_at DESC
-             LIMIT ? OFFSET ?
-            "#,
+        let limit = limit as i64;
+        let offset = offset as i64;
+        let rows = sqlx::query_as!(
+            AlertEventRow,
+            r#"SELECT id, rule_id, label_set, event_type, severity,
+                    occurred_at, metric_value, notified as "notified: bool"
+               FROM alert_events
+              ORDER BY occurred_at DESC
+              LIMIT ? OFFSET ?"#,
+            limit,
+            offset,
         )
-        .bind(limit as i64)
-        .bind(offset as i64)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().filter_map(AlertEventRow::decode).collect())

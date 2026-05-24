@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rule_id, label_set, state, state_since,\n                    last_value, last_eval_at, last_notified_at\n               FROM alert_state\n              WHERE rule_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rule_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_state",
+            "name": "rule_id"
+          }
+        }
+      },
+      {
+        "name": "label_set",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_state",
+            "name": "label_set"
+          }
+        }
+      },
+      {
+        "name": "state",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_state",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "name": "state_since",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_state",
+            "name": "state_since"
+          }
+        }
+      },
+      {
+        "name": "last_value",
+        "ordinal": 4,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "alert_state",
+            "name": "last_value"
+          }
+        }
+      },
+      {
+        "name": "last_eval_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_state",
+            "name": "last_eval_at"
+          }
+        }
+      },
+      {
+        "name": "last_notified_at",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_state",
+            "name": "last_notified_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "a6de20792bacb6de3c594c8c3366f14bb6795dfabf5221621507f2482446deb2"
+}

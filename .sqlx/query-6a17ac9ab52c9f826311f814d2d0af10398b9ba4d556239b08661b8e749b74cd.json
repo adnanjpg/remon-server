@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO alert_rules\n                (name, description, enabled, expression, severity,\n                 for_duration_secs, eval_interval_secs, cooldown_secs,\n                 silenced_until, created_at, updated_at)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "6a17ac9ab52c9f826311f814d2d0af10398b9ba4d556239b08661b8e749b74cd"
+}

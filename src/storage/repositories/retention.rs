@@ -21,8 +21,9 @@ impl RetentionRepository {
     }
 
     pub async fn list_all(&self) -> AppResult<Vec<RetentionPolicy>> {
-        let rows = sqlx::query_as::<_, RetentionPolicy>(
-            "SELECT resource, resolution, keep_seconds FROM retention_policy",
+        let rows = sqlx::query_as!(
+            RetentionPolicy,
+            "SELECT resource, resolution, keep_seconds FROM retention_policy"
         )
         .fetch_all(&self.pool)
         .await?;
@@ -30,20 +31,17 @@ impl RetentionRepository {
     }
 
     pub async fn upsert(&self, p: &RetentionPolicy) -> AppResult<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO retention_policy (resource, resolution, keep_seconds)
-            VALUES (?, ?, ?)
-            ON CONFLICT(resource, resolution) DO UPDATE SET
-                keep_seconds = excluded.keep_seconds
-            "#,
+        sqlx::query!(
+            "INSERT INTO retention_policy (resource, resolution, keep_seconds)
+             VALUES (?, ?, ?)
+             ON CONFLICT(resource, resolution) DO UPDATE SET
+                 keep_seconds = excluded.keep_seconds",
+            p.resource,
+            p.resolution,
+            p.keep_seconds,
         )
-        .bind(&p.resource)
-        .bind(&p.resolution)
-        .bind(p.keep_seconds)
         .execute(&self.pool)
         .await?;
-
         Ok(())
     }
 }

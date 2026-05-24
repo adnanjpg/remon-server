@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT device_id, COUNT(*) as \"cnt: i64\"\n               FROM sessions\n              WHERE expires_at > unixepoch()\n              GROUP BY device_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "device_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "device_id"
+          }
+        }
+      },
+      {
+        "name": "cnt: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "c48afffd6da0d4e9417d68eba43c88ab76b4b40a2321f1c5f7de7bd1ca4e291e"
+}

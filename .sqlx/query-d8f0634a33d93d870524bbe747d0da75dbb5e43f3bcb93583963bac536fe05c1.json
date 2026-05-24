@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE probe_definitions SET enabled = 0 WHERE enabled = 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "d8f0634a33d93d870524bbe747d0da75dbb5e43f3bcb93583963bac536fe05c1"
+}

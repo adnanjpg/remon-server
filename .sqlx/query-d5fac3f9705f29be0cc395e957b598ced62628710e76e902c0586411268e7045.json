@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO metrics_cpu\n               (resolution, timestamp, usage_percent, load_1m, load_5m, load_15m,\n                steal_percent, iowait_percent, guest_percent,\n                user_percent, system_percent,\n                context_switches_per_sec, process_forks_per_sec)\n             VALUES ('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n             ON CONFLICT(resolution, timestamp) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 12
+    },
+    "nullable": []
+  },
+  "hash": "d5fac3f9705f29be0cc395e957b598ced62628710e76e902c0586411268e7045"
+}

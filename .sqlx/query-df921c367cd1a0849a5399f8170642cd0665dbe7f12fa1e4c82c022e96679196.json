@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO alert_events\n                (rule_id, label_set, event_type, severity,\n                 occurred_at, metric_value, notified)\n             VALUES (?, ?, ?, ?, unixepoch(), ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "df921c367cd1a0849a5399f8170642cd0665dbe7f12fa1e4c82c022e96679196"
+}

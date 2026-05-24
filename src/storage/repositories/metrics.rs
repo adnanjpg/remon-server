@@ -45,29 +45,29 @@ impl MetricsRepository {
     ) -> AppResult<()> {
         let mut tx = self.pool.begin().await?;
 
-        let r = sqlx::query(
-            r#"
-            INSERT INTO metrics_cpu
-              (resolution, timestamp, usage_percent, load_1m, load_5m, load_15m,
-               steal_percent, iowait_percent, guest_percent,
-               user_percent, system_percent,
-               context_switches_per_sec, process_forks_per_sec)
-            VALUES ('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(resolution, timestamp) DO NOTHING
-            "#,
+        let ctx_switches = cpu.context_switches_per_sec.map(|v| v as i64);
+        let proc_forks = cpu.process_forks_per_sec.map(|v| v as i64);
+        let r = sqlx::query!(
+            "INSERT INTO metrics_cpu
+               (resolution, timestamp, usage_percent, load_1m, load_5m, load_15m,
+                steal_percent, iowait_percent, guest_percent,
+                user_percent, system_percent,
+                context_switches_per_sec, process_forks_per_sec)
+             VALUES ('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(resolution, timestamp) DO NOTHING",
+            cpu.timestamp,
+            cpu.usage_percent,
+            cpu.load_avg.one,
+            cpu.load_avg.five,
+            cpu.load_avg.fifteen,
+            cpu.steal_percent,
+            cpu.iowait_percent,
+            cpu.guest_percent,
+            cpu.user_percent,
+            cpu.system_percent,
+            ctx_switches,
+            proc_forks,
         )
-        .bind(cpu.timestamp)
-        .bind(cpu.usage_percent)
-        .bind(cpu.load_avg.one)
-        .bind(cpu.load_avg.five)
-        .bind(cpu.load_avg.fifteen)
-        .bind(cpu.steal_percent)
-        .bind(cpu.iowait_percent)
-        .bind(cpu.guest_percent)
-        .bind(cpu.user_percent)
-        .bind(cpu.system_percent)
-        .bind(cpu.context_switches_per_sec.map(|v| v as i64))
-        .bind(cpu.process_forks_per_sec.map(|v| v as i64))
         .execute(&mut *tx)
         .await?;
         note_collision("metrics_cpu", 1, r.rows_affected(), cpu.timestamp, "raw");
@@ -77,27 +77,17 @@ impl MetricsRepository {
         // rollup intervals. UI shows per-core only on the live tail; rolled
         // history is served from the host-level `metrics_cpu` table.
         if !cpu.per_core.is_empty() {
-            let mut sql = String::with_capacity(140 + 14 * cpu.per_core.len());
-            sql.push_str(
-                "INSERT INTO metrics_cpu_cores \
-                 (timestamp, core_index, usage_percent, freq_mhz) VALUES ",
+            let mut qb = sqlx::QueryBuilder::new(
+                "INSERT INTO metrics_cpu_cores (timestamp, core_index, usage_percent, freq_mhz) ",
             );
-            for i in 0..cpu.per_core.len() {
-                if i > 0 {
-                    sql.push_str(", ");
-                }
-                sql.push_str("(?, ?, ?, ?)");
-            }
-            sql.push_str(" ON CONFLICT(timestamp, core_index) DO NOTHING");
-            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
-            for core in &cpu.per_core {
-                q = q
-                    .bind(cpu.timestamp)
-                    .bind(core.core_index as i64)
-                    .bind(core.usage_percent)
-                    .bind(core.freq_mhz as i64);
-            }
-            let r = q.execute(&mut *tx).await?;
+            qb.push_values(cpu.per_core.iter(), |mut b, core| {
+                b.push_bind(cpu.timestamp)
+                    .push_bind(core.core_index as i64)
+                    .push_bind(core.usage_percent)
+                    .push_bind(core.freq_mhz as i64);
+            });
+            qb.push(" ON CONFLICT(timestamp, core_index) DO NOTHING");
+            let r = qb.build().execute(&mut *tx).await?;
             note_collision(
                 "metrics_cpu_cores",
                 cpu.per_core.len() as u64,
@@ -107,27 +97,29 @@ impl MetricsRepository {
             );
         }
 
-        let r = sqlx::query(
-            r#"
-            INSERT INTO metrics_memory
-              (resolution, timestamp, total_bytes, used_bytes, available_bytes,
-               cached_bytes, swap_used_bytes,
-               page_faults_minor_per_sec, page_faults_major_per_sec,
-               swap_in_pages_per_sec, swap_out_pages_per_sec)
-            VALUES ('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(resolution, timestamp) DO NOTHING
-            "#,
+        let pf_minor = memory.page_faults_minor_per_sec.map(|v| v as i64);
+        let pf_major = memory.page_faults_major_per_sec.map(|v| v as i64);
+        let swap_in = memory.swap_in_pages_per_sec.map(|v| v as i64);
+        let swap_out = memory.swap_out_pages_per_sec.map(|v| v as i64);
+        let r = sqlx::query!(
+            "INSERT INTO metrics_memory
+               (resolution, timestamp, total_bytes, used_bytes, available_bytes,
+                cached_bytes, swap_used_bytes,
+                page_faults_minor_per_sec, page_faults_major_per_sec,
+                swap_in_pages_per_sec, swap_out_pages_per_sec)
+             VALUES ('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(resolution, timestamp) DO NOTHING",
+            memory.timestamp,
+            memory.total_bytes as i64,
+            memory.used_bytes as i64,
+            memory.available_bytes as i64,
+            memory.cached_bytes as i64,
+            memory.swap_used_bytes as i64,
+            pf_minor,
+            pf_major,
+            swap_in,
+            swap_out,
         )
-        .bind(memory.timestamp)
-        .bind(memory.total_bytes as i64)
-        .bind(memory.used_bytes as i64)
-        .bind(memory.available_bytes as i64)
-        .bind(memory.cached_bytes as i64)
-        .bind(memory.swap_used_bytes as i64)
-        .bind(memory.page_faults_minor_per_sec.map(|v| v as i64))
-        .bind(memory.page_faults_major_per_sec.map(|v| v as i64))
-        .bind(memory.swap_in_pages_per_sec.map(|v| v as i64))
-        .bind(memory.swap_out_pages_per_sec.map(|v| v as i64))
         .execute(&mut *tx)
         .await?;
         note_collision(
@@ -139,38 +131,29 @@ impl MetricsRepository {
         );
 
         if !disks.is_empty() {
-            let mut sql = String::with_capacity(200 + 20 * disks.len());
-            sql.push_str(
+            let mut qb = sqlx::QueryBuilder::new(
                 "INSERT INTO metrics_disk \
                  (resolution, timestamp, mount_point, \
                   total_bytes, used_bytes, available_bytes, read_bytes_per_sec, write_bytes_per_sec, \
-                  inode_used_percent, read_iops, write_iops, io_util_percent) VALUES ",
+                  inode_used_percent, read_iops, write_iops, io_util_percent) ",
             );
-            for i in 0..disks.len() {
-                if i > 0 {
-                    sql.push_str(", ");
-                }
-                sql.push_str("('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-            }
-            sql.push_str(" ON CONFLICT(resolution, timestamp, mount_point) DO NOTHING");
-            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
-            let mut ts = 0i64;
-            for d in disks {
-                ts = d.timestamp;
-                q = q
-                    .bind(d.timestamp)
-                    .bind(&d.mount_point)
-                    .bind(d.total_bytes as i64)
-                    .bind(d.used_bytes as i64)
-                    .bind(d.available_bytes as i64)
-                    .bind(d.read_bytes_per_sec as i64)
-                    .bind(d.write_bytes_per_sec as i64)
-                    .bind(d.inode_used_percent)
-                    .bind(d.read_iops.map(|v| v as i64))
-                    .bind(d.write_iops.map(|v| v as i64))
-                    .bind(d.io_util_percent);
-            }
-            let r = q.execute(&mut *tx).await?;
+            qb.push_values(disks.iter(), |mut b, d| {
+                b.push_bind("raw")
+                    .push_bind(d.timestamp)
+                    .push_bind(&d.mount_point)
+                    .push_bind(d.total_bytes as i64)
+                    .push_bind(d.used_bytes as i64)
+                    .push_bind(d.available_bytes as i64)
+                    .push_bind(d.read_bytes_per_sec as i64)
+                    .push_bind(d.write_bytes_per_sec as i64)
+                    .push_bind(d.inode_used_percent)
+                    .push_bind(d.read_iops.map(|v| v as i64))
+                    .push_bind(d.write_iops.map(|v| v as i64))
+                    .push_bind(d.io_util_percent);
+            });
+            qb.push(" ON CONFLICT(resolution, timestamp, mount_point) DO NOTHING");
+            let r = qb.build().execute(&mut *tx).await?;
+            let ts = disks.last().map(|d| d.timestamp).unwrap_or(0);
             note_collision(
                 "metrics_disk",
                 disks.len() as u64,
@@ -181,36 +164,27 @@ impl MetricsRepository {
         }
 
         if !networks.is_empty() {
-            let mut sql = String::with_capacity(220 + 22 * networks.len());
-            sql.push_str(
+            let mut qb = sqlx::QueryBuilder::new(
                 "INSERT INTO metrics_network \
                  (resolution, timestamp, interface_name, \
                   rx_bytes_per_sec, tx_bytes_per_sec, \
                   rx_packets_per_sec, tx_packets_per_sec, \
-                  errors_in_per_sec, errors_out_per_sec) VALUES ",
+                  errors_in_per_sec, errors_out_per_sec) ",
             );
-            for i in 0..networks.len() {
-                if i > 0 {
-                    sql.push_str(", ");
-                }
-                sql.push_str("('raw', ?, ?, ?, ?, ?, ?, ?, ?)");
-            }
-            sql.push_str(" ON CONFLICT(resolution, timestamp, interface_name) DO NOTHING");
-            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
-            let mut ts = 0i64;
-            for n in networks {
-                ts = n.timestamp;
-                q = q
-                    .bind(n.timestamp)
-                    .bind(&n.interface)
-                    .bind(n.rx_bytes_per_sec as i64)
-                    .bind(n.tx_bytes_per_sec as i64)
-                    .bind(n.rx_packets_per_sec as i64)
-                    .bind(n.tx_packets_per_sec as i64)
-                    .bind(n.errors_in_per_sec as i64)
-                    .bind(n.errors_out_per_sec as i64);
-            }
-            let r = q.execute(&mut *tx).await?;
+            qb.push_values(networks.iter(), |mut b, n| {
+                b.push_bind("raw")
+                    .push_bind(n.timestamp)
+                    .push_bind(&n.interface)
+                    .push_bind(n.rx_bytes_per_sec as i64)
+                    .push_bind(n.tx_bytes_per_sec as i64)
+                    .push_bind(n.rx_packets_per_sec as i64)
+                    .push_bind(n.tx_packets_per_sec as i64)
+                    .push_bind(n.errors_in_per_sec as i64)
+                    .push_bind(n.errors_out_per_sec as i64);
+            });
+            qb.push(" ON CONFLICT(resolution, timestamp, interface_name) DO NOTHING");
+            let r = qb.build().execute(&mut *tx).await?;
+            let ts = networks.last().map(|n| n.timestamp).unwrap_or(0);
             note_collision(
                 "metrics_network",
                 networks.len() as u64,
@@ -222,29 +196,20 @@ impl MetricsRepository {
 
         if let Some(c) = components {
             if !c.components.is_empty() {
-                let mut sql = String::with_capacity(180 + 20 * c.components.len());
-                sql.push_str(
+                let mut qb = sqlx::QueryBuilder::new(
                     "INSERT INTO metrics_components \
-                     (resolution, timestamp, label, \
-                      temperature_c, max_c, critical_c) VALUES ",
+                     (resolution, timestamp, label, temperature_c, max_c, critical_c) ",
                 );
-                for i in 0..c.components.len() {
-                    if i > 0 {
-                        sql.push_str(", ");
-                    }
-                    sql.push_str("('raw', ?, ?, ?, ?, ?)");
-                }
-                sql.push_str(" ON CONFLICT(resolution, timestamp, label) DO NOTHING");
-                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
-                for comp in &c.components {
-                    q = q
-                        .bind(c.timestamp)
-                        .bind(&comp.label)
-                        .bind(comp.temperature_c)
-                        .bind(comp.max_c)
-                        .bind(comp.critical_c);
-                }
-                let r = q.execute(&mut *tx).await?;
+                qb.push_values(c.components.iter(), |mut b, comp| {
+                    b.push_bind("raw")
+                        .push_bind(c.timestamp)
+                        .push_bind(&comp.label)
+                        .push_bind(comp.temperature_c)
+                        .push_bind(comp.max_c)
+                        .push_bind(comp.critical_c);
+                });
+                qb.push(" ON CONFLICT(resolution, timestamp, label) DO NOTHING");
+                let r = qb.build().execute(&mut *tx).await?;
                 note_collision(
                     "metrics_components",
                     c.components.len() as u64,
@@ -266,33 +231,25 @@ impl MetricsRepository {
                 .filter_map(|(name, ps)| ps.map(|ps| (*name, ps)))
                 .collect();
             if !present.is_empty() {
-                let mut sql = String::with_capacity(220 + 28 * present.len());
-                sql.push_str(
+                let mut qb = sqlx::QueryBuilder::new(
                     "INSERT INTO metrics_pressure \
                      (resolution, timestamp, resource, \
                       some_avg10, some_avg60, some_avg300, \
-                      full_avg10, full_avg60, full_avg300) VALUES ",
+                      full_avg10, full_avg60, full_avg300) ",
                 );
-                for i in 0..present.len() {
-                    if i > 0 {
-                        sql.push_str(", ");
-                    }
-                    sql.push_str("('raw', ?, ?, ?, ?, ?, ?, ?, ?)");
-                }
-                sql.push_str(" ON CONFLICT(resolution, timestamp, resource) DO NOTHING");
-                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
-                for (resource, ps) in &present {
-                    q = q
-                        .bind(p.timestamp)
-                        .bind(*resource)
-                        .bind(ps.some_avg10)
-                        .bind(ps.some_avg60)
-                        .bind(ps.some_avg300)
-                        .bind(ps.full_avg10)
-                        .bind(ps.full_avg60)
-                        .bind(ps.full_avg300);
-                }
-                let r = q.execute(&mut *tx).await?;
+                qb.push_values(present.iter(), |mut b, (resource, ps)| {
+                    b.push_bind("raw")
+                        .push_bind(p.timestamp)
+                        .push_bind(*resource)
+                        .push_bind(ps.some_avg10)
+                        .push_bind(ps.some_avg60)
+                        .push_bind(ps.some_avg300)
+                        .push_bind(ps.full_avg10)
+                        .push_bind(ps.full_avg60)
+                        .push_bind(ps.full_avg300);
+                });
+                qb.push(" ON CONFLICT(resolution, timestamp, resource) DO NOTHING");
+                let r = qb.build().execute(&mut *tx).await?;
                 note_collision(
                     "metrics_pressure",
                     present.len() as u64,
@@ -656,14 +613,12 @@ impl MetricsRepository {
                 if resolution != "raw" {
                     return Ok(0);
                 }
-                sqlx::query("DELETE FROM metrics_cpu_cores WHERE timestamp < ?")
-                    .bind(cutoff_ts)
+                sqlx::query!("DELETE FROM metrics_cpu_cores WHERE timestamp < ?", cutoff_ts)
                     .execute(&self.pool)
                     .await?
             }
             "logs" => {
-                sqlx::query("DELETE FROM logs WHERE timestamp < ?")
-                    .bind(cutoff_ts)
+                sqlx::query!("DELETE FROM logs WHERE timestamp < ?", cutoff_ts)
                     .execute(&self.pool)
                     .await?
             }
@@ -671,8 +626,7 @@ impl MetricsRepository {
                 if resolution != "raw" {
                     return Ok(0);
                 }
-                sqlx::query("DELETE FROM probe_runs WHERE timestamp < ?")
-                    .bind(cutoff_ts)
+                sqlx::query!("DELETE FROM probe_runs WHERE timestamp < ?", cutoff_ts)
                     .execute(&self.pool)
                     .await?
             }
@@ -680,8 +634,7 @@ impl MetricsRepository {
                 if resolution != "raw" {
                     return Ok(0);
                 }
-                sqlx::query("DELETE FROM alert_events WHERE occurred_at < ?")
-                    .bind(cutoff_ts)
+                sqlx::query!("DELETE FROM alert_events WHERE occurred_at < ?", cutoff_ts)
                     .execute(&self.pool)
                     .await?
             }

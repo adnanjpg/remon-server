@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, rule_id, label_set, event_type, severity,\n                    occurred_at, metric_value, notified as \"notified: bool\"\n               FROM alert_events\n              WHERE rule_id = ?\n              ORDER BY occurred_at DESC\n              LIMIT ? OFFSET ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_events",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "rule_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_events",
+            "name": "rule_id"
+          }
+        }
+      },
+      {
+        "name": "label_set",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_events",
+            "name": "label_set"
+          }
+        }
+      },
+      {
+        "name": "event_type",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_events",
+            "name": "event_type"
+          }
+        }
+      },
+      {
+        "name": "severity",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_events",
+            "name": "severity"
+          }
+        }
+      },
+      {
+        "name": "occurred_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_events",
+            "name": "occurred_at"
+          }
+        }
+      },
+      {
+        "name": "metric_value",
+        "ordinal": 6,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "alert_events",
+            "name": "metric_value"
+          }
+        }
+      },
+      {
+        "name": "notified: bool",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_events",
+            "name": "notified"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "e24f5dbf574dc500cc177794a7a9dc74dae2ed29d85614f3350680ac085474df"
+}

@@ -16,6 +16,7 @@ Cargo.lock.orig
 # DB files
 *.sqlite3
 *.sqlite3-*
+*.db
 
 # Temporary files
 temp/

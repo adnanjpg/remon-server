@@ -1,0 +1,158 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, name, description, enabled as \"enabled: bool\", expression, severity,\n                    for_duration_secs, eval_interval_secs, cooldown_secs,\n                    silenced_until, created_at, updated_at\n               FROM alert_rules\n              WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_rules",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_rules",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "description",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_rules",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "name": "enabled: bool",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_rules",
+            "name": "enabled"
+          }
+        }
+      },
+      {
+        "name": "expression",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_rules",
+            "name": "expression"
+          }
+        }
+      },
+      {
+        "name": "severity",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_rules",
+            "name": "severity"
+          }
+        }
+      },
+      {
+        "name": "for_duration_secs",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_rules",
+            "name": "for_duration_secs"
+          }
+        }
+      },
+      {
+        "name": "eval_interval_secs",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_rules",
+            "name": "eval_interval_secs"
+          }
+        }
+      },
+      {
+        "name": "cooldown_secs",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_rules",
+            "name": "cooldown_secs"
+          }
+        }
+      },
+      {
+        "name": "silenced_until",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_rules",
+            "name": "silenced_until"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_rules",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_rules",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "3afda3e2087692519ca0d1c67224a1aefcbeff2e0057daa106feaf1c0cf09ca1"
+}

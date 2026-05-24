@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE alert_rules SET\n                name               = ?,\n                description        = ?,\n                enabled            = ?,\n                expression         = ?,\n                severity           = ?,\n                for_duration_secs  = ?,\n                eval_interval_secs = ?,\n                cooldown_secs      = ?,\n                silenced_until     = ?,\n                updated_at         = unixepoch()\n              WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "89a112a4805f427cd67a7c84c6475ccaa0a90739991233d1067281f3068e06c4"
+}

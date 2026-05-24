@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO probe_definitions\n                (name, enabled, schedule, timeout_ms, manifest_hash, last_loaded_at)\n             VALUES (?, ?, ?, ?, ?, unixepoch())\n             ON CONFLICT(name) DO UPDATE SET\n                 enabled        = excluded.enabled,\n                 schedule       = excluded.schedule,\n                 timeout_ms     = excluded.timeout_ms,\n                 manifest_hash  = excluded.manifest_hash,\n                 last_loaded_at = excluded.last_loaded_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "db734fa433b54afa1efe3385fbd65586168658cc712559e55f102ee97d653ac6"
+}

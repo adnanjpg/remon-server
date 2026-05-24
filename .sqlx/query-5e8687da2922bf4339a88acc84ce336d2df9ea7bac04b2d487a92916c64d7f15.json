@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE devices SET last_seen = unixepoch(), last_ip = COALESCE(?, last_ip)\n             WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "5e8687da2922bf4339a88acc84ce336d2df9ea7bac04b2d487a92916c64d7f15"
+}

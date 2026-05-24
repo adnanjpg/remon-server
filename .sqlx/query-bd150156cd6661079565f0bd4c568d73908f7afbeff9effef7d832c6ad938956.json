@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT resource, resolution, keep_seconds FROM retention_policy",
+  "describe": {
+    "columns": [
+      {
+        "name": "resource",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "retention_policy",
+            "name": "resource"
+          }
+        }
+      },
+      {
+        "name": "resolution",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "retention_policy",
+            "name": "resolution"
+          }
+        }
+      },
+      {
+        "name": "keep_seconds",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "retention_policy",
+            "name": "keep_seconds"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "bd150156cd6661079565f0bd4c568d73908f7afbeff9effef7d832c6ad938956"
+}

@@ -29,7 +29,6 @@ pub struct ProbeDefinitionRow {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ProbeMetricSample {
     pub timestamp: i64,
-    #[sqlx(rename = "labels")]
     pub labels_json: String,
     pub value: f64,
 }
@@ -40,24 +39,22 @@ impl ProbeRepository {
     }
 
     pub async fn upsert(&self, def: &ProbeDefinitionRow) -> AppResult<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO probe_definitions
+        sqlx::query!(
+            "INSERT INTO probe_definitions
                 (name, enabled, schedule, timeout_ms, manifest_hash, last_loaded_at)
-            VALUES (?, ?, ?, ?, ?, unixepoch())
-            ON CONFLICT(name) DO UPDATE SET
-                enabled        = excluded.enabled,
-                schedule       = excluded.schedule,
-                timeout_ms     = excluded.timeout_ms,
-                manifest_hash  = excluded.manifest_hash,
-                last_loaded_at = excluded.last_loaded_at
-            "#,
+             VALUES (?, ?, ?, ?, ?, unixepoch())
+             ON CONFLICT(name) DO UPDATE SET
+                 enabled        = excluded.enabled,
+                 schedule       = excluded.schedule,
+                 timeout_ms     = excluded.timeout_ms,
+                 manifest_hash  = excluded.manifest_hash,
+                 last_loaded_at = excluded.last_loaded_at",
+            def.name,
+            def.enabled,
+            def.schedule,
+            def.timeout_ms,
+            def.manifest_hash,
         )
-        .bind(&def.name)
-        .bind(def.enabled as i64)
-        .bind(&def.schedule)
-        .bind(def.timeout_ms)
-        .bind(&def.manifest_hash)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -65,32 +62,29 @@ impl ProbeRepository {
 
     pub async fn disable_missing(&self, keep: &[String]) -> AppResult<u64> {
         if keep.is_empty() {
-            let r = sqlx::query("UPDATE probe_definitions SET enabled = 0 WHERE enabled = 1")
-                .execute(&self.pool)
-                .await?;
+            let r =
+                sqlx::query!("UPDATE probe_definitions SET enabled = 0 WHERE enabled = 1")
+                    .execute(&self.pool)
+                    .await?;
             return Ok(r.rows_affected());
         }
-        let placeholders = std::iter::repeat("?")
-            .take(keep.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "UPDATE probe_definitions SET enabled = 0 \
-             WHERE enabled = 1 AND name NOT IN ({})",
-            placeholders
+        let mut qb = sqlx::QueryBuilder::new(
+            "UPDATE probe_definitions SET enabled = 0 WHERE enabled = 1 AND name NOT IN (",
         );
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
+        let mut sep = qb.separated(", ");
         for n in keep {
-            q = q.bind(n);
+            sep.push_bind(n);
         }
-        let r = q.execute(&self.pool).await?;
+        qb.push(")");
+        let r = qb.build().execute(&self.pool).await?;
         Ok(r.rows_affected())
     }
 
     pub async fn list_all(&self) -> AppResult<Vec<ProbeDefinitionRow>> {
-        let rows = sqlx::query_as::<_, ProbeDefinitionRow>(
-            "SELECT name, enabled, schedule, timeout_ms, manifest_hash \
-             FROM probe_definitions ORDER BY name ASC",
+        let rows = sqlx::query_as!(
+            ProbeDefinitionRow,
+            r#"SELECT name, enabled as "enabled: bool", schedule, timeout_ms, manifest_hash
+               FROM probe_definitions ORDER BY name ASC"#
         )
         .fetch_all(&self.pool)
         .await?;
@@ -100,19 +94,17 @@ impl ProbeRepository {
     /// Persist the run-meta row. Called after every probe execution,
     /// regardless of whether any metrics were emitted.
     pub async fn insert_run(&self, run: &ProbeRun) -> AppResult<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO probe_runs
+        sqlx::query!(
+            "INSERT INTO probe_runs
                 (probe_name, timestamp, duration_ms, exit_code, message, parse_ok)
-            VALUES (?, ?, ?, ?, ?, ?)
-            "#,
+             VALUES (?, ?, ?, ?, ?, ?)",
+            run.probe_name,
+            run.timestamp,
+            run.duration_ms,
+            run.exit_code,
+            run.message,
+            run.parse_ok,
         )
-        .bind(&run.probe_name)
-        .bind(run.timestamp)
-        .bind(run.duration_ms)
-        .bind(run.exit_code)
-        .bind(run.message.as_deref())
-        .bind(run.parse_ok as i64)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -131,28 +123,19 @@ impl ProbeRepository {
         if metrics.is_empty() {
             return Ok(());
         }
-        let mut sql = String::with_capacity(140 + 20 * metrics.len());
-        sql.push_str(
+        let mut qb = sqlx::QueryBuilder::new(
             "INSERT OR REPLACE INTO metrics_probe \
-             (resolution, timestamp, probe_name, metric_name, labels, value) VALUES ",
+             (resolution, timestamp, probe_name, metric_name, labels, value) ",
         );
-        for i in 0..metrics.len() {
-            if i > 0 {
-                sql.push_str(", ");
-            }
-            sql.push_str("('raw', ?, ?, ?, ?, ?)");
-        }
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
-        for m in metrics {
-            let labels = m.labels_canonical();
-            q = q
-                .bind(timestamp)
-                .bind(probe_name)
-                .bind(&m.name)
-                .bind(labels)
-                .bind(m.value);
-        }
-        q.execute(&self.pool).await?;
+        qb.push_values(metrics, |mut b, m| {
+            b.push_bind("raw")
+                .push_bind(timestamp)
+                .push_bind(probe_name)
+                .push_bind(&m.name)
+                .push_bind(m.labels_canonical())
+                .push_bind(m.value);
+        });
+        qb.build().execute(&self.pool).await?;
         Ok(())
     }
 
@@ -165,31 +148,31 @@ impl ProbeRepository {
         limit: u32,
         offset: u32,
     ) -> AppResult<Vec<ProbeRun>> {
-        let rows: Vec<(i64, i64, Option<i64>, Option<String>, i64)> = sqlx::query_as(
-            r#"
-            SELECT timestamp, duration_ms, exit_code, message, parse_ok
-              FROM probe_runs
-             WHERE probe_name = ?
-             ORDER BY timestamp DESC
-             LIMIT ? OFFSET ?
-            "#,
+        let limit = limit as i64;
+        let offset = offset as i64;
+        let rows = sqlx::query!(
+            "SELECT timestamp, duration_ms, exit_code, message, parse_ok
+               FROM probe_runs
+              WHERE probe_name = ?
+              ORDER BY timestamp DESC
+              LIMIT ? OFFSET ?",
+            probe_name,
+            limit,
+            offset,
         )
-        .bind(probe_name)
-        .bind(limit as i64)
-        .bind(offset as i64)
         .fetch_all(&self.pool)
-        .await?;
-        Ok(rows
-            .into_iter()
-            .map(|(ts, dur, exit, msg, parse_ok)| ProbeRun {
-                probe_name: probe_name.to_string(),
-                timestamp: ts,
-                duration_ms: dur,
-                exit_code: exit.map(|v| v as i32),
-                message: msg,
-                parse_ok: parse_ok != 0,
-            })
-            .collect())
+        .await?
+        .into_iter()
+        .map(|r| ProbeRun {
+            probe_name: probe_name.to_string(),
+            timestamp: r.timestamp,
+            duration_ms: r.duration_ms,
+            exit_code: r.exit_code.map(|v| v as i32),
+            message: r.message,
+            parse_ok: r.parse_ok != 0,
+        })
+        .collect();
+        Ok(rows)
     }
 
     /// Time-series for one probe metric. `labels_filter` (canonical JSON)
@@ -205,49 +188,47 @@ impl ProbeRepository {
         end: i64,
         limit: u32,
     ) -> AppResult<Vec<ProbeMetricSample>> {
+        let limit = limit as i64;
         let rows = if let Some(labels) = labels_filter {
-            sqlx::query_as::<_, ProbeMetricSample>(
-                r#"
-                SELECT timestamp, labels, value
-                  FROM metrics_probe
-                 WHERE resolution = ?
-                   AND probe_name = ? AND metric_name = ? AND labels = ?
-                   AND timestamp >= ? AND timestamp <= ?
-                 ORDER BY timestamp DESC
-                 LIMIT ?
-                "#,
+            sqlx::query_as!(
+                ProbeMetricSample,
+                "SELECT timestamp, labels as labels_json, value
+                   FROM metrics_probe
+                  WHERE resolution = ?
+                    AND probe_name = ? AND metric_name = ? AND labels = ?
+                    AND timestamp >= ? AND timestamp <= ?
+                  ORDER BY timestamp DESC
+                  LIMIT ?",
+                resolution,
+                probe_name,
+                metric_name,
+                labels,
+                start,
+                end,
+                limit,
             )
-            .bind(resolution)
-            .bind(probe_name)
-            .bind(metric_name)
-            .bind(labels)
-            .bind(start)
-            .bind(end)
-            .bind(limit as i64)
             .fetch_all(&self.pool)
             .await?
         } else {
-            sqlx::query_as::<_, ProbeMetricSample>(
-                r#"
-                SELECT timestamp, labels, value
-                  FROM metrics_probe
-                 WHERE resolution = ?
-                   AND probe_name = ? AND metric_name = ?
-                   AND timestamp >= ? AND timestamp <= ?
-                 ORDER BY timestamp DESC
-                 LIMIT ?
-                "#,
+            sqlx::query_as!(
+                ProbeMetricSample,
+                "SELECT timestamp, labels as labels_json, value
+                   FROM metrics_probe
+                  WHERE resolution = ?
+                    AND probe_name = ? AND metric_name = ?
+                    AND timestamp >= ? AND timestamp <= ?
+                  ORDER BY timestamp DESC
+                  LIMIT ?",
+                resolution,
+                probe_name,
+                metric_name,
+                start,
+                end,
+                limit,
             )
-            .bind(resolution)
-            .bind(probe_name)
-            .bind(metric_name)
-            .bind(start)
-            .bind(end)
-            .bind(limit as i64)
             .fetch_all(&self.pool)
             .await?
         };
-
         Ok(rows)
     }
 }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO alert_state\n                (rule_id, label_set, state, state_since,\n                 last_value, last_eval_at, last_notified_at)\n             VALUES (?, ?, ?, ?, ?, ?, ?)\n             ON CONFLICT(rule_id, label_set) DO UPDATE SET\n                 state            = excluded.state,\n                 state_since      = excluded.state_since,\n                 last_value       = excluded.last_value,\n                 last_eval_at     = excluded.last_eval_at,\n                 last_notified_at = COALESCE(excluded.last_notified_at, alert_state.last_notified_at)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "986394f70546d6a97727aa47ea3b40dd4a1765f10207787451e40609d841de7f"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM metrics_cpu_cores WHERE timestamp < ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "e88c31ffe8fdd64f32f07ba1b1748b9977fcd40264ca5e9655ae3708d126d376"
+}

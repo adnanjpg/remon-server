@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO probe_runs\n                (probe_name, timestamp, duration_ms, exit_code, message, parse_ok)\n             VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "4b9d745e7f66e4e1f58e617911df5aef9515eb05f46d3277ecb98989e973e09e"
+}

@@ -13,41 +13,44 @@ impl DeviceRepository {
     }
 
     pub async fn create(&self, device: &StoredDevice) -> AppResult<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO devices (id, name, token_hash, totp_secret, last_ip, last_seen, created_at, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
+        sqlx::query!(
+            "INSERT INTO devices (id, name, token_hash, totp_secret, last_ip, last_seen, created_at, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            device.id,
+            device.name,
+            device.token_hash,
+            device.totp_secret,
+            device.last_ip,
+            device.last_seen,
+            device.created_at,
+            device.is_active,
         )
-        .bind(&device.id)
-        .bind(&device.name)
-        .bind(&device.token_hash)
-        .bind(&device.totp_secret)
-        .bind(&device.last_ip)
-        .bind(device.last_seen)
-        .bind(device.created_at)
-        .bind(device.is_active)
         .execute(&self.pool)
         .await?;
-
         Ok(())
     }
 
     pub async fn get_by_id(&self, id: &str) -> AppResult<Option<StoredDevice>> {
-        let row = sqlx::query_as::<_, StoredDevice>(
-            "SELECT id, name, token_hash, totp_secret, last_ip, last_seen, created_at, is_active
-             FROM devices WHERE id = ?",
+        let row = sqlx::query_as!(
+            StoredDevice,
+            r#"SELECT id as "id!", name as "name!", token_hash as "token_hash!",
+                      totp_secret, last_ip, last_seen, created_at,
+                      is_active as "is_active: bool"
+               FROM devices WHERE id = ?"#,
+            id
         )
-        .bind(id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row)
     }
 
     pub async fn get_all(&self) -> AppResult<Vec<StoredDevice>> {
-        let rows = sqlx::query_as::<_, StoredDevice>(
-            "SELECT id, name, token_hash, totp_secret, last_ip, last_seen, created_at, is_active
-             FROM devices ORDER BY created_at DESC",
+        let rows = sqlx::query_as!(
+            StoredDevice,
+            r#"SELECT id as "id!", name as "name!", token_hash as "token_hash!",
+                      totp_secret, last_ip, last_seen, created_at,
+                      is_active as "is_active: bool"
+               FROM devices ORDER BY created_at DESC"#
         )
         .fetch_all(&self.pool)
         .await?;
@@ -55,67 +58,51 @@ impl DeviceRepository {
     }
 
     pub async fn update_last_seen(&self, id: &str, ip: Option<&str>) -> AppResult<()> {
-        sqlx::query(
-            r#"
-            UPDATE devices SET last_seen = unixepoch(), last_ip = COALESCE(?, last_ip)
-            WHERE id = ?
-            "#,
+        sqlx::query!(
+            "UPDATE devices SET last_seen = unixepoch(), last_ip = COALESCE(?, last_ip)
+             WHERE id = ?",
+            ip,
+            id,
         )
-        .bind(ip)
-        .bind(id)
         .execute(&self.pool)
         .await?;
-
         Ok(())
     }
 
     pub async fn update_name(&self, id: &str, name: &str) -> AppResult<()> {
-        let result = sqlx::query("UPDATE devices SET name = ? WHERE id = ?")
-            .bind(name)
-            .bind(id)
+        let result = sqlx::query!("UPDATE devices SET name = ? WHERE id = ?", name, id)
             .execute(&self.pool)
             .await?;
-
         if result.rows_affected() == 0 {
             return Err(AppError::NotFound("Device".into()));
         }
-
         Ok(())
     }
 
     pub async fn set_totp_secret(&self, id: &str, secret: Option<&str>) -> AppResult<()> {
-        sqlx::query("UPDATE devices SET totp_secret = ? WHERE id = ?")
-            .bind(secret)
-            .bind(id)
+        sqlx::query!("UPDATE devices SET totp_secret = ? WHERE id = ?", secret, id)
             .execute(&self.pool)
             .await?;
-
         Ok(())
     }
 
     pub async fn deactivate(&self, id: &str) -> AppResult<()> {
-        let result = sqlx::query("UPDATE devices SET is_active = 0 WHERE id = ?")
-            .bind(id)
+        let result = sqlx::query!("UPDATE devices SET is_active = 0 WHERE id = ?", id)
             .execute(&self.pool)
             .await?;
-
         if result.rows_affected() == 0 {
             return Err(AppError::NotFound("Device".into()));
         }
-
         Ok(())
     }
 
     pub async fn delete(&self, id: &str) -> AppResult<()> {
-        let result = sqlx::query("DELETE FROM devices WHERE id = ?")
-            .bind(id)
+        let result = sqlx::query!("DELETE FROM devices WHERE id = ?", id)
             .execute(&self.pool)
             .await?;
-
         if result.rows_affected() == 0 {
             return Err(AppError::NotFound("Device".into()));
         }
-
         Ok(())
     }
 
@@ -126,51 +113,47 @@ impl DeviceRepository {
         device_id: &str,
         expires_at: i64,
     ) -> AppResult<()> {
-        sqlx::query("INSERT INTO sessions (id, device_id, expires_at) VALUES (?, ?, ?)")
-            .bind(session_id)
-            .bind(device_id)
-            .bind(expires_at)
-            .execute(&self.pool)
-            .await?;
-
+        sqlx::query!(
+            "INSERT INTO sessions (id, device_id, expires_at) VALUES (?, ?, ?)",
+            session_id,
+            device_id,
+            expires_at,
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
     /// Returns true if a non-expired session row exists for the given jti.
     /// Used by the auth middleware to enforce revocation.
     pub async fn session_exists(&self, jti: &str) -> AppResult<bool> {
-        let row: Option<(i64,)> =
-            sqlx::query_as("SELECT 1 FROM sessions WHERE id = ? AND expires_at > unixepoch()")
-                .bind(jti)
-                .fetch_optional(&self.pool)
-                .await?;
-
+        let row: Option<i64> = sqlx::query_scalar!(
+            "SELECT 1 FROM sessions WHERE id = ? AND expires_at > unixepoch()",
+            jti
+        )
+        .fetch_optional(&self.pool)
+        .await?;
         Ok(row.is_some())
     }
 
     pub async fn delete_session(&self, session_id: &str) -> AppResult<()> {
-        sqlx::query("DELETE FROM sessions WHERE id = ?")
-            .bind(session_id)
+        sqlx::query!("DELETE FROM sessions WHERE id = ?", session_id)
             .execute(&self.pool)
             .await?;
-
         Ok(())
     }
 
     pub async fn delete_device_sessions(&self, device_id: &str) -> AppResult<()> {
-        sqlx::query("DELETE FROM sessions WHERE device_id = ?")
-            .bind(device_id)
+        sqlx::query!("DELETE FROM sessions WHERE device_id = ?", device_id)
             .execute(&self.pool)
             .await?;
-
         Ok(())
     }
 
     pub async fn cleanup_expired_sessions(&self) -> AppResult<u64> {
-        let result = sqlx::query("DELETE FROM sessions WHERE expires_at < unixepoch()")
+        let result = sqlx::query!("DELETE FROM sessions WHERE expires_at < unixepoch()")
             .execute(&self.pool)
             .await?;
-
         Ok(result.rows_affected())
     }
 
@@ -178,16 +161,17 @@ impl DeviceRepository {
     /// "this device has N live tokens" on the sessions management UI —
     /// devices with 0 sessions are paired but not currently logged in.
     pub async fn count_active_sessions_per_device(&self) -> AppResult<Vec<(String, i64)>> {
-        let rows = sqlx::query_as::<_, (String, i64)>(
-            r#"
-            SELECT device_id, COUNT(*) as cnt
-              FROM sessions
-             WHERE expires_at > unixepoch()
-             GROUP BY device_id
-            "#,
+        let rows = sqlx::query!(
+            r#"SELECT device_id, COUNT(*) as "cnt: i64"
+               FROM sessions
+              WHERE expires_at > unixepoch()
+              GROUP BY device_id"#
         )
         .fetch_all(&self.pool)
-        .await?;
+        .await?
+        .into_iter()
+        .map(|r| (r.device_id, r.cnt))
+        .collect();
         Ok(rows)
     }
 
@@ -213,14 +197,12 @@ impl DeviceRepository {
         &self,
     ) -> AppResult<Vec<(String, String, String, String)>> {
         let rows = sqlx::query_as::<_, (String, String, String, String)>(
-            r#"
-            SELECT id, web_push_endpoint, web_push_p256dh, web_push_auth
-              FROM devices
-             WHERE is_active = 1
-               AND web_push_endpoint IS NOT NULL AND web_push_endpoint != ''
-               AND web_push_p256dh   IS NOT NULL AND web_push_p256dh   != ''
-               AND web_push_auth     IS NOT NULL AND web_push_auth     != ''
-            "#,
+            r#"SELECT id, web_push_endpoint, web_push_p256dh, web_push_auth
+                 FROM devices
+                WHERE is_active = 1
+                  AND web_push_endpoint IS NOT NULL AND web_push_endpoint != ''
+                  AND web_push_p256dh   IS NOT NULL AND web_push_p256dh   != ''
+                  AND web_push_auth     IS NOT NULL AND web_push_auth     != ''"#,
         )
         .fetch_all(&self.pool)
         .await?;
@@ -228,12 +210,13 @@ impl DeviceRepository {
     }
 
     pub async fn set_fcm_token(&self, device_id: &str, fcm_token: Option<&str>) -> AppResult<()> {
-        let result = sqlx::query("UPDATE devices SET fcm_token = ? WHERE id = ?")
-            .bind(fcm_token)
-            .bind(device_id)
-            .execute(&self.pool)
-            .await?;
-
+        let result = sqlx::query!(
+            "UPDATE devices SET fcm_token = ? WHERE id = ?",
+            fcm_token,
+            device_id,
+        )
+        .execute(&self.pool)
+        .await?;
         if result.rows_affected() == 0 {
             return Err(AppError::NotFound("Device".into()));
         }
@@ -252,13 +235,13 @@ impl DeviceRepository {
         p256dh: Option<&str>,
         auth: Option<&str>,
     ) -> AppResult<()> {
-        let result = sqlx::query(
+        let result = sqlx::query!(
             "UPDATE devices SET web_push_endpoint = ?, web_push_p256dh = ?, web_push_auth = ? WHERE id = ?",
+            endpoint,
+            p256dh,
+            auth,
+            device_id,
         )
-        .bind(endpoint)
-        .bind(p256dh)
-        .bind(auth)
-        .bind(device_id)
         .execute(&self.pool)
         .await?;
         if result.rows_affected() == 0 {
