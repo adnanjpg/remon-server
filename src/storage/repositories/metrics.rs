@@ -613,9 +613,12 @@ impl MetricsRepository {
                 if resolution != "raw" {
                     return Ok(0);
                 }
-                sqlx::query!("DELETE FROM metrics_cpu_cores WHERE timestamp < ?", cutoff_ts)
-                    .execute(&self.pool)
-                    .await?
+                sqlx::query!(
+                    "DELETE FROM metrics_cpu_cores WHERE timestamp < ?",
+                    cutoff_ts
+                )
+                .execute(&self.pool)
+                .await?
             }
             "logs" => {
                 sqlx::query!("DELETE FROM logs WHERE timestamp < ?", cutoff_ts)

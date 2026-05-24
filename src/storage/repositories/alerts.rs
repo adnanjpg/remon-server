@@ -207,7 +207,10 @@ impl AlertRepository {
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().filter_map(AlertStateRawRow::decode).collect())
+        Ok(rows
+            .into_iter()
+            .filter_map(AlertStateRawRow::decode)
+            .collect())
     }
 
     /// All currently-firing or pending state rows, joined with their
@@ -234,7 +237,10 @@ impl AlertRepository {
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().filter_map(ActiveStateJoinRow::decode).collect())
+        Ok(rows
+            .into_iter()
+            .filter_map(ActiveStateJoinRow::decode)
+            .collect())
     }
 
     // ===== alert_events =====

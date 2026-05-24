@@ -1,11 +1,22 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT timestamp, duration_ms, exit_code, message, parse_ok\n               FROM probe_runs\n              WHERE probe_name = ?\n              ORDER BY timestamp DESC\n              LIMIT ? OFFSET ?",
+  "query": "SELECT probe_name, timestamp, duration_ms, exit_code, message,\n                      parse_ok as \"parse_ok: bool\"\n               FROM probe_runs\n              WHERE probe_name = ?\n              ORDER BY timestamp DESC\n              LIMIT ? OFFSET ?",
   "describe": {
     "columns": [
       {
-        "name": "timestamp",
+        "name": "probe_name",
         "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "probe_runs",
+            "name": "probe_name"
+          }
+        }
+      },
+      {
+        "name": "timestamp",
+        "ordinal": 1,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -16,7 +27,7 @@
       },
       {
         "name": "duration_ms",
-        "ordinal": 1,
+        "ordinal": 2,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -27,7 +38,7 @@
       },
       {
         "name": "exit_code",
-        "ordinal": 2,
+        "ordinal": 3,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -38,7 +49,7 @@
       },
       {
         "name": "message",
-        "ordinal": 3,
+        "ordinal": 4,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -48,8 +59,8 @@
         }
       },
       {
-        "name": "parse_ok",
-        "ordinal": 4,
+        "name": "parse_ok: bool",
+        "ordinal": 5,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -65,10 +76,11 @@
     "nullable": [
       false,
       false,
+      false,
       true,
       true,
       false
     ]
   },
-  "hash": "868e526d28804bdf2fa9143e916d3cc629343d6b411e55d9e659422ec01b07b0"
+  "hash": "c9dd94a1cc7080f87d2c4d1296a7292c7674608b89dd7c9ad359f4f5148a1642"
 }

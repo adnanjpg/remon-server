@@ -80,9 +80,13 @@ impl DeviceRepository {
     }
 
     pub async fn set_totp_secret(&self, id: &str, secret: Option<&str>) -> AppResult<()> {
-        sqlx::query!("UPDATE devices SET totp_secret = ? WHERE id = ?", secret, id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query!(
+            "UPDATE devices SET totp_secret = ? WHERE id = ?",
+            secret,
+            id
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 

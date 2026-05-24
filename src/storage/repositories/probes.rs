@@ -33,6 +33,29 @@ pub struct ProbeMetricSample {
     pub value: f64,
 }
 
+#[derive(sqlx::FromRow)]
+struct ProbeRunRow {
+    probe_name: String,
+    timestamp: i64,
+    duration_ms: i64,
+    exit_code: Option<i64>,
+    message: Option<String>,
+    parse_ok: bool,
+}
+
+impl ProbeRunRow {
+    fn decode(self) -> Option<ProbeRun> {
+        Some(ProbeRun {
+            probe_name: self.probe_name,
+            timestamp: self.timestamp,
+            duration_ms: self.duration_ms,
+            exit_code: self.exit_code.map(|v| v as i32),
+            message: self.message,
+            parse_ok: self.parse_ok,
+        })
+    }
+}
+
 impl ProbeRepository {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
@@ -62,10 +85,9 @@ impl ProbeRepository {
 
     pub async fn disable_missing(&self, keep: &[String]) -> AppResult<u64> {
         if keep.is_empty() {
-            let r =
-                sqlx::query!("UPDATE probe_definitions SET enabled = 0 WHERE enabled = 1")
-                    .execute(&self.pool)
-                    .await?;
+            let r = sqlx::query!("UPDATE probe_definitions SET enabled = 0 WHERE enabled = 1")
+                .execute(&self.pool)
+                .await?;
             return Ok(r.rows_affected());
         }
         let mut qb = sqlx::QueryBuilder::new(
@@ -150,12 +172,14 @@ impl ProbeRepository {
     ) -> AppResult<Vec<ProbeRun>> {
         let limit = limit as i64;
         let offset = offset as i64;
-        let rows = sqlx::query!(
-            "SELECT timestamp, duration_ms, exit_code, message, parse_ok
+        let rows = sqlx::query_as!(
+            ProbeRunRow,
+            r#"SELECT probe_name, timestamp, duration_ms, exit_code, message,
+                      parse_ok as "parse_ok: bool"
                FROM probe_runs
               WHERE probe_name = ?
               ORDER BY timestamp DESC
-              LIMIT ? OFFSET ?",
+              LIMIT ? OFFSET ?"#,
             probe_name,
             limit,
             offset,
@@ -163,14 +187,7 @@ impl ProbeRepository {
         .fetch_all(&self.pool)
         .await?
         .into_iter()
-        .map(|r| ProbeRun {
-            probe_name: probe_name.to_string(),
-            timestamp: r.timestamp,
-            duration_ms: r.duration_ms,
-            exit_code: r.exit_code.map(|v| v as i32),
-            message: r.message,
-            parse_ok: r.parse_ok != 0,
-        })
+        .filter_map(ProbeRunRow::decode)
         .collect();
         Ok(rows)
     }
