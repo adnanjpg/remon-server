@@ -9,6 +9,8 @@ on:
 jobs:
   build:
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
 
     strategy:
       matrix:
