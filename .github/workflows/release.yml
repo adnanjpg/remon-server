@@ -44,9 +44,7 @@ jobs:
         cp target/${{ matrix.target }}/release/remon-server dist/
         tar -czvf ${{ matrix.platform }}-${{ matrix.target }}-release.tar.gz -C dist .
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
+    - name: Upload to GitHub Release
+      uses: softprops/action-gh-release@v2
       with:
-        name: ${{ matrix.platform }}-${{ matrix.target }}-release
-        path: ./${{ matrix.platform }}-${{ matrix.target }}-release.tar.gz
-        retention-days: 30
+        files: ${{ matrix.platform }}-${{ matrix.target }}-release.tar.gz
