@@ -29,7 +29,7 @@
 //! no transitions. A long absence eventually shows up as stale
 //! `last_eval_at`, which UI can highlight.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -50,31 +50,83 @@ pub fn spawn(state: Arc<AppState>) {
     tokio::spawn(async move { run_supervisor(state).await });
 }
 
-/// Top-level loop: load enabled rules, fan out one task per rule. The
-/// supervisor itself doesn't reload — operators changing a rule today
-/// hit `PUT /alerts/{id}` which updates the row but does NOT bounce the
-/// running task. Picking up live edits cleanly needs hot-reload
-/// (planned for F5/F6); for now the operator restarts the server after
-/// editing rules. Documented in the alerts API.
+/// Top-level supervisor loop. Runs every `RELOAD_INTERVAL`, loads all
+/// enabled rules from the DB, and diffs against the currently-running
+/// task set. Rules added or changed (detected via `updated_at`) get a
+/// fresh task; rules disabled or deleted have their task aborted.
+///
+/// This makes `PUT /alerts/{id}` take effect within one reload cycle
+/// without a server restart.
+const RELOAD_INTERVAL: Duration = Duration::from_secs(30);
+
 async fn run_supervisor(state: Arc<AppState>) {
     // Brief delay so the rest of boot finishes before we slam the DB.
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let repo = AlertRepository::new(state.db.clone());
-    let rules = loop {
-        match repo.list_enabled().await {
-            Ok(r) => break r,
+    // rule_id → (task handle, updated_at snapshot used for change detection)
+    let mut running: HashMap<i64, (tokio::task::JoinHandle<()>, i64)> = HashMap::new();
+
+    let mut ticker = tokio::time::interval(RELOAD_INTERVAL);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        ticker.tick().await;
+
+        let rules = match repo.list_enabled().await {
+            Ok(r) => r,
             Err(e) => {
-                warn!("Alert evaluator: load rules failed, retrying: {:?}", e);
-                tokio::time::sleep(Duration::from_secs(10)).await;
+                warn!("Alert supervisor: reload failed, will retry: {:?}", e);
+                continue;
+            }
+        };
+
+        // Abort tasks whose rule was disabled or deleted.
+        let live_ids: HashSet<i64> = rules.iter().map(|r| r.id).collect();
+        let removed: Vec<i64> = running
+            .keys()
+            .filter(|id| !live_ids.contains(id))
+            .cloned()
+            .collect();
+        for id in removed {
+            if let Some((task, _)) = running.remove(&id) {
+                info!(
+                    "Alert supervisor: rule id={} removed or disabled, stopping task",
+                    id
+                );
+                task.abort();
             }
         }
-    };
 
-    info!("Alert evaluator: spawning {} rule task(s)", rules.len());
-    for rule in rules {
-        let st = state.clone();
-        tokio::spawn(async move { run_rule_loop(rule, st).await });
+        // Spawn or restart rules that are new or have changed.
+        for rule in rules {
+            let needs_start = match running.get(&rule.id) {
+                None => true,
+                Some((task, prev_updated_at)) => {
+                    task.is_finished() || *prev_updated_at != rule.updated_at
+                }
+            };
+
+            if needs_start {
+                if let Some((task, _)) = running.remove(&rule.id) {
+                    info!(
+                        "Alert supervisor: rule '{}' (id={}) changed, restarting task",
+                        rule.name, rule.id
+                    );
+                    task.abort();
+                } else {
+                    info!(
+                        "Alert supervisor: rule '{}' (id={}) starting task",
+                        rule.name, rule.id
+                    );
+                }
+                let rule_id = rule.id;
+                let updated_at = rule.updated_at;
+                let st = state.clone();
+                let task = tokio::spawn(async move { run_rule_loop(rule, st).await });
+                running.insert(rule_id, (task, updated_at));
+            }
+        }
     }
 }
 
@@ -104,11 +156,8 @@ async fn run_rule_loop(rule: AlertRule, state: Arc<AppState>) {
     );
 
     let period = Duration::from_secs(rule.eval_interval_secs.max(1) as u64);
-    // Wall-clock-aligned ticker — same pattern we use in collectors /
-    // rollup / retention. Rule eval intervals don't change at runtime
-    // (no hot-reload yet) so no recreate-on-change logic here. First
-    // tick fires immediately after the 2s supervisor warmup; that's
-    // fine — a fresh boot evaluating once on tick 0 just sees current
+    // Wall-clock-aligned ticker. First tick fires immediately, which is
+    // fine — a fresh task evaluating once on tick 0 just sees current
     // metrics, no harm done.
     let mut ticker = tokio::time::interval(period);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -450,11 +499,6 @@ fn format_value(v: f64) -> String {
         format!("{:.4}", v)
     }
 }
-
-// Re-export for convenience: callers (and tests) usually want
-// `AlertSeverity` and `AlertLifecycle` together.
-#[allow(unused_imports)]
-pub use crate::models::alert::AlertSeverity as _Severity;
 
 #[cfg(test)]
 mod tests {
