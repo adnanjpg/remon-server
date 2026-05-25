@@ -96,5 +96,4 @@ impl NotificationChannel for TelegramChannel {
             )))
         }
     }
-
 }

@@ -79,5 +79,4 @@ impl NotificationChannel for WebhookChannel {
             Err(ChannelError::Send(format!("webhook {} — {}", status, body)))
         }
     }
-
 }

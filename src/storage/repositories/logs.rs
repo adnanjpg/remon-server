@@ -34,5 +34,4 @@ impl LogRepository {
 
         Ok(())
     }
-
 }

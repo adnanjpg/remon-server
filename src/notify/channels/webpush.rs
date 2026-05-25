@@ -156,7 +156,6 @@ impl NotificationChannel for WebPushChannel {
         }
         Ok(success)
     }
-
 }
 
 /// RFC 8291 + RFC 8188 (aes128gcm) payload encryption using ring.

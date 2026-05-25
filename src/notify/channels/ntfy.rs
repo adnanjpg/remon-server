@@ -84,5 +84,4 @@ impl NotificationChannel for NtfyChannel {
             Err(ChannelError::Send(format!("ntfy {} — {}", status, body)))
         }
     }
-
 }

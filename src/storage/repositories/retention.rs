@@ -29,5 +29,4 @@ impl RetentionRepository {
         .await?;
         Ok(rows)
     }
-
 }

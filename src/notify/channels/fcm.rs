@@ -297,7 +297,6 @@ impl NotificationChannel for FcmChannel {
         }
         Ok(success)
     }
-
 }
 
 // ── JWT building ──────────────────────────────────────────────────────────────
