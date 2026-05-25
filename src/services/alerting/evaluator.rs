@@ -339,11 +339,17 @@ async fn evaluate_once(
         }
     }
 
-    // A label_set that previously had state but isn't observed this
-    // tick is left alone. We don't want a transient resolver gap (e.g.
-    // a one-tick DB miss) to silently flip an active alert to ok. UIs
-    // that show "last_eval_at" will highlight stale rows.
-    let _ = seen; // reserved for future "purge stale" pass
+    // Remove Ok rows for label_sets that vanished from resolver output.
+    for (label_set, prior) in &prior_by_label {
+        if !seen.contains(label_set) && prior.state == AlertLifecycle::Ok {
+            if let Err(e) = repo.delete_ok_state(rule.id, label_set).await {
+                warn!(
+                    "alert_state prune failed for rule='{}' label={}: {:?}",
+                    rule.name, label_set, e
+                );
+            }
+        }
+    }
 
     Ok(())
 }
@@ -462,11 +468,10 @@ fn format_fire_body(rule: &AlertRule, label_set: &str, value: f64, meta: Option<
         String::new()
     };
     format!(
-        "{}{} = {} (rule: {}{})",
+        "{}{} = {}{}",
         rule.expression,
         labels,
         render_observed(value, meta),
-        rule.expression,
         sustained
     )
 }

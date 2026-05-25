@@ -162,6 +162,20 @@ impl AlertRepository {
 
     // ===== alert_state =====
 
+    /// Remove an `Ok` state row for a label_set that disappeared from
+    /// resolver output. `Pending`/`Firing` rows are never touched here.
+    pub async fn delete_ok_state(&self, rule_id: i64, label_set: &str) -> AppResult<()> {
+        sqlx::query!(
+            "DELETE FROM alert_state
+              WHERE rule_id = ? AND label_set = ? AND state = 'ok'",
+            rule_id,
+            label_set,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Upsert the current lifecycle for one (rule, label_set). The
     /// evaluator calls this on every tick. Idempotent — re-applies the
     /// same state with refreshed last_value / last_eval_at fine.
@@ -190,12 +204,6 @@ impl AlertRepository {
         Ok(())
     }
 
-    /// Fetch all state rows for one rule. The evaluator uses this to
-    /// reconcile against the metric resolver's current label_set output —
-    /// rows present in DB but absent from current evaluation are taken
-    /// to mean "the label_set disappeared" (e.g. unmounted disk) and
-    /// the state row is left alone but eventually purged via
-    /// `prune_state_for_rule` once the operator confirms.
     pub async fn list_state_for_rule(&self, rule_id: i64) -> AppResult<Vec<AlertStateRow>> {
         let rows = sqlx::query_as!(
             AlertStateRawRow,
@@ -213,14 +221,6 @@ impl AlertRepository {
             .collect())
     }
 
-    /// All currently-firing or pending state rows, joined with their
-    /// rule's name + severity. Drives `GET /alerts/state` for the
-    /// dashboard's "active alerts" view.
-    ///
-    /// Returns the rule meta inline so callers don't need a second
-    /// `list()` round-trip + in-memory hash join. With many rules but
-    /// few active states, that previous pattern was an N+1-ish read
-    /// that scaled with rule count instead of active count.
     pub async fn list_active_state(
         &self,
     ) -> AppResult<Vec<(AlertStateRow, String, AlertSeverity)>> {
