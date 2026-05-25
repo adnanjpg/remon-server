@@ -25,6 +25,7 @@ const DEFAULT_SPAN_SECS: i64 = 3600;
 /// - 1m    × 24h    = 1 440 points
 /// - 5m    × 7d     = 2 016 points
 /// - 1h    × ~6 mo  = 4 320 points
+///
 /// Anything larger than 5 000 forces the user to either narrow the range
 /// or override `?limit=` — the cap below stays in place to keep a single
 /// rogue client from materialising the whole table at once.

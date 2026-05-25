@@ -194,30 +194,30 @@ impl MetricsRepository {
             );
         }
 
-        if let Some(c) = components {
-            if !c.components.is_empty() {
-                let mut qb = sqlx::QueryBuilder::new(
-                    "INSERT INTO metrics_components \
-                     (resolution, timestamp, label, temperature_c, max_c, critical_c) ",
-                );
-                qb.push_values(c.components.iter(), |mut b, comp| {
-                    b.push_bind("raw")
-                        .push_bind(c.timestamp)
-                        .push_bind(&comp.label)
-                        .push_bind(comp.temperature_c)
-                        .push_bind(comp.max_c)
-                        .push_bind(comp.critical_c);
-                });
-                qb.push(" ON CONFLICT(resolution, timestamp, label) DO NOTHING");
-                let r = qb.build().execute(&mut *tx).await?;
-                note_collision(
-                    "metrics_components",
-                    c.components.len() as u64,
-                    r.rows_affected(),
-                    c.timestamp,
-                    "raw",
-                );
-            }
+        if let Some(c) = components
+            && !c.components.is_empty()
+        {
+            let mut qb = sqlx::QueryBuilder::new(
+                "INSERT INTO metrics_components \
+                 (resolution, timestamp, label, temperature_c, max_c, critical_c) ",
+            );
+            qb.push_values(c.components.iter(), |mut b, comp| {
+                b.push_bind("raw")
+                    .push_bind(c.timestamp)
+                    .push_bind(&comp.label)
+                    .push_bind(comp.temperature_c)
+                    .push_bind(comp.max_c)
+                    .push_bind(comp.critical_c);
+            });
+            qb.push(" ON CONFLICT(resolution, timestamp, label) DO NOTHING");
+            let r = qb.build().execute(&mut *tx).await?;
+            note_collision(
+                "metrics_components",
+                c.components.len() as u64,
+                r.rows_affected(),
+                c.timestamp,
+                "raw",
+            );
         }
 
         if let Some(p) = pressure {

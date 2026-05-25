@@ -118,7 +118,7 @@ fn raw_status(status: u32) -> &'static str {
 
 fn is_enabled(start_type: u32) -> bool {
     // Automatic (2) or Boot (0) or System (1) → enabled at boot
-    matches!(start_type, 0 | 1 | 2)
+    matches!(start_type, 0..=2)
 }
 
 fn record_to_service(r: ScmRecord) -> Service {

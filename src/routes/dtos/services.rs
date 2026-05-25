@@ -39,7 +39,7 @@ pub struct ListServicesQuery {
 }
 
 impl ListServicesQuery {
-    pub fn into_filter_state(&self) -> Option<ServiceState> {
+    pub fn filter_state(&self) -> Option<ServiceState> {
         self.state.as_deref().and_then(parse_state_param)
     }
 }

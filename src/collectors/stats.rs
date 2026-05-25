@@ -256,6 +256,7 @@ pub async fn run(state: Arc<AppState>) {
 /// the PSI snapshot. The first tick returns a partial frame (rate fields
 /// stay None) because the rate computations need a prior snapshot.
 #[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
 async fn enrich_linux(
     cpu: &mut CpuStats,
     memory: &mut MemoryStats,
@@ -285,13 +286,13 @@ async fn enrich_linux(
 
     // /proc/vmstat: page faults and swap traffic — same prior-snapshot dance.
     let cur_vmstat = system_linux::read_vmstat();
-    if let (Some(prev), Some(cur)) = (*last_vmstat, cur_vmstat) {
-        if let Some(rates) = system_linux::compute_vmstat_rates(prev, cur, interval_secs) {
-            memory.page_faults_minor_per_sec = Some(rates.page_faults_minor_per_sec);
-            memory.page_faults_major_per_sec = Some(rates.page_faults_major_per_sec);
-            memory.swap_in_pages_per_sec = Some(rates.swap_in_pages_per_sec);
-            memory.swap_out_pages_per_sec = Some(rates.swap_out_pages_per_sec);
-        }
+    if let (Some(prev), Some(cur)) = (*last_vmstat, cur_vmstat)
+        && let Some(rates) = system_linux::compute_vmstat_rates(prev, cur, interval_secs)
+    {
+        memory.page_faults_minor_per_sec = Some(rates.page_faults_minor_per_sec);
+        memory.page_faults_major_per_sec = Some(rates.page_faults_major_per_sec);
+        memory.swap_in_pages_per_sec = Some(rates.swap_in_pages_per_sec);
+        memory.swap_out_pages_per_sec = Some(rates.swap_out_pages_per_sec);
     }
     *last_vmstat = cur_vmstat;
 
@@ -313,7 +314,7 @@ async fn enrich_linux(
                 if let Some(prev_entry) = prev_map.get(dev) {
                     // Skip partition entries (e.g. sda1) if the parent device
                     // (sda) is also present — avoids double-counting.
-                    let is_partition = dev.chars().last().map_or(false, |c| c.is_ascii_digit())
+                    let is_partition = dev.chars().last().is_some_and(|c| c.is_ascii_digit())
                         && cur_map.contains_key(dev.trim_end_matches(|c: char| c.is_ascii_digit()));
                     if is_partition {
                         continue;

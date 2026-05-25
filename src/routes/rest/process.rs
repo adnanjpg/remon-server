@@ -70,10 +70,10 @@ pub async fn get_processes(
         .processes
         .iter()
         .filter(|p| {
-            if let Some(needle) = &search_needle {
-                if !p.name.to_lowercase().contains(needle) {
-                    return false;
-                }
+            if let Some(needle) = &search_needle
+                && !p.name.to_lowercase().contains(needle)
+            {
+                return false;
             }
             if let Some(sf) = state_needle.as_deref() {
                 let matches = matches!(
@@ -94,7 +94,7 @@ pub async fn get_processes(
         .collect();
 
     match q.sort.as_str() {
-        "memory" => processes.sort_unstable_by(|a, b| b.memory_bytes.cmp(&a.memory_bytes)),
+        "memory" => processes.sort_unstable_by_key(|b| std::cmp::Reverse(b.memory_bytes)),
         "pid" => processes.sort_unstable_by_key(|p| p.pid),
         "name" => processes.sort_unstable_by(|a, b| a.name.cmp(&b.name)),
         _ => processes.sort_unstable_by(|a, b| {
@@ -142,8 +142,11 @@ async fn get_or_refresh_processes(state: &AppState) -> Arc<ProcessList> {
 
 async fn fresh_cached_processes(state: &AppState) -> Option<Arc<ProcessList>> {
     let now = chrono::Utc::now().timestamp();
-    let ttl_secs =
-        ((state.processes_cache_ttl_ms.load(Ordering::Relaxed) + 999) / 1000).max(1) as i64;
+    let ttl_secs = state
+        .processes_cache_ttl_ms
+        .load(Ordering::Relaxed)
+        .div_ceil(1000)
+        .max(1) as i64;
     state
         .processes_latest
         .read()

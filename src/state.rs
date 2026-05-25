@@ -137,6 +137,7 @@ impl AppState {
     /// Construct AppState. Caller is responsible for having loaded the
     /// effective config + initial intervals from the database; this just
     /// wires them into the shared structure.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         db: SqlitePool,
         auth_config: AuthConfig,

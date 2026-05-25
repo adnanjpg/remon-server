@@ -238,8 +238,7 @@ fn parse_last_json_line(stdout: &str) -> Option<ProbeOutput> {
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
-        .filter(|l| l.starts_with('{') && l.ends_with('}'))
-        .last()
+        .rfind(|l| l.starts_with('{') && l.ends_with('}'))
         .and_then(|line| serde_json::from_str::<ProbeOutput>(line).ok())
 }
 

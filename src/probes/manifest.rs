@@ -147,7 +147,7 @@ pub enum Schedule {
     /// Fire when the cron expression next matches. Cron uses 6-field
     /// (with-seconds) form via the `cron` crate. We accept the more
     /// common 5-field by prepending "0" to the user input.
-    Cron(cron::Schedule),
+    Cron(Box<cron::Schedule>),
 }
 
 impl Schedule {
@@ -288,13 +288,13 @@ impl Manifest {
             )));
         }
 
-        if let Some(mb) = raw.memory_limit_mb {
-            if mb == 0 || mb > 65_536 {
-                return Err(ManifestError::Validation(format!(
-                    "memory_limit_mb {} out of range [1..65536]",
-                    mb
-                )));
-            }
+        if let Some(mb) = raw.memory_limit_mb
+            && (mb == 0 || mb > 65_536)
+        {
+            return Err(ManifestError::Validation(format!(
+                "memory_limit_mb {} out of range [1..65536]",
+                mb
+            )));
         }
 
         let mode = match raw.mode.as_deref() {
@@ -566,7 +566,7 @@ fn parse_cron(s: &str) -> Result<Schedule, ManifestError> {
         s.to_string()
     };
     cron::Schedule::from_str(&normalized)
-        .map(Schedule::Cron)
+        .map(|s| Schedule::Cron(Box::new(s)))
         .map_err(|e| {
             ManifestError::Validation(format!("schedule '{}' is not a valid cron: {}", s, e))
         })

@@ -26,7 +26,7 @@ pub struct CronJob {
 pub async fn list() -> Vec<CronJob> {
     #[cfg(not(unix))]
     {
-        return Vec::new();
+        Vec::new()
     }
 
     #[cfg(unix)]

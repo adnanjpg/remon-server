@@ -212,11 +212,11 @@ async fn handle_docker_exec(
                         match exec_output {
                             Some(Ok(log_output)) => {
                                 let text = log_output.to_string();
-                                if !text.is_empty() {
-                                    if let Err(e) = socket.send(Message::Text(text.into())).await {
-                                        warn!("Failed to send to WebSocket: {}", e);
-                                        break;
-                                    }
+                                if !text.is_empty()
+                                    && let Err(e) = socket.send(Message::Text(text.into())).await
+                                {
+                                    warn!("Failed to send to WebSocket: {}", e);
+                                    break;
                                 }
                             }
                             Some(Err(e)) => {

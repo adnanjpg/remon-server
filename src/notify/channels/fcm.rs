@@ -109,10 +109,10 @@ impl FcmInner {
     async fn access_token(&self) -> Result<String, ChannelError> {
         {
             let cache = self.token_cache.read().await;
-            if let Some(ref c) = *cache {
-                if Utc::now().timestamp() < c.expires_at - 60 {
-                    return Ok(c.token.clone());
-                }
+            if let Some(ref c) = *cache
+                && Utc::now().timestamp() < c.expires_at - 60
+            {
+                return Ok(c.token.clone());
             }
         }
 

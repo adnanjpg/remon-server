@@ -45,7 +45,7 @@ pub async fn list_services(
     Query(params): Query<ListServicesQuery>,
 ) -> AppResult<Json<ListServicesResponse>> {
     let filter = ServiceFilter {
-        state: params.into_filter_state(),
+        state: params.filter_state(),
     };
     let services = state.service_manager.list(filter).await?;
     Ok(Json(ListServicesResponse {

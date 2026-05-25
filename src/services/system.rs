@@ -300,10 +300,11 @@ fn is_loopback(name: &str) -> bool {
     if name == "lo" {
         return true;
     }
-    if let Some(rest) = name.strip_prefix("lo") {
-        if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
-            return true;
-        }
+    if let Some(rest) = name.strip_prefix("lo")
+        && !rest.is_empty()
+        && rest.chars().all(|c| c.is_ascii_digit())
+    {
+        return true;
     }
     name.to_ascii_lowercase()
         .starts_with("loopback pseudo-interface")
@@ -350,16 +351,18 @@ fn is_virtual_interface(name: &str) -> bool {
 
     // macOS aux: prefix + pure digits.
     for prefix in ["awdl", "llw", "gif", "stf"] {
-        if let Some(rest) = lower.strip_prefix(prefix) {
-            if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
-                return true;
-            }
-        }
-    }
-    if let Some(rest) = lower.strip_prefix("bridge") {
-        if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
+        if let Some(rest) = lower.strip_prefix(prefix)
+            && !rest.is_empty()
+            && rest.chars().all(|c| c.is_ascii_digit())
+        {
             return true;
         }
+    }
+    if let Some(rest) = lower.strip_prefix("bridge")
+        && !rest.is_empty()
+        && rest.chars().all(|c| c.is_ascii_digit())
+    {
+        return true;
     }
 
     false

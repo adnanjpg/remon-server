@@ -45,7 +45,7 @@ pub async fn stream_service_logs(
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (name, params);
-        return Err(AppError::NotSupported);
+        Err(AppError::NotSupported)
     }
 
     #[cfg(target_os = "linux")]

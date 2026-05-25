@@ -30,10 +30,10 @@ pub async fn initiate_pairing(
 
     {
         let mut pairing = state.pairing_state.write().await;
-        if let Some(existing) = pairing.as_ref() {
-            if existing.expires_at > now {
-                return Err(AppError::AlreadyExists);
-            }
+        if let Some(existing) = pairing.as_ref()
+            && existing.expires_at > now
+        {
+            return Err(AppError::AlreadyExists);
         }
         *pairing = Some(PairingState {
             code: code.clone(),
@@ -156,13 +156,12 @@ pub async fn complete_pairing(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
+        && let Err(e) = device_repo.set_fcm_token(&device_id, Some(token)).await
     {
-        if let Err(e) = device_repo.set_fcm_token(&device_id, Some(token)).await {
-            warn!(
-                "Failed to register FCM token for newly paired device {}: {:?}",
-                device_id, e
-            );
-        }
+        warn!(
+            "Failed to register FCM token for newly paired device {}: {:?}",
+            device_id, e
+        );
     }
 
     info!("New device paired: {} ({})", device_id, req.device_name);

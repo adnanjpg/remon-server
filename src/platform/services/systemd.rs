@@ -236,10 +236,10 @@ impl ServiceManager for SystemdManager {
                 sub_state = v.to_string();
             } else if let Some(v) = line.strip_prefix("Description=") {
                 description = v.to_string();
-            } else if let Some(v) = line.strip_prefix("UnitFileState=") {
-                if !v.is_empty() {
-                    unit_file_state = Some(v.to_string());
-                }
+            } else if let Some(v) = line.strip_prefix("UnitFileState=")
+                && !v.is_empty()
+            {
+                unit_file_state = Some(v.to_string());
             }
         }
 

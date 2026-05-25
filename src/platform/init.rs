@@ -24,12 +24,12 @@ pub fn detect() -> InitSystem {
         {
             return InitSystem::OpenRc;
         }
-        return InitSystem::SysV;
+        InitSystem::SysV
     }
 
     #[cfg(target_os = "windows")]
     {
-        return InitSystem::WindowsScm;
+        InitSystem::WindowsScm
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]

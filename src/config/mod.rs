@@ -25,6 +25,7 @@ pub struct ServerConfig {
     /// itself. When set:
     ///   - audit log writes (`devices.last_ip`) use the forwarded address
     ///   - per-IP rate limiting keys by the forwarded address
+    ///
     /// Leave false for direct exposure; otherwise an attacker can spoof
     /// XFF and either pollute audit data or bypass rate limits.
     #[serde(default)]

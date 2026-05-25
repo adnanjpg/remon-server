@@ -36,13 +36,13 @@ impl CreateChannelRequest {
         if !VALID_TYPES.contains(&self.r#type.as_str()) {
             return Err(format!("type must be one of: {}", VALID_TYPES.join(", ")));
         }
-        if let Some(ref sev) = self.min_severity {
-            if !VALID_SEVERITIES.contains(&sev.as_str()) {
-                return Err(format!(
-                    "min_severity must be one of: {}",
-                    VALID_SEVERITIES.join(", ")
-                ));
-            }
+        if let Some(ref sev) = self.min_severity
+            && !VALID_SEVERITIES.contains(&sev.as_str())
+        {
+            return Err(format!(
+                "min_severity must be one of: {}",
+                VALID_SEVERITIES.join(", ")
+            ));
         }
         Ok(())
     }
@@ -53,13 +53,13 @@ impl UpdateChannelRequest {
         if self.name.trim().is_empty() {
             return Err("name is required".to_string());
         }
-        if let Some(ref sev) = self.min_severity {
-            if !VALID_SEVERITIES.contains(&sev.as_str()) {
-                return Err(format!(
-                    "min_severity must be one of: {}",
-                    VALID_SEVERITIES.join(", ")
-                ));
-            }
+        if let Some(ref sev) = self.min_severity
+            && !VALID_SEVERITIES.contains(&sev.as_str())
+        {
+            return Err(format!(
+                "min_severity must be one of: {}",
+                VALID_SEVERITIES.join(", ")
+            ));
         }
         Ok(())
     }

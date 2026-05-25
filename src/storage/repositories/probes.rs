@@ -195,6 +195,7 @@ impl ProbeRepository {
     /// Time-series for one probe metric. `labels_filter` (canonical JSON)
     /// is optional; when omitted, every label combination is returned —
     /// caller groups client-side. Newest-first / capped by `limit`.
+    #[allow(clippy::too_many_arguments)]
     pub async fn read_metric_history(
         &self,
         probe_name: &str,

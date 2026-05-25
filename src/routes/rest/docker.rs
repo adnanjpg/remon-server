@@ -253,11 +253,7 @@ fn map_inspect(raw: BollardInspectResponse) -> ContainerInspectInfo {
         .network_settings
         .as_ref()
         .map(|ns| {
-            let ports = ns
-                .ports
-                .as_ref()
-                .map(|p| extract_ports(p))
-                .unwrap_or_default();
+            let ports = ns.ports.as_ref().map(extract_ports).unwrap_or_default();
             let networks = ns
                 .networks
                 .as_ref()

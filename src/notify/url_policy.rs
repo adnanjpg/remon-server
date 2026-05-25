@@ -40,7 +40,7 @@ impl WebhookPolicy {
 
     fn host_allow_listed(&self, host: &str) -> bool {
         let host_lc = host.to_ascii_lowercase();
-        self.allowed_private_hosts.iter().any(|h| *h == host_lc)
+        self.allowed_private_hosts.contains(&host_lc)
     }
 }
 

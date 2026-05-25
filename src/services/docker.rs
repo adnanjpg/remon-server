@@ -61,9 +61,9 @@ impl From<bollard::errors::Error> for DockerError {
     fn from(err: bollard::errors::Error) -> Self {
         match err {
             bollard::errors::Error::DockerResponseServerError {
-                status_code,
+                status_code: 404,
                 message,
-            } if status_code == 404 => DockerError::ContainerNotFound(message),
+            } => DockerError::ContainerNotFound(message),
             _ => DockerError::ApiError(err.to_string()),
         }
     }

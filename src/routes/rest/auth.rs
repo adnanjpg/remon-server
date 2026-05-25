@@ -121,16 +121,15 @@ pub async fn logout(State(state): State<Arc<AppState>>, claims: Claims) -> AppRe
 /// real client under any proxy that strips incoming XFF before adding its
 /// own. Falls back to the peer if XFF is absent or malformed.
 fn extract_client_ip(headers: &HeaderMap, addr: &SocketAddr, trust_proxy: bool) -> String {
-    if trust_proxy {
-        if let Some(v) = headers
+    if trust_proxy
+        && let Some(v) = headers
             .get("x-forwarded-for")
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.split(',').next())
             .map(str::trim)
             .filter(|s| !s.is_empty())
-        {
-            return v.to_string();
-        }
+    {
+        return v.to_string();
     }
     addr.ip().to_string()
 }
