@@ -85,7 +85,4 @@ impl NotificationChannel for NtfyChannel {
         }
     }
 
-    fn type_name(&self) -> &'static str {
-        "ntfy"
-    }
 }

@@ -197,7 +197,6 @@ pub enum StatsEvent {
     Memory(Arc<MemoryStats>),
     Disk(Arc<Vec<DiskStats>>),
     Network(Arc<Vec<NetworkStats>>),
-    All(Arc<AllStats>),
     Pressure(Arc<PressureSnapshot>),
     Components(Arc<ComponentsSnapshot>),
 }

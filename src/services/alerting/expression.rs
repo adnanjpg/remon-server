@@ -31,6 +31,7 @@ pub enum Comparator {
 }
 
 impl Comparator {
+    #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
             Comparator::Gt => ">",

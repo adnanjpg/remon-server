@@ -157,9 +157,6 @@ impl NotificationChannel for WebPushChannel {
         Ok(success)
     }
 
-    fn type_name(&self) -> &'static str {
-        "web-push"
-    }
 }
 
 /// RFC 8291 + RFC 8188 (aes128gcm) payload encryption using ring.
@@ -295,12 +292,8 @@ fn parse_origin(url: &str) -> anyhow::Result<String> {
 }
 
 fn format_payload(n: &Notification) -> String {
-    let prefix = match n.severity {
-        Severity::Crit => "[Critical] ",
-        Severity::Warn => "[Warning] ",
-    };
     let title = match n.event {
-        NotificationEvent::Fired => format!("{}{}", prefix, n.title),
+        NotificationEvent::Fired => format!("{}{}", n.severity.label(), n.title),
         NotificationEvent::Resolved => format!("[Resolved] {}", n.title),
     };
     let severity = match n.severity {

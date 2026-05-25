@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id as \"id!\", name as \"name!\", token_hash as \"token_hash!\",\n                      totp_secret, last_ip, last_seen, created_at,\n                      is_active as \"is_active: bool\"\n               FROM devices ORDER BY created_at DESC",
+  "query": "SELECT id as \"id!\", name as \"name!\", token_hash as \"token_hash!\",\n                      last_ip, last_seen, created_at,\n                      is_active as \"is_active: bool\"\n               FROM devices ORDER BY created_at DESC",
   "describe": {
     "columns": [
       {
@@ -37,19 +37,8 @@
         }
       },
       {
-        "name": "totp_secret",
-        "ordinal": 3,
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "devices",
-            "name": "totp_secret"
-          }
-        }
-      },
-      {
         "name": "last_ip",
-        "ordinal": 4,
+        "ordinal": 3,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -60,7 +49,7 @@
       },
       {
         "name": "last_seen",
-        "ordinal": 5,
+        "ordinal": 4,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -71,7 +60,7 @@
       },
       {
         "name": "created_at",
-        "ordinal": 6,
+        "ordinal": 5,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -82,7 +71,7 @@
       },
       {
         "name": "is_active: bool",
-        "ordinal": 7,
+        "ordinal": 6,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -100,11 +89,10 @@
       false,
       false,
       true,
-      true,
       false,
       false,
       false
     ]
   },
-  "hash": "1a7fb2164bed18154adf1852bc9a128f0b1149247cee2e8be992dfdaa051ef2f"
+  "hash": "6054c37e24258f70b1bc155c377678c0c4cbb1ca20357702a9e2c8fb53afed27"
 }

@@ -14,7 +14,7 @@ use sqlx::SqlitePool;
 use tokio::sync::RwLock;
 
 use crate::notify::channel::{ChannelError, NotificationChannel};
-use crate::notify::types::{Notification, NotificationEvent, Severity};
+use crate::notify::types::{Notification, NotificationEvent};
 use crate::storage::repositories::DeviceRepository;
 
 // ── Service account ───────────────────────────────────────────────────────────
@@ -298,9 +298,6 @@ impl NotificationChannel for FcmChannel {
         Ok(success)
     }
 
-    fn type_name(&self) -> &'static str {
-        "fcm"
-    }
 }
 
 // ── JWT building ──────────────────────────────────────────────────────────────
@@ -362,12 +359,8 @@ fn pem_body_to_der(pem: &str) -> Result<Vec<u8>, String> {
 }
 
 fn format_fcm(n: &Notification) -> (String, String) {
-    let severity_prefix = match n.severity {
-        Severity::Crit => "[Critical] ",
-        Severity::Warn => "[Warning] ",
-    };
     let title = match n.event {
-        NotificationEvent::Fired => format!("{}{}", severity_prefix, n.title),
+        NotificationEvent::Fired => format!("{}{}", n.severity.label(), n.title),
         NotificationEvent::Resolved => format!("[Resolved] {}", n.title),
     };
     (title, n.body.clone())

@@ -16,8 +16,8 @@ impl Severity {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Warn => "Warning",
-            Self::Crit => "Critical",
+            Self::Warn => "[Warning] ",
+            Self::Crit => "[Critical] ",
         }
     }
 }

@@ -138,7 +138,6 @@ pub async fn complete_pairing(
         id: device_id.clone(),
         name: req.device_name.clone(),
         token_hash,
-        totp_secret: None,
         last_ip: None,
         last_seen: now,
         created_at: now,

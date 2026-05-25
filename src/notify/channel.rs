@@ -17,6 +17,4 @@ pub trait NotificationChannel: Send + Sync {
     /// Single-target channels (Telegram, ntfy, webhook) return 0 or 1.
     /// FCM returns the number of paired devices successfully reached.
     async fn send(&self, notification: &Notification) -> Result<usize, ChannelError>;
-
-    fn type_name(&self) -> &'static str;
 }

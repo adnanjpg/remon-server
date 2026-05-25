@@ -104,7 +104,9 @@ pub struct Manifest {
     pub command: Vec<String>,
     pub platforms: Vec<String>,
     pub env: HashMap<String, String>,
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub run_as_user: Option<String>,
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub memory_limit_mb: Option<u64>,
     pub mode: ProbeMode,
     /// blake3 hash of the manifest file contents. Stored in the DB so

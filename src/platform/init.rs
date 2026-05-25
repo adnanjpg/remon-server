@@ -1,4 +1,5 @@
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum InitSystem {
     Systemd,
     OpenRc,

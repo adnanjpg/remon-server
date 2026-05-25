@@ -132,6 +132,7 @@ const SERVICE_FIELDS: &[&str] = &["up"];
 
 /// DB-only entry. Service-namespace rules error out here; use
 /// [`resolve_with_state`] for those.
+#[cfg(test)]
 pub async fn resolve(
     pool: &SqlitePool,
     metric: &MetricRef,

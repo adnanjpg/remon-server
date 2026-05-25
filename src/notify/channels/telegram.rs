@@ -97,7 +97,4 @@ impl NotificationChannel for TelegramChannel {
         }
     }
 
-    fn type_name(&self) -> &'static str {
-        "telegram"
-    }
 }

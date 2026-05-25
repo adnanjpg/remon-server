@@ -51,6 +51,7 @@ pub enum DockerError {
     #[error("Container not found: {0}")]
     ContainerNotFound(String),
     #[error("Image not found: {0}")]
+    #[allow(dead_code)]
     ImageNotFound(String),
     #[error("Docker API error: {0}")]
     ApiError(String),

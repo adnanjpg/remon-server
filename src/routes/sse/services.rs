@@ -10,6 +10,7 @@ use crate::routes::extractors::Claims;
 #[derive(Debug, Deserialize)]
 pub struct StreamServiceLogsQuery {
     /// Number of historical lines to include before following. Defaults to 50.
+    #[allow(dead_code)]
     pub tail: Option<u64>,
 }
 

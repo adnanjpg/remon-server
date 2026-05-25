@@ -51,15 +51,3 @@ pub struct ProcessList {
     pub total_count: usize,
     pub timestamp: i64,
 }
-
-/// Request to kill a process
-#[derive(Debug, Deserialize)]
-pub struct KillProcessRequest {
-    /// Signal to send (default: 15 = SIGTERM)
-    #[serde(default = "default_signal")]
-    pub signal: i32,
-}
-
-fn default_signal() -> i32 {
-    15 // SIGTERM
-}

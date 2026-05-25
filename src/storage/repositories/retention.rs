@@ -30,18 +30,4 @@ impl RetentionRepository {
         Ok(rows)
     }
 
-    pub async fn upsert(&self, p: &RetentionPolicy) -> AppResult<()> {
-        sqlx::query!(
-            "INSERT INTO retention_policy (resource, resolution, keep_seconds)
-             VALUES (?, ?, ?)
-             ON CONFLICT(resource, resolution) DO UPDATE SET
-                 keep_seconds = excluded.keep_seconds",
-            p.resource,
-            p.resolution,
-            p.keep_seconds,
-        )
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
 }

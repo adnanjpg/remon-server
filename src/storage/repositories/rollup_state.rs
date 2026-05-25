@@ -8,8 +8,6 @@ use crate::error::AppResult;
 /// and after extended downtime it can clamp how far back it tries to go.
 #[derive(Debug, Clone)]
 pub struct RollupCursor {
-    pub resource: String,
-    pub resolution: String,
     pub last_bucket_ts: i64,
 }
 
@@ -32,8 +30,6 @@ impl RollupStateRepository {
         .await?;
 
         Ok(RollupCursor {
-            resource: resource.to_string(),
-            resolution: resolution.to_string(),
             last_bucket_ts: row.map(|r| r.0).unwrap_or(0),
         })
     }

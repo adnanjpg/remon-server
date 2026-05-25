@@ -216,8 +216,4 @@ impl AuthService {
         Ok(data.claims)
     }
 
-    /// Get pairing code TTL
-    pub fn pairing_code_ttl(&self) -> u64 {
-        self.config.pairing_code_ttl_secs
-    }
 }

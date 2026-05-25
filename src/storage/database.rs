@@ -83,38 +83,8 @@ impl Database {
         Ok(())
     }
 
-    // Repository accessors
-
-    pub fn alerts(&self) -> AlertRepository {
-        AlertRepository::new(self.pool.clone())
-    }
-
     pub fn config(&self) -> ConfigRepository {
         ConfigRepository::new(self.pool.clone())
-    }
-
-    pub fn devices(&self) -> DeviceRepository {
-        DeviceRepository::new(self.pool.clone())
-    }
-
-    pub fn metrics(&self) -> MetricsRepository {
-        MetricsRepository::new(self.pool.clone())
-    }
-
-    pub fn resolutions(&self) -> ResolutionRepository {
-        ResolutionRepository::new(self.pool.clone())
-    }
-
-    pub fn retention(&self) -> RetentionRepository {
-        RetentionRepository::new(self.pool.clone())
-    }
-
-    pub fn rollup_state(&self) -> RollupStateRepository {
-        RollupStateRepository::new(self.pool.clone())
-    }
-
-    pub fn logs(&self) -> LogRepository {
-        LogRepository::new(self.pool.clone())
     }
 
     /// Get raw pool (for tests, or for operations that span multiple repos).

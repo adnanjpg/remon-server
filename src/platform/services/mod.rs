@@ -149,6 +149,7 @@ pub trait ServiceManager: Send + Sync {
 
 /// Normalize a user-supplied service name to a full systemd unit name.
 /// Accepts "nginx" or "nginx.service"; always returns "nginx.service".
+#[allow(dead_code)]
 pub fn normalize_unit_name(name: &str, suffix: &str) -> String {
     if name.contains('.') {
         name.to_string()

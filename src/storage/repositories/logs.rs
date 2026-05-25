@@ -35,15 +35,4 @@ impl LogRepository {
         Ok(())
     }
 
-    // Clean up old logs
-    pub async fn cleanup_old_logs(&self, retention_days: u32) -> AppResult<u64> {
-        let cutoff = chrono::Utc::now().timestamp() - (retention_days as i64 * 24 * 3600);
-
-        let result = sqlx::query("DELETE FROM logs WHERE timestamp < ?")
-            .bind(cutoff)
-            .execute(&self.pool)
-            .await?;
-
-        Ok(result.rows_affected())
-    }
 }

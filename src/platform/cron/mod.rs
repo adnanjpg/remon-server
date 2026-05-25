@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
 use tokio::fs;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,7 +68,7 @@ pub async fn list() -> Vec<CronJob> {
 
 // ===== Parsers =====
 
-/// Parse a system-format crontab (schedule + user + command, 7+ tokens).
+#[cfg(unix)]
 async fn parse_system_file(path: &str, out: &mut Vec<CronJob>) {
     let Ok(content) = fs::read_to_string(path).await else {
         return;
@@ -79,7 +80,7 @@ async fn parse_system_file(path: &str, out: &mut Vec<CronJob>) {
     }
 }
 
-/// Parse a user-format crontab (schedule + command, 6+ tokens, no user field).
+#[cfg(unix)]
 async fn parse_user_file(path: &str, username: &str, out: &mut Vec<CronJob>) {
     let Ok(content) = fs::read_to_string(path).await else {
         return;
@@ -91,6 +92,7 @@ async fn parse_user_file(path: &str, username: &str, out: &mut Vec<CronJob>) {
     }
 }
 
+#[cfg(unix)]
 fn parse_system_line(line: &str, source: &str) -> Option<CronJob> {
     let line = preprocess(line)?;
     let mut parts = line
@@ -134,6 +136,7 @@ fn parse_system_line(line: &str, source: &str) -> Option<CronJob> {
     })
 }
 
+#[cfg(unix)]
 fn parse_user_line(line: &str, username: &str, source: &str) -> Option<CronJob> {
     let line = preprocess(line)?;
     let mut parts = line
@@ -175,7 +178,7 @@ fn parse_user_line(line: &str, username: &str, source: &str) -> Option<CronJob> 
     })
 }
 
-/// Strip comments and skip blank / env-var lines. Returns None to skip.
+#[cfg(unix)]
 fn preprocess(line: &str) -> Option<&str> {
     let line = line.trim();
     if line.is_empty() || line.starts_with('#') {
@@ -191,6 +194,7 @@ fn preprocess(line: &str) -> Option<&str> {
     Some(line)
 }
 
+#[cfg(unix)]
 fn expand_special(token: &str) -> Option<String> {
     match token {
         "@reboot" => Some("@reboot".into()),

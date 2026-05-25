@@ -20,7 +20,6 @@ CREATE TABLE devices (
     id                TEXT PRIMARY KEY,
     name              TEXT NOT NULL,
     token_hash        TEXT NOT NULL,
-    totp_secret       TEXT,
     fcm_token         TEXT,
     web_push_endpoint TEXT,
     web_push_p256dh   TEXT,

@@ -14,12 +14,11 @@ impl DeviceRepository {
 
     pub async fn create(&self, device: &StoredDevice) -> AppResult<()> {
         sqlx::query!(
-            "INSERT INTO devices (id, name, token_hash, totp_secret, last_ip, last_seen, created_at, is_active)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO devices (id, name, token_hash, last_ip, last_seen, created_at, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
             device.id,
             device.name,
             device.token_hash,
-            device.totp_secret,
             device.last_ip,
             device.last_seen,
             device.created_at,
@@ -34,7 +33,7 @@ impl DeviceRepository {
         let row = sqlx::query_as!(
             StoredDevice,
             r#"SELECT id as "id!", name as "name!", token_hash as "token_hash!",
-                      totp_secret, last_ip, last_seen, created_at,
+                      last_ip, last_seen, created_at,
                       is_active as "is_active: bool"
                FROM devices WHERE id = ?"#,
             id
@@ -48,7 +47,7 @@ impl DeviceRepository {
         let rows = sqlx::query_as!(
             StoredDevice,
             r#"SELECT id as "id!", name as "name!", token_hash as "token_hash!",
-                      totp_secret, last_ip, last_seen, created_at,
+                      last_ip, last_seen, created_at,
                       is_active as "is_active: bool"
                FROM devices ORDER BY created_at DESC"#
         )
@@ -79,17 +78,7 @@ impl DeviceRepository {
         Ok(())
     }
 
-    pub async fn set_totp_secret(&self, id: &str, secret: Option<&str>) -> AppResult<()> {
-        sqlx::query!(
-            "UPDATE devices SET totp_secret = ? WHERE id = ?",
-            secret,
-            id
-        )
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
+    #[allow(dead_code)]
     pub async fn deactivate(&self, id: &str) -> AppResult<()> {
         let result = sqlx::query!("UPDATE devices SET is_active = 0 WHERE id = ?", id)
             .execute(&self.pool)

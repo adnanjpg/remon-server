@@ -1,4 +1,4 @@
-use sysinfo::{Pid, System};
+use sysinfo::System;
 
 use crate::models::process::{ProcessInfo, ProcessList, ProcessState};
 
@@ -46,39 +46,6 @@ pub fn get_processes(sys: &System) -> ProcessList {
         total_count,
         timestamp,
     }
-}
-
-/// Get a single process by PID
-pub fn get_process(sys: &System, pid: u32) -> Option<ProcessInfo> {
-    let total_memory = sys.total_memory();
-
-    sys.process(Pid::from_u32(pid)).map(|process| {
-        let memory_bytes = process.memory();
-        let memory_percent = if total_memory > 0 {
-            (memory_bytes as f64 / total_memory as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        ProcessInfo {
-            pid,
-            parent_pid: process.parent().map(|p| p.as_u32()),
-            name: process.name().to_string_lossy().to_string(),
-            cmd: process
-                .cmd()
-                .iter()
-                .map(|s| s.to_string_lossy().to_string())
-                .collect(),
-            exe: process.exe().map(|p| p.to_string_lossy().to_string()),
-            user: process.user_id().map(|u| u.to_string()),
-            cpu_percent: process.cpu_usage() as f64,
-            memory_bytes,
-            memory_percent,
-            state: process_state(process.status()),
-            started_at: Some(process.start_time() as i64),
-            threads: None,
-        }
-    })
 }
 
 /// Kill a process by PID, cross-platform.

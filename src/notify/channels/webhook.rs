@@ -80,7 +80,4 @@ impl NotificationChannel for WebhookChannel {
         }
     }
 
-    fn type_name(&self) -> &'static str {
-        "webhook"
-    }
 }

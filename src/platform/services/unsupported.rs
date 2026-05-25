@@ -4,6 +4,7 @@ use async_trait::async_trait;
 
 use super::{Service, ServiceError, ServiceFilter, ServiceManager};
 
+#[allow(dead_code)]
 pub struct UnsupportedManager;
 
 #[async_trait]
