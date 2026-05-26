@@ -80,10 +80,7 @@ pub async fn run(state: Arc<AppState>) {
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
-        tokio::select! {
-            _ = ticker.tick() => {}
-            _ = state.collector_wake.notified() => {}
-        }
+        ticker.tick().await;
         let now = Instant::now();
         let interval_secs = match last_refresh {
             Some(prev) => (now - prev).as_secs_f64(),

@@ -209,7 +209,6 @@ async fn main() {
 
     let effective_config = state::EffectiveConfig {
         server_name: overrides.server_name,
-        collector_stats_base_interval_ms: overrides.collector_stats_interval_ms,
         rollup_tick_interval_ms: overrides.rollup_tick_interval_ms,
         retention_tick_interval_ms: overrides.retention_tick_interval_ms,
     };
@@ -282,17 +281,16 @@ async fn main() {
     // Spawn collectors (broadcast + raw metrics writer)
     collectors::spawn_all(app_state.clone());
 
-    // Spawn rollup, retention, adaptive sampling, alert evaluator, sessions cleanup.
+    // Spawn rollup, retention, alert evaluator, sessions cleanup.
     // The legacy "watch every failed service and notify" task was retired in
     // 0.7.5; the same behaviour is now available as user-defined alert rules
     // of the form `service.up{unit="..."} == 0`, evaluated by the alert
     // engine like any other rule.
     services::rollup::spawn(app_state.clone());
     services::retention::spawn(app_state.clone());
-    services::sampling::spawn(app_state.clone());
     services::alerts::spawn(app_state.clone());
     services::sessions::spawn(app_state.clone());
-    info!("Rollup, retention, sampling, alert evaluator, and session cleanup workers spawned");
+    info!("Rollup, retention, alert evaluator, and session cleanup workers spawned");
 
     // Probe loader: scan probes/, validate manifests, spawn one
     // task per enabled+platform-matched probe. A missing directory is

@@ -17,7 +17,6 @@ pub async fn stream_stats(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.stats_tx.subscribe();
-    state.sampling_wake.notify_one();
 
     let cached = state.stats_latest.read().await.clone();
     let primer = stream::iter(primer_events_from_cache(cached));
@@ -66,7 +65,6 @@ pub async fn stream_cpu_stats(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.stats_tx.subscribe();
-    state.sampling_wake.notify_one();
     let stream = BroadcastStream::new(rx).filter_map(|result| async move {
         match result {
             Ok(StatsEvent::Cpu(cpu_stats)) => {
@@ -90,7 +88,6 @@ pub async fn stream_memory_stats(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.stats_tx.subscribe();
-    state.sampling_wake.notify_one();
     let stream = BroadcastStream::new(rx).filter_map(|result| async move {
         match result {
             Ok(StatsEvent::Memory(mem_stats)) => {
@@ -114,7 +111,6 @@ pub async fn stream_disk_stats(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.stats_tx.subscribe();
-    state.sampling_wake.notify_one();
     let stream = BroadcastStream::new(rx).filter_map(|result| async move {
         match result {
             Ok(StatsEvent::Disk(disk_stats)) => {
@@ -138,7 +134,6 @@ pub async fn stream_network_stats(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.stats_tx.subscribe();
-    state.sampling_wake.notify_one();
     let stream = BroadcastStream::new(rx).filter_map(|result| async move {
         match result {
             Ok(StatsEvent::Network(net_stats)) => {

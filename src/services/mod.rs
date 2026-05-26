@@ -5,7 +5,6 @@ pub mod logging;
 pub mod process;
 pub mod retention;
 pub mod rollup;
-pub mod sampling;
 pub mod sessions;
 pub mod system;
 pub mod tick_timer;

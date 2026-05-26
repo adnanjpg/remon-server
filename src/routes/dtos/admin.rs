@@ -9,11 +9,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize)]
 pub struct ConfigResponse {
     pub server_name: String,
-    /// Configured base interval (what PATCH /config wrote).
-    pub collector_stats_base_interval_ms: u64,
-    /// Currently-running interval after adaptive sampling has applied its
-    /// multiplier. Equals base when there are SSE/WS subscribers; larger
-    /// (base × IDLE_MULTIPLIER) when nobody is watching.
     pub collector_stats_interval_ms: u64,
     pub collector_processes_interval_ms: u64,
     pub collector_docker_interval_ms: u64,

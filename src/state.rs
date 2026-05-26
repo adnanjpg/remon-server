@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 
 use sqlx::SqlitePool;
-use tokio::sync::{Mutex, Notify, RwLock, broadcast};
+use tokio::sync::{Mutex, RwLock, broadcast};
 
 use crate::config::AuthConfig;
 use crate::models::process::ProcessList;
@@ -33,17 +33,9 @@ pub const PAIRING_MAX_ATTEMPTS: u8 = 3;
 /// values read from the `server_config` table at boot. Held under `RwLock`
 /// so PATCH /config can swap it without a restart; background tasks re-read
 /// on each tick.
-///
-/// `collector_stats_base_interval_ms` is the *configured* base for the
-/// stats collector. The actually-running interval lives in
-/// `AppState.collector_stats_interval_ms` (an `AtomicU64`), and the
-/// adaptive sampling task derives it from `base × multiplier` based on
-/// subscriber count. PATCH /config updates the base; sampling re-applies
-/// it on its next tick.
 #[derive(Debug, Clone)]
 pub struct EffectiveConfig {
     pub server_name: String,
-    pub collector_stats_base_interval_ms: u64,
     pub rollup_tick_interval_ms: u64,
     pub retention_tick_interval_ms: u64,
 }
@@ -51,7 +43,7 @@ pub struct EffectiveConfig {
 /// Shared application state.
 ///
 /// Collector intervals are kept as `Arc<AtomicU64>` (not behind the same
-/// `RwLock`) so adaptive-sampling logic can change them on the fly without
+/// `RwLock`) so a PATCH /config can change them on the fly without
 /// blocking other readers. Each collector loop reloads the value before
 /// every tick.
 pub struct AppState {
@@ -76,13 +68,6 @@ pub struct AppState {
 
     /// Most recent stats tick — primer source for new SSE subscribers.
     pub stats_latest: Arc<RwLock<Option<AllStats>>>,
-
-    /// Poked by SSE/WS subscribe handlers to wake the adaptive sampler.
-    pub sampling_wake: Arc<Notify>,
-
-    /// Poked by the sampler on Active transitions to break the collector
-    /// out of an in-flight idle sleep.
-    pub collector_wake: Arc<Notify>,
 
     /// Latest process snapshot. `GET /processes` refreshes on demand when
     /// the cache is stale; no background scan, since sysinfo's process
@@ -164,8 +149,6 @@ impl AppState {
             stats_tx,
             processes_tx,
             stats_latest: Arc::new(RwLock::new(None)),
-            sampling_wake: Arc::new(Notify::new()),
-            collector_wake: Arc::new(Notify::new()),
             processes_latest: Arc::new(RwLock::new(None)),
             processes_refresh_lock: Arc::new(Mutex::new(())),
             effective_config: Arc::new(RwLock::new(effective_config)),

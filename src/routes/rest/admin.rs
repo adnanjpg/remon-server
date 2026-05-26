@@ -28,7 +28,6 @@ pub async fn get_config(
     let effective = state.effective_config.read().await.clone();
     Ok(Json(ConfigResponse {
         server_name: effective.server_name,
-        collector_stats_base_interval_ms: effective.collector_stats_base_interval_ms,
         collector_stats_interval_ms: state.collector_stats_interval_ms.load(Ordering::Relaxed),
         collector_processes_interval_ms: state.processes_cache_ttl_ms.load(Ordering::Relaxed),
         #[cfg(feature = "docker")]
@@ -116,7 +115,6 @@ pub async fn patch_config(
         let mut effective = state.effective_config.write().await;
         *effective = EffectiveConfig {
             server_name: merged.server_name.clone(),
-            collector_stats_base_interval_ms: merged.collector_stats_interval_ms,
             rollup_tick_interval_ms: merged.rollup_tick_interval_ms,
             retention_tick_interval_ms: merged.retention_tick_interval_ms,
         };
@@ -124,7 +122,7 @@ pub async fn patch_config(
 
     #[cfg(feature = "docker")]
     info!(
-        "Runtime config updated: stats(base)={}ms processes={}ms docker={}ms rollup={}ms retention={}ms",
+        "Runtime config updated: stats={}ms processes={}ms docker={}ms rollup={}ms retention={}ms",
         merged.collector_stats_interval_ms,
         merged.processes_cache_ttl_ms,
         merged.collector_docker_interval_ms,
@@ -133,7 +131,7 @@ pub async fn patch_config(
     );
     #[cfg(not(feature = "docker"))]
     info!(
-        "Runtime config updated: stats(base)={}ms processes={}ms rollup={}ms retention={}ms",
+        "Runtime config updated: stats={}ms processes={}ms rollup={}ms retention={}ms",
         merged.collector_stats_interval_ms,
         merged.processes_cache_ttl_ms,
         merged.rollup_tick_interval_ms,
@@ -142,7 +140,6 @@ pub async fn patch_config(
 
     Ok(Json(ConfigResponse {
         server_name: merged.server_name,
-        collector_stats_base_interval_ms: merged.collector_stats_interval_ms,
         collector_stats_interval_ms: state.collector_stats_interval_ms.load(Ordering::Relaxed),
         collector_processes_interval_ms: merged.processes_cache_ttl_ms,
         #[cfg(feature = "docker")]
