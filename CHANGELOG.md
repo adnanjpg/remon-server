@@ -3,6 +3,25 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.1] - 2026-05-26
+
+### Removed
+
+- Adaptive stats sampling. Collector now ticks at `collector_stats_interval_ms` unconditionally; the prior `base × 4` slowdown on idle caused chart-granularity drift on the overview without meaningful CPU/IO savings. `collector_stats_base_interval_ms` is gone from the `/config` response — use `collector_stats_interval_ms`.
+
+## [0.8.0] - 2026-05-26
+
+### Fixed
+
+- Alerting: hot-reload rules on `PUT` without server restart; remove duplicate fire-body expression; prune stale `Ok` state rows on rule delete.
+- Probes: restore `pid` variable used in unix process-group kill path.
+
+### Changed
+
+- Removed dead code, abandoned TOTP path, and unused accessors/methods.
+- Clippy clean across all crates; trailing-newline / formatting pass.
+- CI: release workflow now grants `contents: write` and attaches built binaries to the GitHub release.
+
 ## [0.7.8] - 2026-05-15
 
 ### Added
