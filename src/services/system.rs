@@ -337,7 +337,16 @@ fn is_virtual_interface(name: &str) -> bool {
         return true;
     }
 
-    if lower.contains("npcap") {
+    if lower.contains("npcap") || lower == "npf_loopback" {
+        return true;
+    }
+
+    const WINDOWS_FILTER_PATTERNS: &[&str] = &[
+        "native wifi filter driver",
+        "virtual wifi filter driver",
+        "wfp native mac layer lightweight filter",
+    ];
+    if WINDOWS_FILTER_PATTERNS.iter().any(|p| lower.contains(p)) {
         return true;
     }
 
@@ -345,6 +354,8 @@ fn is_virtual_interface(name: &str) -> bool {
         || lower.contains("teredo tunneling")
         || lower.contains("isatap")
         || lower.contains("wfp lightweight")
+        || lower.contains("wi-fi direct")
+        || lower.contains("wifi direct")
     {
         return true;
     }
@@ -366,6 +377,43 @@ fn is_virtual_interface(name: &str) -> bool {
     }
 
     false
+}
+
+#[cfg(test)]
+mod network_filter_tests {
+    use super::{is_loopback, is_virtual_interface};
+
+    #[test]
+    fn filters_windows_wifi_filter_driver_interfaces() {
+        assert!(is_virtual_interface("Wi-Fi-Native WiFi Filter Driver-0000"));
+        assert!(is_virtual_interface(
+            "Wi-Fi-Virtual WiFi Filter Driver-0000"
+        ));
+        assert!(is_virtual_interface(
+            "WFP Native MAC Layer LightWeight Filter-0000"
+        ));
+    }
+
+    #[test]
+    fn filters_common_virtual_interfaces() {
+        assert!(is_loopback("lo"));
+        assert!(is_loopback("Loopback Pseudo-Interface 1"));
+        assert!(is_virtual_interface("vEthernet (Default Switch)"));
+        assert!(is_virtual_interface("docker0"));
+        assert!(is_virtual_interface("NPF_Loopback"));
+        assert!(is_virtual_interface(
+            "Microsoft Wi-Fi Direct Virtual Adapter"
+        ));
+    }
+
+    #[test]
+    fn keeps_regular_and_vpn_interfaces() {
+        assert!(!is_virtual_interface("Wi-Fi"));
+        assert!(!is_virtual_interface("Ethernet"));
+        assert!(!is_virtual_interface("wg0"));
+        assert!(!is_virtual_interface("tailscale0"));
+        assert!(!is_virtual_interface("utun2"));
+    }
 }
 
 /// Collect all stats at once. Currently unused — collector code samples a
