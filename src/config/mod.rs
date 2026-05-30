@@ -167,8 +167,9 @@ impl Config {
             .add_source(File::with_name("config/default"))
             // Layer on environment-specific configuration
             .add_source(File::with_name(&format!("config/{}", run_env)).required(false))
-            // Override with environment variables (prefix: REMON_)
-            // Example: REMON_SERVER__PORT=9000 overrides server.port
+            // Override with environment variables (prefix: REMON).
+            // `__` separates both the prefix and the nested keys, so
+            // REMON__SERVER__PORT=9000 overrides server.port.
             .add_source(
                 Environment::with_prefix("REMON")
                     .separator("__")
