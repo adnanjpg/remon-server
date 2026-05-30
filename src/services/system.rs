@@ -379,6 +379,27 @@ fn is_virtual_interface(name: &str) -> bool {
     false
 }
 
+/// Collect all stats at once. Currently unused — collector code samples a
+/// single tick timestamp and calls the per-resource fns directly so the
+/// Linux enrichment block can patch them in-place.
+#[allow(dead_code)]
+pub fn get_all_stats(
+    sys: &System,
+    disks: &Disks,
+    networks: &Networks,
+    interval_secs: f64,
+) -> AllStats {
+    let timestamp = chrono::Utc::now().timestamp();
+    AllStats {
+        cpu: Arc::new(get_cpu_stats(sys, timestamp)),
+        memory: Arc::new(get_memory_stats(sys, timestamp)),
+        pressure: None,
+        components: None,
+        disks: Arc::new(get_disk_stats(disks, interval_secs, timestamp)),
+        network: Arc::new(get_network_stats(networks, interval_secs, timestamp)),
+    }
+}
+
 #[cfg(test)]
 mod network_filter_tests {
     use super::{is_loopback, is_virtual_interface};
@@ -413,26 +434,5 @@ mod network_filter_tests {
         assert!(!is_virtual_interface("wg0"));
         assert!(!is_virtual_interface("tailscale0"));
         assert!(!is_virtual_interface("utun2"));
-    }
-}
-
-/// Collect all stats at once. Currently unused — collector code samples a
-/// single tick timestamp and calls the per-resource fns directly so the
-/// Linux enrichment block can patch them in-place.
-#[allow(dead_code)]
-pub fn get_all_stats(
-    sys: &System,
-    disks: &Disks,
-    networks: &Networks,
-    interval_secs: f64,
-) -> AllStats {
-    let timestamp = chrono::Utc::now().timestamp();
-    AllStats {
-        cpu: Arc::new(get_cpu_stats(sys, timestamp)),
-        memory: Arc::new(get_memory_stats(sys, timestamp)),
-        pressure: None,
-        components: None,
-        disks: Arc::new(get_disk_stats(disks, interval_secs, timestamp)),
-        network: Arc::new(get_network_stats(networks, interval_secs, timestamp)),
     }
 }

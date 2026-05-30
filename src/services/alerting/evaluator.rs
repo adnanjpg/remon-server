@@ -341,13 +341,14 @@ async fn evaluate_once(
 
     // Remove Ok rows for label_sets that vanished from resolver output.
     for (label_set, prior) in &prior_by_label {
-        if !seen.contains(label_set) && prior.state == AlertLifecycle::Ok {
-            if let Err(e) = repo.delete_ok_state(rule.id, label_set).await {
-                warn!(
-                    "alert_state prune failed for rule='{}' label={}: {:?}",
-                    rule.name, label_set, e
-                );
-            }
+        if !seen.contains(label_set)
+            && prior.state == AlertLifecycle::Ok
+            && let Err(e) = repo.delete_ok_state(rule.id, label_set).await
+        {
+            warn!(
+                "alert_state prune failed for rule='{}' label={}: {:?}",
+                rule.name, label_set, e
+            );
         }
     }
 
