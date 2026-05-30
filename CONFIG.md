@@ -39,7 +39,7 @@ Server-side credentials. Channel targets (chat_id, topic, URL) are managed via `
 
 ### `[docker]`
 - `socket_path` — custom socket (empty = use `DOCKER_HOST` env or platform default). Useful for Podman: `/run/podman/podman.sock`
-- `exec_enabled` — master kill-switch for `WS /docker/.../exec` (default: true; set false in production)
+- `exec_enabled` — master kill-switch for `WS /docker/.../exec` (default: false; opt in explicitly to allow container exec)
 
 ### `[cors]`
 - `allow_any_origin` — `true` in dev, `false` in production
