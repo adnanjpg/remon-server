@@ -21,7 +21,7 @@ runs:
       shell: bash
       env:
         REMON__AUTH__JWT_SECRET: "ci-test-secret-minimum-32-characters-long-12345678"
-      run: cargo clippy --all-targets --all-features
+      run: cargo clippy --all-targets --all-features -- -D warnings
 
     - name: Build
       shell: bash
