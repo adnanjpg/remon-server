@@ -222,8 +222,6 @@ async fn main() {
         overrides.collector_stats_interval_ms,
         overrides.processes_cache_ttl_ms,
         #[cfg(feature = "docker")]
-        overrides.collector_docker_interval_ms,
-        #[cfg(feature = "docker")]
         config.docker.exec_enabled,
         local_hardware,
         service_manager,

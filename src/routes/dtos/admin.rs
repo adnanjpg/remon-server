@@ -11,7 +11,6 @@ pub struct ConfigResponse {
     pub server_name: String,
     pub collector_stats_interval_ms: u64,
     pub collector_processes_interval_ms: u64,
-    pub collector_docker_interval_ms: u64,
     pub rollup_tick_interval_ms: u64,
     pub retention_tick_interval_ms: u64,
 }
@@ -21,7 +20,6 @@ pub struct UpdateConfigRequest {
     pub server_name: Option<String>,
     pub collector_stats_interval_ms: Option<u64>,
     pub collector_processes_interval_ms: Option<u64>,
-    pub collector_docker_interval_ms: Option<u64>,
     pub rollup_tick_interval_ms: Option<u64>,
     pub retention_tick_interval_ms: Option<u64>,
 }

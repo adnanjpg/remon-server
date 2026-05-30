@@ -82,8 +82,6 @@ pub struct AppState {
     pub collector_stats_interval_ms: Arc<AtomicU64>,
     /// Cache TTL for on-demand process snapshots (mirrors `collector_processes_interval_ms` DB column).
     pub processes_cache_ttl_ms: Arc<AtomicU64>,
-    #[cfg(feature = "docker")]
-    pub collector_docker_interval_ms: Arc<AtomicU64>,
 
     /// Master kill-switch for the WS Docker exec endpoint. Loaded from
     /// `docker.exec_enabled` at boot; `Arc<AtomicBool>` so a future
@@ -130,7 +128,6 @@ impl AppState {
         effective_config: EffectiveConfig,
         collector_stats_interval_ms: u64,
         processes_cache_ttl_ms: u64,
-        #[cfg(feature = "docker")] collector_docker_interval_ms: u64,
         #[cfg(feature = "docker")] docker_exec_enabled: bool,
         hardware_info: Arc<HardwareInfo>,
         service_manager: Arc<dyn ServiceManager>,
@@ -154,8 +151,6 @@ impl AppState {
             effective_config: Arc::new(RwLock::new(effective_config)),
             collector_stats_interval_ms: Arc::new(AtomicU64::new(collector_stats_interval_ms)),
             processes_cache_ttl_ms: Arc::new(AtomicU64::new(processes_cache_ttl_ms)),
-            #[cfg(feature = "docker")]
-            collector_docker_interval_ms: Arc::new(AtomicU64::new(collector_docker_interval_ms)),
             #[cfg(feature = "docker")]
             docker_exec_enabled: Arc::new(AtomicBool::new(docker_exec_enabled)),
             hardware_info,

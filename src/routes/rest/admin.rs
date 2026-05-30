@@ -30,10 +30,6 @@ pub async fn get_config(
         server_name: effective.server_name,
         collector_stats_interval_ms: state.collector_stats_interval_ms.load(Ordering::Relaxed),
         collector_processes_interval_ms: state.processes_cache_ttl_ms.load(Ordering::Relaxed),
-        #[cfg(feature = "docker")]
-        collector_docker_interval_ms: state.collector_docker_interval_ms.load(Ordering::Relaxed),
-        #[cfg(not(feature = "docker"))]
-        collector_docker_interval_ms: 0,
         rollup_tick_interval_ms: effective.rollup_tick_interval_ms,
         retention_tick_interval_ms: effective.retention_tick_interval_ms,
     }))
@@ -60,9 +56,6 @@ pub async fn patch_config(
         processes_cache_ttl_ms: req
             .collector_processes_interval_ms
             .unwrap_or(current.processes_cache_ttl_ms),
-        collector_docker_interval_ms: req
-            .collector_docker_interval_ms
-            .unwrap_or(current.collector_docker_interval_ms),
         rollup_tick_interval_ms: req
             .rollup_tick_interval_ms
             .unwrap_or(current.rollup_tick_interval_ms),
@@ -106,10 +99,6 @@ pub async fn patch_config(
     state
         .processes_cache_ttl_ms
         .store(merged.processes_cache_ttl_ms, Ordering::Relaxed);
-    #[cfg(feature = "docker")]
-    state
-        .collector_docker_interval_ms
-        .store(merged.collector_docker_interval_ms, Ordering::Relaxed);
 
     {
         let mut effective = state.effective_config.write().await;
@@ -120,16 +109,6 @@ pub async fn patch_config(
         };
     }
 
-    #[cfg(feature = "docker")]
-    info!(
-        "Runtime config updated: stats={}ms processes={}ms docker={}ms rollup={}ms retention={}ms",
-        merged.collector_stats_interval_ms,
-        merged.processes_cache_ttl_ms,
-        merged.collector_docker_interval_ms,
-        merged.rollup_tick_interval_ms,
-        merged.retention_tick_interval_ms,
-    );
-    #[cfg(not(feature = "docker"))]
     info!(
         "Runtime config updated: stats={}ms processes={}ms rollup={}ms retention={}ms",
         merged.collector_stats_interval_ms,
@@ -142,10 +121,6 @@ pub async fn patch_config(
         server_name: merged.server_name,
         collector_stats_interval_ms: state.collector_stats_interval_ms.load(Ordering::Relaxed),
         collector_processes_interval_ms: merged.processes_cache_ttl_ms,
-        #[cfg(feature = "docker")]
-        collector_docker_interval_ms: merged.collector_docker_interval_ms,
-        #[cfg(not(feature = "docker"))]
-        collector_docker_interval_ms: 0,
         rollup_tick_interval_ms: merged.rollup_tick_interval_ms,
         retention_tick_interval_ms: merged.retention_tick_interval_ms,
     }))
