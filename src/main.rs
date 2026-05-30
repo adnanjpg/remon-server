@@ -27,6 +27,9 @@ mod state;
 
 mod auth;
 
+#[cfg(test)]
+mod api_tests;
+
 mod collectors;
 mod error;
 mod middleware;
