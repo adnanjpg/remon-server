@@ -19,7 +19,6 @@
 //! flow through `bind`.
 
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
@@ -368,13 +367,12 @@ async fn resolve_probe(
     // returns NULL when the key is missing — comparison against a
     // string evaluates to false in SQLite, which is the subset semantic
     // we want (rule's labels must be present in the row).
+    // The JSON path is bound as a parameter (not interpolated) so this stays
+    // injection-safe by construction even if the expression parser's ident
+    // charset ever loosens. Each clause carries two placeholders: path, value.
     let mut json_clauses = String::new();
-    for k in json_filters.keys() {
-        let _ = write!(
-            &mut json_clauses,
-            " AND json_extract(labels, '$.{}') = ?",
-            k
-        );
+    for _ in json_filters.keys() {
+        json_clauses.push_str(" AND json_extract(labels, ?) = ?");
     }
 
     let probe_clause = if probe_name_filter.is_some() {
@@ -411,14 +409,16 @@ async fn resolve_probe(
     if let Some(name) = probe_name_filter {
         q = q.bind(name);
     }
-    for v in json_filters.values() {
+    for (k, v) in &json_filters {
+        q = q.bind(format!("$.{}", k));
         q = q.bind(*v);
     }
     q = q.bind(metric_name);
     if let Some(name) = probe_name_filter {
         q = q.bind(name);
     }
-    for v in json_filters.values() {
+    for (k, v) in &json_filters {
+        q = q.bind(format!("$.{}", k));
         q = q.bind(*v);
     }
 
