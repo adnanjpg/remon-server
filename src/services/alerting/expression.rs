@@ -43,18 +43,28 @@ impl Comparator {
         }
     }
 
-    /// Apply to a sample. Float equality uses `f64::EPSILON` so a probe
-    /// emitting `42.0` vs `42.0000000001` doesn't flap on `==`.
+    /// Apply to a sample. `==`/`!=` use a small relative tolerance (see
+    /// [`approx_eq`]) so float noise — a probe emitting `42.0` vs
+    /// `42.0000000001` — doesn't flap an equality rule.
     pub fn evaluate(self, value: f64, threshold: f64) -> bool {
         match self {
             Comparator::Gt => value > threshold,
             Comparator::Ge => value >= threshold,
             Comparator::Lt => value < threshold,
             Comparator::Le => value <= threshold,
-            Comparator::Eq => (value - threshold).abs() < f64::EPSILON,
-            Comparator::Ne => (value - threshold).abs() >= f64::EPSILON,
+            Comparator::Eq => approx_eq(value, threshold),
+            Comparator::Ne => !approx_eq(value, threshold),
         }
     }
+}
+
+/// Float "equality" with a small relative tolerance. The `f64::EPSILON`
+/// (~2.2e-16) we used before is the gap near 1.0, far too tight to absorb
+/// realistic float noise, so `==` was effectively exact. This scales the
+/// tolerance with magnitude; the `.max(1.0)` floor keeps an absolute 1e-9
+/// window for near-zero comparisons (e.g. `service.up == 0`).
+fn approx_eq(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
 }
 
 /// `cpu.usage_percent{mount_point="/"}` shape. `labels` is a sorted map
@@ -505,5 +515,17 @@ mod tests {
         assert!(Comparator::Eq.evaluate(80.0, 80.0));
         assert!(!Comparator::Eq.evaluate(80.0, 80.000_000_1));
         assert!(Comparator::Ne.evaluate(80.0, 81.0));
+    }
+
+    #[test]
+    fn eq_tolerates_tiny_float_noise() {
+        // The documented intent: trailing-digit noise shouldn't flap `==`.
+        assert!(Comparator::Eq.evaluate(42.0, 42.000_000_000_1));
+        assert!(!Comparator::Ne.evaluate(42.0, 42.000_000_000_1));
+        // Genuinely different values are still not equal.
+        assert!(!Comparator::Eq.evaluate(42.0, 42.001));
+        // Near-zero uses the absolute 1e-9 floor.
+        assert!(Comparator::Eq.evaluate(0.0, 0.000_000_000_5));
+        assert!(!Comparator::Eq.evaluate(0.0, 0.5));
     }
 }
