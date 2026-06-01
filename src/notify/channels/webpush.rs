@@ -311,3 +311,112 @@ fn format_payload(n: &Notification) -> String {
     })
     .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ring::rand::SecureRandom;
+
+    /// Decrypt an RFC 8291 `aes128gcm` body from the *browser* side, mirroring
+    /// the UA's key derivation. If this recovers the plaintext, `encrypt_payload`
+    /// produced a spec-correct ciphertext end to end (ECDH → HKDF → AES-GCM).
+    fn browser_decrypt(
+        body: &[u8],
+        browser_priv: agreement::EphemeralPrivateKey,
+        browser_pub: &[u8],
+        auth: &[u8],
+    ) -> Vec<u8> {
+        let salt = &body[0..16];
+        let idlen = body[20] as usize;
+        let sender_pub = &body[21..21 + idlen];
+        let ciphertext = &body[21 + idlen..];
+
+        let peer = agreement::UnparsedPublicKey::new(&agreement::ECDH_P256, sender_pub.to_vec());
+        let ecdh = agreement::agree_ephemeral(browser_priv, &peer, |kd| kd.to_vec()).expect("ecdh");
+
+        let prk_key = hkdf::Salt::new(hkdf::HKDF_SHA256, auth).extract(ecdh.as_slice());
+        let mut key_info = b"WebPush: info\x00".to_vec();
+        key_info.extend_from_slice(browser_pub);
+        key_info.extend_from_slice(sender_pub);
+        let mut ikm = [0u8; 32];
+        prk_key
+            .expand(&[key_info.as_slice()], OkmLen(32))
+            .unwrap()
+            .fill(&mut ikm)
+            .unwrap();
+
+        let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, salt).extract(&ikm);
+        let mut cek = [0u8; 16];
+        prk.expand(&[b"Content-Encoding: aes128gcm\x00"], OkmLen(16))
+            .unwrap()
+            .fill(&mut cek)
+            .unwrap();
+        let mut nonce = [0u8; 12];
+        prk.expand(&[b"Content-Encoding: nonce\x00"], OkmLen(12))
+            .unwrap()
+            .fill(&mut nonce)
+            .unwrap();
+
+        let key = aead::LessSafeKey::new(aead::UnboundKey::new(&aead::AES_128_GCM, &cek).unwrap());
+        let mut buf = ciphertext.to_vec();
+        let plain = key
+            .open_in_place(
+                aead::Nonce::assume_unique_for_key(nonce),
+                aead::Aad::empty(),
+                &mut buf,
+            )
+            .expect("gcm open");
+        let mut out = plain.to_vec();
+        // RFC 8188 single/last record delimiter.
+        assert_eq!(out.pop(), Some(0x02), "record delimiter");
+        out
+    }
+
+    #[test]
+    fn encrypt_payload_roundtrips() {
+        let rng = rand::SystemRandom::new();
+        let browser_priv =
+            agreement::EphemeralPrivateKey::generate(&agreement::ECDH_P256, &rng).unwrap();
+        let browser_pub = browser_priv.compute_public_key().unwrap().as_ref().to_vec();
+        let mut auth = [0u8; 16];
+        rng.fill(&mut auth).unwrap();
+
+        let p256dh = URL_SAFE_NO_PAD.encode(&browser_pub);
+        let auth_b64 = URL_SAFE_NO_PAD.encode(auth);
+
+        let plaintext = br#"{"title":"hi","body":"x"}"#;
+        let body = encrypt_payload(&p256dh, &auth_b64, plaintext).expect("encrypt");
+
+        // Header structure: salt(16) | rs(4 BE) | idlen(1) | keyid(65) | ct
+        assert_eq!(body[20], 65, "keyid length byte");
+        assert_eq!(
+            u32::from_be_bytes(body[16..20].try_into().unwrap()),
+            4096,
+            "record size"
+        );
+
+        let recovered = browser_decrypt(&body, browser_priv, &browser_pub, &auth);
+        assert_eq!(recovered, plaintext);
+    }
+
+    #[test]
+    fn vapid_jwt_is_well_formed() {
+        // Also exercises that jsonwebtoken accepts our PKCS#8 EC PEM.
+        let pair = crate::services::webpush::VapidKeyPair::generate().unwrap();
+        let token = vapid_jwt(&pair.private_key_pem, "https://push.example.com/a/b/c").unwrap();
+        assert_eq!(token.split('.').count(), 3, "header.payload.signature");
+    }
+
+    #[test]
+    fn parse_origin_strips_path_and_validates_scheme() {
+        assert_eq!(
+            parse_origin("https://push.example.com/a/b").unwrap(),
+            "https://push.example.com"
+        );
+        assert_eq!(
+            parse_origin("http://localhost:8080/x").unwrap(),
+            "http://localhost:8080"
+        );
+        assert!(parse_origin("ftp://nope").is_err());
+    }
+}
