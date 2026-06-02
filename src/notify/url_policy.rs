@@ -116,6 +116,30 @@ pub async fn check_url(url: &str, policy: &WebhookPolicy) -> Result<(), String> 
     Ok(())
 }
 
+/// The outbound base URL a channel will connect to, for SSRF policy checks.
+/// Returns `None` for channel types whose destination is fixed server-side
+/// (FCM → Google) or validated per-subscriber elsewhere (web-push relay
+/// endpoints, checked in the channel's send path and at subscribe time).
+///
+/// Shared by the REST create/update validators and the boot-time audit so a
+/// new channel type only needs wiring in one place.
+pub fn channel_check_url(channel_type: &str, config: &serde_json::Value) -> Option<String> {
+    match channel_type {
+        "webhook" => Some(config["url"].as_str().unwrap_or("").to_string()),
+        "ntfy" => {
+            // Mirrors NtfyChannel::new normalization: empty → public default.
+            let server = config["server"].as_str().unwrap_or("").trim();
+            let server = if server.is_empty() {
+                "https://ntfy.sh"
+            } else {
+                server
+            };
+            Some(server.trim_end_matches('/').to_string())
+        }
+        _ => None,
+    }
+}
+
 /// True if `ip` is in a range we never want a webhook to target.
 pub fn is_blocked_ip(ip: &IpAddr) -> bool {
     match ip {

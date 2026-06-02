@@ -14,7 +14,7 @@ use tokio::sync::RwLock;
 
 use crate::config::NotificationsConfig;
 use crate::notify::channel::NotificationChannel;
-use crate::notify::url_policy::{WebhookPolicy, check_url};
+use crate::notify::url_policy::{WebhookPolicy, channel_check_url, check_url};
 use crate::services::webpush::VapidKeyPair;
 use crate::storage::repositories::NotificationChannelRepository;
 
@@ -80,20 +80,19 @@ impl NotificationManager {
         for row in rows {
             let config: serde_json::Value = serde_json::from_str(&row.config).unwrap_or_default();
 
-            // Boot-time audit: surface webhook channels that the current
-            // policy would block, before the first alert fires. The channel
-            // is still skipped (not loaded) — operator must fix config or
-            // delete the channel.
-            if row.r#type == "webhook" {
-                let url = config["url"].as_str().unwrap_or("");
-                if let Err(e) = check_url(url, &webhook_policy).await {
-                    warn!(
-                        "Skipping webhook channel '{}': {} — \
-                         see CONFIG.md [notifications.webhook] for allow-list options",
-                        row.name, e
-                    );
-                    continue;
-                }
+            // Boot-time audit: surface channels whose outbound URL the current
+            // SSRF policy would block (webhook + ntfy), before the first alert
+            // fires. The channel is still skipped (not loaded) — operator must
+            // fix config or delete the channel.
+            if let Some(url) = channel_check_url(&row.r#type, &config)
+                && let Err(e) = check_url(&url, &webhook_policy).await
+            {
+                warn!(
+                    "Skipping {} channel '{}': {} — \
+                     see CONFIG.md [notifications.webhook] for allow-list options",
+                    row.r#type, row.name, e
+                );
+                continue;
             }
 
             match channels::build_channel(

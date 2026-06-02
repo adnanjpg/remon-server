@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use reqwest::Client;
 
 use crate::notify::channel::{ChannelError, NotificationChannel};
 use crate::notify::types::{Notification, NotificationEvent, Severity};
+use crate::notify::url_policy::{WebhookPolicy, check_url};
 
 pub struct NtfyChannel {
     http: Client,
@@ -11,6 +14,10 @@ pub struct NtfyChannel {
     topic: String,
     /// Optional Bearer token for authenticated ntfy servers.
     token: Option<String>,
+    /// SSRF policy applied at every send (re-resolved as a DNS-rebinding
+    /// defense), same gate the webhook channel uses. A self-hosted ntfy
+    /// `server` on a private address is rejected unless explicitly allowed.
+    policy: Arc<WebhookPolicy>,
 }
 
 impl NtfyChannel {
@@ -19,6 +26,7 @@ impl NtfyChannel {
         topic: String,
         token: Option<String>,
         http: Client,
+        policy: Arc<WebhookPolicy>,
     ) -> Result<Self, ChannelError> {
         if topic.is_empty() {
             return Err(ChannelError::Config(
@@ -35,6 +43,7 @@ impl NtfyChannel {
             server,
             topic,
             token,
+            policy,
         })
     }
 }
@@ -58,6 +67,11 @@ fn tags(n: &Notification) -> &'static str {
 impl NotificationChannel for NtfyChannel {
     async fn send(&self, notification: &Notification) -> Result<usize, ChannelError> {
         let url = format!("{}/{}", self.server, self.topic);
+
+        // Re-resolve and re-check on every send (DNS-rebinding defense).
+        check_url(&url, &self.policy)
+            .await
+            .map_err(ChannelError::Send)?;
 
         let mut req = self
             .http

@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- **ntfy channel `server` URL now enforced by the SSRF policy.** Validated at channel create/update, audited at boot, and re-checked at send time — matching the webhook channel. A self-hosted ntfy server on a private address is rejected unless `notifications.webhook.allow_private_targets` / `allowed_private_hosts` permit it.
 - **Probe privilege drop now also drops the group set.** `run_as_user` previously called only `setuid`, leaving the child with the server's gid and *all* of its supplementary groups (e.g. `docker`, `sudo`). When the server runs as root it now clears supplementary groups (`setgroups`) and sets the target user's primary gid (`setgid`) before `setuid`. Non-root setups are unchanged.
 
 ### Fixed

@@ -15,24 +15,25 @@ use crate::routes::extractors::Claims;
 use crate::state::AppState;
 use crate::storage::repositories::NotificationChannelRepository;
 
-/// Webhook-specific config validation. Run before DB insert / update so a
-/// channel that would be blocked at send time never gets persisted.
-async fn validate_webhook_config(
+/// SSRF validation for channels with an operator-supplied outbound URL
+/// (webhook + ntfy). Run before DB insert / update so a channel that would be
+/// blocked at send time never gets persisted. Channels with no operator URL
+/// (fcm, web-push, telegram) are a no-op here.
+async fn validate_channel_url(
     state: &AppState,
     channel_type: &str,
     config: &serde_json::Value,
 ) -> AppResult<()> {
-    if channel_type != "webhook" {
+    let Some(url) = url_policy::channel_check_url(channel_type, config) else {
         return Ok(());
-    }
-    let url = config["url"].as_str().unwrap_or("");
-    if url.is_empty() {
+    };
+    if channel_type == "webhook" && url.is_empty() {
         return Err(AppError::BadRequest(
             "webhook channel config requires non-empty 'url'".to_string(),
         ));
     }
     let policy = state.notify.webhook_policy();
-    url_policy::check_url(url, &policy)
+    url_policy::check_url(&url, &policy)
         .await
         .map_err(AppError::BadRequest)
 }
@@ -67,7 +68,7 @@ pub async fn create_channel(
     Json(body): Json<CreateChannelRequest>,
 ) -> AppResult<(StatusCode, Json<ChannelResponse>)> {
     body.validate().map_err(AppError::BadRequest)?;
-    validate_webhook_config(&state, &body.r#type, &body.config).await?;
+    validate_channel_url(&state, &body.r#type, &body.config).await?;
 
     let config_str =
         serde_json::to_string(&body.config).map_err(|e| AppError::BadRequest(e.to_string()))?;
@@ -107,7 +108,7 @@ pub async fn update_channel(
         .ok_or_else(|| AppError::NotFound("notification channel".to_string()))?;
 
     // Type is immutable on update — re-validate against the stored type.
-    validate_webhook_config(&state, &existing.r#type, &body.config).await?;
+    validate_channel_url(&state, &existing.r#type, &body.config).await?;
 
     let config_str =
         serde_json::to_string(&body.config).map_err(|e| AppError::BadRequest(e.to_string()))?;

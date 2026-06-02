@@ -79,7 +79,13 @@ pub async fn build_channel(
             } else {
                 credentials.ntfy.token.clone()
             };
-            Ok(Box::new(NtfyChannel::new(server, topic, token, http)?))
+            Ok(Box::new(NtfyChannel::new(
+                server,
+                topic,
+                token,
+                http,
+                Arc::clone(webhook_policy),
+            )?))
         }
 
         "webhook" => {
