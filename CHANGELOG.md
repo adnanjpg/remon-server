@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+
+- **Probe privilege drop now also drops the group set.** `run_as_user` previously called only `setuid`, leaving the child with the server's gid and *all* of its supplementary groups (e.g. `docker`, `sudo`). When the server runs as root it now clears supplementary groups (`setgroups`) and sets the target user's primary gid (`setgid`) before `setuid`. Non-root setups are unchanged.
+
 ### Fixed
 
 - **Alert resolver no longer drops a target whose latest sample is NULL.** `resolve_keyed`'s inner `MAX(timestamp)` subquery now applies the same `<col> IS NOT NULL` filter as the outer query, so a mount/interface whose newest row is NULL in the queried column (e.g. `disk.inode_used_percent` before the first enriched tick or on a statvfs timeout) falls back to its last non-NULL sample instead of vanishing and churning alert state.

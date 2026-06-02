@@ -488,23 +488,31 @@ pub async fn execute_stream(probe: &Manifest, tx: mpsc::Sender<(ProbeRun, Vec<Pr
 fn unix_pre_exec_closure(
     probe: &Manifest,
 ) -> Result<impl FnMut() -> std::io::Result<()> + Send + Sync + 'static, String> {
-    // Resolve the target uid before fork — getpwnam allocates and is
-    // documented as not async-signal-safe.
-    let uid: Option<libc::uid_t> = match probe.run_as_user.as_deref() {
+    // Resolve the target uid + primary gid before fork — getpwnam allocates
+    // and is documented as not async-signal-safe.
+    let creds: Option<(libc::uid_t, libc::gid_t)> = match probe.run_as_user.as_deref() {
         Some(name) => {
             let cname = std::ffi::CString::new(name)
                 .map_err(|e| format!("run_as_user '{}' has nul byte: {}", name, e))?;
             // SAFETY: getpwnam returns a pointer into thread-local static
-            // storage; we read pw_uid before any other call could
+            // storage; we read pw_uid/pw_gid before any other call could
             // overwrite it. Null result = user not in /etc/passwd.
             let pw = unsafe { libc::getpwnam(cname.as_ptr()) };
             if pw.is_null() {
                 return Err(format!("run_as_user '{}' not found in /etc/passwd", name));
             }
-            Some(unsafe { (*pw).pw_uid })
+            Some(unsafe { ((*pw).pw_uid, (*pw).pw_gid) })
         }
         None => None,
     };
+
+    // Only drop gid + supplementary groups when we're root and actually
+    // switching uid. A non-root server can only setuid to its own ruid and
+    // lacks CAP_SETGID, so setgroups/setgid would fail with EPERM — keep the
+    // prior setuid-only behavior there so non-root setups don't regress.
+    // SAFETY: geteuid is async-signal-safe and infallible; we call it in the
+    // parent so the post-fork closure stays minimal.
+    let is_root = unsafe { libc::geteuid() } == 0;
 
     let limit_bytes: Option<libc::rlim_t> = probe
         .memory_limit_mb
@@ -535,13 +543,33 @@ fn unix_pre_exec_closure(
             }
         }
 
-        // Step 3: drop privileges last so the prior steps run with
-        // whatever rights the server inherited. setuid(2) on Linux drops
-        // both effective and real uid; non-root callers may only switch
-        // to their own ruid (this fails loud on misconfig instead of
-        // silently leaving the script as root).
-        if let Some(uid) = uid {
-            // SAFETY: setuid is async-signal-safe.
+        // Step 3: drop privileges last, in the correct order — supplementary
+        // groups and gid BEFORE uid, while still privileged. setuid(2) alone
+        // left the child with the server's gid 0 and *all* of root's
+        // supplementary groups (docker, sudo, …), so a probe dropped to an
+        // unprivileged user could still reach group-gated resources.
+        if let Some((uid, gid)) = creds {
+            if is_root {
+                // Clear the server's supplementary group set, then take the
+                // target user's primary gid. Both need CAP_SETGID — hence the
+                // is_root gate above.
+                // SAFETY: setgroups is a thin syscall with no allocation;
+                // (0, NULL) clears the supplementary set. Must precede setuid,
+                // which drops the capability.
+                let r = unsafe { libc::setgroups(0, std::ptr::null::<libc::gid_t>()) };
+                if r != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // SAFETY: setgid is async-signal-safe.
+                let r = unsafe { libc::setgid(gid) };
+                if r != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            // SAFETY: setuid is async-signal-safe. On Linux this drops both
+            // effective and real uid; a non-root caller may only switch to
+            // its own ruid (fails loud on misconfig instead of silently
+            // leaving the script as root).
             let r = unsafe { libc::setuid(uid) };
             if r != 0 {
                 return Err(std::io::Error::last_os_error());
