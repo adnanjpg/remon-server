@@ -129,22 +129,27 @@ impl NotificationChannel for WebPushChannel {
             let chan = self.clone();
             let notif = notification.clone();
             join_set.spawn(async move {
-                match tokio::time::timeout(
-                    Duration::from_secs(10),
-                    chan.send_to_subscriber(&device_id, &endpoint, &p256dh, &auth, &notif),
-                )
-                .await
-                {
-                    Ok(Ok(())) => true,
-                    Ok(Err(e)) => {
-                        warn!("web-push device {}: {}", device_id, e);
-                        false
+                // Retry per-subscriber (not per-channel) so a transient blip
+                // on one relay gets a second chance without re-delivering to
+                // subscribers already reached this fanout.
+                let mut last = String::new();
+                for attempt in 0u8..2 {
+                    if attempt > 0 {
+                        tokio::time::sleep(PER_DEVICE_BACKOFF).await;
                     }
-                    Err(_) => {
-                        warn!("web-push device {} timed out", device_id);
-                        false
+                    match tokio::time::timeout(
+                        PER_DEVICE_TIMEOUT,
+                        chan.send_to_subscriber(&device_id, &endpoint, &p256dh, &auth, &notif),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => return true,
+                        Ok(Err(e)) => last = e.to_string(),
+                        Err(_) => last = format!("timed out after {:?}", PER_DEVICE_TIMEOUT),
                     }
                 }
+                warn!("web-push device {} failed after retry: {}", device_id, last);
+                false
             });
         }
 
@@ -155,6 +160,10 @@ impl NotificationChannel for WebPushChannel {
             }
         }
         Ok(success)
+    }
+
+    fn self_retries(&self) -> bool {
+        true
     }
 }
 

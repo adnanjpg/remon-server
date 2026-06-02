@@ -189,7 +189,14 @@ impl NotificationManager {
             event: NotificationEvent::Fired,
         };
 
-        tokio::time::timeout(Duration::from_secs(10), channel.send(&test_notif))
+        // Self-retrying channels can take a full fan-out budget; single-shot
+        // channels are bounded tighter for a snappy "test" button.
+        let budget = if channel.self_retries() {
+            FANOUT_TIMEOUT
+        } else {
+            Duration::from_secs(10)
+        };
+        tokio::time::timeout(budget, channel.send(&test_notif))
             .await
             .map_err(|_| "channel timed out".to_string())?
             .map_err(|e| e.to_string())
@@ -204,6 +211,12 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 /// that a real transient hiccup (DNS blip, TCP reset) is over, long
 /// enough that we don't hammer a struggling upstream.
 const RETRY_BACKOFF: Duration = Duration::from_millis(500);
+/// Per-`send()` budget for self-retrying multi-target channels (FCM, Web
+/// Push). One `send()` fans out to every subscriber, each bounded by its own
+/// per-device timeout + one retry, all concurrent — so this must comfortably
+/// exceed a single device's worst case (~16.5 s) without re-running the whole
+/// fan-out (which would double-notify already-delivered devices).
+const FANOUT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Best-effort send with one retry on transient failures (TCP reset, DNS
 /// blip, 503). Permanent failures (auth, malformed config) burn the same
@@ -213,6 +226,27 @@ async fn send_with_retry(
     channel: &dyn NotificationChannel,
     notif: &Notification,
 ) -> usize {
+    // Multi-target channels (FCM, Web Push) retry per-target internally and
+    // re-deliver to every subscriber on each send(); a whole-channel retry
+    // here would double-notify already-reached devices. Run them exactly once
+    // under a budget that covers the full fan-out, and skip the outer retry.
+    if channel.self_retries() {
+        return match tokio::time::timeout(FANOUT_TIMEOUT, channel.send(notif)).await {
+            Ok(Ok(n)) => {
+                debug!("Channel '{}' delivered {} notification(s)", name, n);
+                n
+            }
+            Ok(Err(e)) => {
+                warn!("Channel '{}' failed: {}", name, e);
+                0
+            }
+            Err(_) => {
+                warn!("Channel '{}' timed out after {:?}", name, FANOUT_TIMEOUT);
+                0
+            }
+        };
+    }
+
     let attempt_once = || async {
         match tokio::time::timeout(SEND_TIMEOUT, channel.send(notif)).await {
             Ok(Ok(n)) => Ok(n),

@@ -17,6 +17,12 @@ use crate::notify::channel::{ChannelError, NotificationChannel};
 use crate::notify::types::{Notification, NotificationEvent};
 use crate::storage::repositories::DeviceRepository;
 
+/// Per-device send timeout. Two attempts plus the backoff below must fit
+/// inside the fanout wrapper's FANOUT_TIMEOUT (see notify/mod.rs).
+const PER_DEVICE_TIMEOUT: Duration = Duration::from_secs(8);
+/// Pause between a failed per-device attempt and its single retry.
+const PER_DEVICE_BACKOFF: Duration = Duration::from_millis(500);
+
 // ── Service account ───────────────────────────────────────────────────────────
 
 struct ServiceAccount {
@@ -270,22 +276,27 @@ impl NotificationChannel for FcmChannel {
             let pid = project_id.clone();
 
             join_set.spawn(async move {
-                match tokio::time::timeout(
-                    Duration::from_secs(10),
-                    inner.send_to_device(&device_token, &notif, &at, &pid),
-                )
-                .await
-                {
-                    Ok(Ok(())) => true,
-                    Ok(Err(e)) => {
-                        warn!("FCM device {}: {}", device_id, e);
-                        false
+                // Retry per-device (not per-channel) so a transient blip on
+                // one device gets a second chance without re-delivering to
+                // devices already reached this fanout.
+                let mut last = String::new();
+                for attempt in 0u8..2 {
+                    if attempt > 0 {
+                        tokio::time::sleep(PER_DEVICE_BACKOFF).await;
                     }
-                    Err(_) => {
-                        warn!("FCM device {} timed out", device_id);
-                        false
+                    match tokio::time::timeout(
+                        PER_DEVICE_TIMEOUT,
+                        inner.send_to_device(&device_token, &notif, &at, &pid),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => return true,
+                        Ok(Err(e)) => last = e.to_string(),
+                        Err(_) => last = format!("timed out after {:?}", PER_DEVICE_TIMEOUT),
                     }
                 }
+                warn!("FCM device {} failed after retry: {}", device_id, last);
+                false
             });
         }
 
@@ -296,6 +307,10 @@ impl NotificationChannel for FcmChannel {
             }
         }
         Ok(success)
+    }
+
+    fn self_retries(&self) -> bool {
+        true
     }
 }
 

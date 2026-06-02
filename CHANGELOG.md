@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Notification retry no longer double-notifies on a slow fan-out.** The per-channel 5 s retry wrapper could trip mid fan-out on FCM / Web Push (the per-device timeout was longer than the channel budget) and then re-send to every device, including those already reached. FCM and Web Push now retry per-device — only failed/timed-out targets get a second chance — and run once under a fan-out-sized budget; single-target channels keep the one-shot retry.
 - **Alert resolver no longer drops a target whose latest sample is NULL.** `resolve_keyed`'s inner `MAX(timestamp)` subquery now applies the same `<col> IS NOT NULL` filter as the outer query, so a mount/interface whose newest row is NULL in the queried column (e.g. `disk.inode_used_percent` before the first enriched tick or on a statvfs timeout) falls back to its last non-NULL sample instead of vanishing and churning alert state.
 - **One-shot probes no longer wedge on large stdout.** `execute()` drains stdout/stderr concurrently with `wait()` and never stops reading at the capture cap, so a probe that writes more than the OS pipe buffer (~64 KiB) before exiting completes normally instead of blocking on a full pipe and always hitting the timeout.
 - **`truncate()` no longer panics on a multi-byte UTF-8 boundary.** Probe stdout/stderr tails are sliced on a char boundary; with `panic = "abort"` a mid-codepoint slice on operator/target-controlled output would otherwise crash the whole server.
