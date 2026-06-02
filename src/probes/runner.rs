@@ -110,6 +110,24 @@ pub async fn execute(probe: &Manifest) -> (ProbeRun, Vec<ProbeMetric>) {
     #[cfg_attr(not(unix), allow(unused_variables))]
     let pid = child.id();
 
+    // Drain stdout/stderr concurrently with `wait()`. Reading only *after*
+    // the child exits deadlocks once the child writes more than the OS pipe
+    // buffer (~64 KiB): it blocks on write, never exits, and we'd always hit
+    // the timeout instead of parsing its output. The drain tasks complete on
+    // EOF — when the child exits normally or we kill it on timeout below.
+    let out_task = tokio::spawn(async move {
+        match stdout {
+            Some(s) => read_to_string_capped(s, 64 * 1024).await,
+            None => String::new(),
+        }
+    });
+    let err_task = tokio::spawn(async move {
+        match stderr {
+            Some(s) => read_to_string_capped(s, 8 * 1024).await,
+            None => String::new(),
+        }
+    });
+
     let wait_result = timeout(probe.timeout, child.wait()).await;
     let dur_ms = start.elapsed().as_millis() as i64;
 
@@ -117,6 +135,8 @@ pub async fn execute(probe: &Manifest) -> (ProbeRun, Vec<ProbeMetric>) {
         Ok(Ok(s)) => (Some(s), false),
         Ok(Err(e)) => {
             warn!("probe '{}' wait failed: {}", probe.name, e);
+            // Reap so the drain tasks see EOF and don't linger detached.
+            let _ = child.kill().await;
             return (
                 synth_run(
                     probe,
@@ -146,14 +166,9 @@ pub async fn execute(probe: &Manifest) -> (ProbeRun, Vec<ProbeMetric>) {
         }
     };
 
-    let stdout_text = match stdout {
-        Some(s) => read_to_string_capped(s, 64 * 1024).await,
-        None => String::new(),
-    };
-    let stderr_text = match stderr {
-        Some(s) => read_to_string_capped(s, 8 * 1024).await,
-        None => String::new(),
-    };
+    // Child is gone (exited or killed) → pipes hit EOF → drains complete.
+    let stdout_text = out_task.await.unwrap_or_default();
+    let stderr_text = err_task.await.unwrap_or_default();
 
     if timed_out {
         return (
@@ -252,13 +267,19 @@ where
     let mut buf = Vec::with_capacity(cap.min(4096));
     let mut tmp = [0u8; 4096];
     loop {
-        if buf.len() >= cap {
-            break;
-        }
-        let to_read = (cap - buf.len()).min(tmp.len());
-        match reader.read(&mut tmp[..to_read]).await {
+        match reader.read(&mut tmp).await {
             Ok(0) => break,
-            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+            Ok(n) => {
+                // Keep at most `cap` bytes but never stop reading early. A
+                // child that fills its stdout pipe (~64 KiB on Linux) blocks
+                // on write; if we stopped draining here it would deadlock
+                // against `child.wait()` and always trip the timeout. Drain
+                // the overflow and discard it.
+                if buf.len() < cap {
+                    let take = (cap - buf.len()).min(n);
+                    buf.extend_from_slice(&tmp[..take]);
+                }
+            }
             Err(_) => break,
         }
     }
@@ -269,7 +290,16 @@ fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..max])
+        // Slice on a char boundary, never through a multi-byte UTF-8
+        // sequence. Probe stdout/stderr is operator- and target-controlled
+        // (e.g. a cert subject or log line with non-ASCII bytes); with
+        // `panic = "abort"` a mid-codepoint `&s[..max]` would take down the
+        // whole server, not just the probe task.
+        let mut end = max;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &s[..end])
     }
 }
 
@@ -559,5 +589,41 @@ mod tests {
     fn empty_metrics_array_is_valid() {
         let out = parse_last_json_line(r#"{"metrics":[]}"#).expect("parse");
         assert!(out.metrics.is_empty());
+    }
+
+    #[test]
+    fn truncate_short_string_unchanged() {
+        assert_eq!(truncate("hi there", 200), "hi there");
+    }
+
+    #[test]
+    fn truncate_never_panics_on_multibyte_boundary() {
+        // Each 'é' is two UTF-8 bytes, so every odd `max` lands mid-codepoint.
+        // The byte-slice version would panic here (and, with panic=abort,
+        // crash the server). We must back off to a char boundary instead.
+        let s = "éééééééééé hello world";
+        for max in 1..s.len() {
+            let out = truncate(s, max); // must not panic for any cut point
+            if s.len() > max {
+                assert!(out.ends_with('…'));
+            }
+        }
+    }
+
+    #[test]
+    fn truncate_backs_off_to_char_boundary() {
+        // "é€" = 2 + 3 = 5 bytes. Cutting at byte 3 (mid-'€') must back off
+        // to byte 2, keeping just "é".
+        assert_eq!(truncate("é€", 3), "é…");
+    }
+
+    #[tokio::test]
+    async fn read_capped_keeps_at_most_cap_and_drains_rest() {
+        // Input far larger than the cap. We keep exactly `cap` bytes but must
+        // still consume the whole reader — the production path must never stop
+        // early or a chatty child's full stdout pipe would deadlock wait().
+        let data = vec![b'x'; 200_000];
+        let out = read_to_string_capped(&data[..], 64 * 1024).await;
+        assert_eq!(out.len(), 64 * 1024);
     }
 }

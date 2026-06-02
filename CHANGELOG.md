@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - **Alert resolver no longer drops a target whose latest sample is NULL.** `resolve_keyed`'s inner `MAX(timestamp)` subquery now applies the same `<col> IS NOT NULL` filter as the outer query, so a mount/interface whose newest row is NULL in the queried column (e.g. `disk.inode_used_percent` before the first enriched tick or on a statvfs timeout) falls back to its last non-NULL sample instead of vanishing and churning alert state.
+- **One-shot probes no longer wedge on large stdout.** `execute()` drains stdout/stderr concurrently with `wait()` and never stops reading at the capture cap, so a probe that writes more than the OS pipe buffer (~64 KiB) before exiting completes normally instead of blocking on a full pipe and always hitting the timeout.
+- **`truncate()` no longer panics on a multi-byte UTF-8 boundary.** Probe stdout/stderr tails are sliced on a char boundary; with `panic = "abort"` a mid-codepoint slice on operator/target-controlled output would otherwise crash the whole server.
 
 ## [0.8.1] - 2026-05-26
 
