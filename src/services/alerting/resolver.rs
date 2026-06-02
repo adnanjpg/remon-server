@@ -735,7 +735,11 @@ mod tests {
         let out = resolve(&pool, &metric("disk", "inode_used_percent", &[]))
             .await
             .unwrap();
-        assert_eq!(out.len(), 1, "mount must not vanish when latest row is NULL");
+        assert_eq!(
+            out.len(),
+            1,
+            "mount must not vanish when latest row is NULL"
+        );
         assert_eq!(out[0].value, 42.0, "should fall back to latest non-NULL");
         assert_eq!(out[0].label_set, r#"{"mount_point":"/"}"#);
     }
