@@ -296,7 +296,7 @@ async fn resolve_keyed(
             AND ({label}, timestamp) IN (
               SELECT {label}, MAX(timestamp)
                 FROM {table}
-               WHERE resolution = 'raw'
+               WHERE resolution = 'raw' AND {col} IS NOT NULL
                GROUP BY {label}
             )",
         label = label_column,
@@ -713,6 +713,31 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.message.contains("'mount_point'"));
+    }
+
+    #[tokio::test]
+    async fn keyed_uses_latest_non_null_not_latest_row() {
+        // Regression: the inner MAX(timestamp) subquery must apply the same
+        // `<col> IS NOT NULL` filter the outer query does. Otherwise a mount
+        // whose newest sample is NULL in the queried column (inode_used_percent
+        // is NULL on non-Linux / before first enriched tick / on statvfs
+        // timeout) vanishes from the result entirely instead of falling back
+        // to its last non-NULL sample — which churns Ok rows and strands
+        // Firing/Pending state.
+        let pool = fixture().await;
+        sqlx::query(
+            "INSERT INTO metrics_disk (resolution, timestamp, mount_point, inode_used_percent)
+             VALUES ('raw', 100, '/', 42.0), ('raw', 200, '/', NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let out = resolve(&pool, &metric("disk", "inode_used_percent", &[]))
+            .await
+            .unwrap();
+        assert_eq!(out.len(), 1, "mount must not vanish when latest row is NULL");
+        assert_eq!(out[0].value, 42.0, "should fall back to latest non-NULL");
+        assert_eq!(out[0].label_set, r#"{"mount_point":"/"}"#);
     }
 
     #[tokio::test]

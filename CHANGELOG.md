@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Alert resolver no longer drops a target whose latest sample is NULL.** `resolve_keyed`'s inner `MAX(timestamp)` subquery now applies the same `<col> IS NOT NULL` filter as the outer query, so a mount/interface whose newest row is NULL in the queried column (e.g. `disk.inode_used_percent` before the first enriched tick or on a statvfs timeout) falls back to its last non-NULL sample instead of vanishing and churning alert state.
+
 ## [0.8.1] - 2026-05-26
 
 ### Removed
