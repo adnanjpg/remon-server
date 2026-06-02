@@ -66,6 +66,14 @@ pub async fn subscribe_push(
             "endpoint, p256dh, and auth are all required".to_string(),
         ));
     }
+    // SSRF guard: reject endpoints that resolve to loopback / RFC1918 /
+    // link-local (incl. cloud metadata) so a paired device can't turn the
+    // web-push relay into an internal-network probe. Same policy the webhook
+    // and ntfy channels enforce; the channel re-checks at send time too.
+    crate::notify::url_policy::check_url(&req.endpoint, &state.notify.webhook_policy())
+        .await
+        .map_err(AppError::BadRequest)?;
+
     let repo = DeviceRepository::new(state.db.clone());
     repo.set_web_push_subscription(
         &claims.device_id,

@@ -14,6 +14,7 @@ mod auth_flow;
 mod config_api;
 mod process_api;
 mod public;
+mod push_api;
 
 use std::net::SocketAddr;
 use std::sync::Arc;

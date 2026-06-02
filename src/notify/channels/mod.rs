@@ -62,6 +62,7 @@ pub async fn build_channel(
                 Arc::clone(vapid),
                 pool,
                 http,
+                Arc::clone(webhook_policy),
             )?))
         }
 

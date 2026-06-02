@@ -17,10 +17,17 @@ use sqlx::SqlitePool;
 
 use crate::notify::channel::{ChannelError, NotificationChannel};
 use crate::notify::types::{Notification, NotificationEvent, Severity};
+use crate::notify::url_policy::{WebhookPolicy, check_url};
 use crate::services::webpush::VapidKeyPair;
 use crate::storage::repositories::DeviceRepository;
 
 const VAPID_SUB: &str = "mailto:noreply@remon.local";
+
+/// Per-subscriber send timeout. Two attempts plus the backoff below must fit
+/// inside the fanout wrapper's FANOUT_TIMEOUT (see notify/mod.rs).
+const PER_DEVICE_TIMEOUT: Duration = Duration::from_secs(8);
+/// Pause between a failed per-subscriber attempt and its single retry.
+const PER_DEVICE_BACKOFF: Duration = Duration::from_millis(500);
 
 // ring HKDF helper — tells ring how many bytes we want out of Expand.
 struct OkmLen(usize);
@@ -35,6 +42,11 @@ pub struct WebPushChannel {
     vapid: Arc<VapidKeyPair>,
     pool: SqlitePool,
     client: reqwest::Client,
+    /// SSRF policy applied to each subscriber's relay endpoint at send time.
+    /// Endpoints are also validated at subscribe time (routes/rest/push.rs);
+    /// re-checking here is the DNS-rebinding defense, mirroring the webhook
+    /// and ntfy channels.
+    policy: Arc<WebhookPolicy>,
 }
 
 impl WebPushChannel {
@@ -42,11 +54,13 @@ impl WebPushChannel {
         vapid: Arc<VapidKeyPair>,
         pool: SqlitePool,
         client: reqwest::Client,
+        policy: Arc<WebhookPolicy>,
     ) -> Result<Self, ChannelError> {
         Ok(Self {
             vapid,
             pool,
             client,
+            policy,
         })
     }
 
@@ -58,6 +72,14 @@ impl WebPushChannel {
         auth: &str,
         notification: &Notification,
     ) -> Result<(), ChannelError> {
+        // SSRF guard: re-resolve the relay endpoint on every send. Real push
+        // relays (Mozilla/Google/Apple) are public HTTPS, so legitimate
+        // subscriptions pass; an endpoint pointed at loopback/RFC1918/link-
+        // local (incl. cloud metadata) is rejected.
+        check_url(endpoint, &self.policy)
+            .await
+            .map_err(|e| ChannelError::Send(format!("endpoint blocked ({}): {}", device_id, e)))?;
+
         let payload = format_payload(notification);
 
         let ciphertext = encrypt_payload(p256dh, auth, payload.as_bytes())

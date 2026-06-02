@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- **Web Push subscription endpoint now enforced by the SSRF policy.** `POST /me/push-subscription` validates the relay `endpoint` against the same private / loopback / link-local default-deny guard the webhook channel uses, and the channel re-resolves it on every send (DNS-rebinding defense). A paired device can no longer register an endpoint pointed at `127.0.0.1`, `169.254.169.254`, or RFC1918 space. Closes the gap where the SSRF guard covered webhooks but not web-push.
 - **ntfy channel `server` URL now enforced by the SSRF policy.** Validated at channel create/update, audited at boot, and re-checked at send time — matching the webhook channel. A self-hosted ntfy server on a private address is rejected unless `notifications.webhook.allow_private_targets` / `allowed_private_hosts` permit it.
 - **Probe privilege drop now also drops the group set.** `run_as_user` previously called only `setuid`, leaving the child with the server's gid and *all* of its supplementary groups (e.g. `docker`, `sudo`). When the server runs as root it now clears supplementary groups (`setgroups`) and sets the target user's primary gid (`setgid`) before `setuid`. Non-root setups are unchanged.
 
