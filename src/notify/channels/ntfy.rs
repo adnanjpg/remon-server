@@ -33,6 +33,10 @@ impl NtfyChannel {
                 "ntfy channel config missing 'topic'".to_string(),
             ));
         }
+        // Trim before the empty/default check so this matches channel_check_url
+        // exactly — otherwise a leading-whitespace server passes create-time
+        // validation but is rejected at send time when the URL fails to parse.
+        let server = server.trim();
         let server = if server.is_empty() {
             "https://ntfy.sh".to_string()
         } else {
