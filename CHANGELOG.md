@@ -3,20 +3,20 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.8.2] - 2026-06-02
 
 ### Security
 
-- **Web Push subscription endpoint now enforced by the SSRF policy.** `POST /me/push-subscription` validates the relay `endpoint` against the same private / loopback / link-local default-deny guard the webhook channel uses, and the channel re-resolves it on every send (DNS-rebinding defense). A paired device can no longer register an endpoint pointed at `127.0.0.1`, `169.254.169.254`, or RFC1918 space. Closes the gap where the SSRF guard covered webhooks but not web-push.
-- **ntfy channel `server` URL now enforced by the SSRF policy.** Validated at channel create/update, audited at boot, and re-checked at send time — matching the webhook channel. A self-hosted ntfy server on a private address is rejected unless `notifications.webhook.allow_private_targets` / `allowed_private_hosts` permit it.
-- **Probe privilege drop now also drops the group set.** `run_as_user` previously called only `setuid`, leaving the child with the server's gid and *all* of its supplementary groups (e.g. `docker`, `sudo`). When the server runs as root it now clears supplementary groups (`setgroups`) and sets the target user's primary gid (`setgid`) before `setuid`. Non-root setups are unchanged.
+- Web push: validate the subscription `endpoint` against the SSRF policy at subscribe and send time, blocking loopback / link-local / RFC1918 targets.
+- ntfy: validate the `server` URL against the SSRF policy at create, boot, and send time, matching the webhook channel.
+- Probes: clear supplementary groups and set the target gid before `setuid` when dropping privileges as root.
 
 ### Fixed
 
-- **Notification retry no longer double-notifies on a slow fan-out.** The per-channel 5 s retry wrapper could trip mid fan-out on FCM / Web Push (the per-device timeout was longer than the channel budget) and then re-send to every device, including those already reached. FCM and Web Push now retry per-device — only failed/timed-out targets get a second chance — and run once under a fan-out-sized budget; single-target channels keep the one-shot retry.
-- **Alert resolver no longer drops a target whose latest sample is NULL.** `resolve_keyed`'s inner `MAX(timestamp)` subquery now applies the same `<col> IS NOT NULL` filter as the outer query, so a mount/interface whose newest row is NULL in the queried column (e.g. `disk.inode_used_percent` before the first enriched tick or on a statvfs timeout) falls back to its last non-NULL sample instead of vanishing and churning alert state.
-- **One-shot probes no longer wedge on large stdout.** `execute()` drains stdout/stderr concurrently with `wait()` and never stops reading at the capture cap, so a probe that writes more than the OS pipe buffer (~64 KiB) before exiting completes normally instead of blocking on a full pipe and always hitting the timeout.
-- **`truncate()` no longer panics on a multi-byte UTF-8 boundary.** Probe stdout/stderr tails are sliced on a char boundary; with `panic = "abort"` a mid-codepoint slice on operator/target-controlled output would otherwise crash the whole server.
+- Notifications: retry FCM / web-push per device instead of per channel, so a slow fan-out no longer re-notifies already-reached devices.
+- Alerting: keep a keyed target whose latest sample is NULL by applying the `IS NOT NULL` filter inside the `MAX(timestamp)` subquery.
+- Probes: drain stdout/stderr concurrently with `wait()` so a probe that writes past the pipe buffer no longer deadlocks into a timeout.
+- Probes: truncate output on a UTF-8 char boundary to avoid a panic on multi-byte tails.
 
 ## [0.8.1] - 2026-05-26
 
