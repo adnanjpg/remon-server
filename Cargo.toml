@@ -1,6 +1,6 @@
 [package]
 name = "remon-server"
-version = "0.8.2"
+version = "0.8.3"
 edition = "2024"
 
 [profile.release]

@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.3] - 2026-06-05
+
+### Added
+
+- Alerting: `disk.used_percent` and `disk.total_bytes` fields, so a per-mount "% full" rule (e.g. `disk.used_percent{mount_point="/data"} > 90`) is now directly expressible. `used_percent` is computed as `used_bytes/total_bytes*100`.
+
+### Changed
+
+- Probe reload endpoint renamed `POST /admin/probes/reload` → `POST /probes/reload`, aligning it with the other `/probes/*` routes (the `/admin/` prefix implied a privilege tier that does not exist).
+
 ## [0.8.2] - 2026-06-02
 
 ### Security
