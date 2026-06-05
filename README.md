@@ -12,7 +12,7 @@ Server component of Remon — a self-hosted system monitoring platform. Exposes 
 - **Docker / Podman** — container lifecycle, logs, stats, exec over WebSocket; optional at compile time (`--no-default-features`)
 - **Alert engine** — expression-based rules (`cpu.usage_percent > 80`), pending/firing/ok lifecycle, configurable for-duration and cooldown
 - **Notification channels** — FCM, Telegram, ntfy, webhook; managed via REST API
-- **Custom probes** — shell scripts with inline YAML header; drop into `probes/`, hot-reload via `POST /admin/probes/reload`
+- **Custom probes** — shell scripts with inline YAML header; drop into `probes/`, hot-reload via `POST /probes/reload`
 - **Device pairing** — 8-digit code, Argon2-hashed token, JWT access+refresh with JTI revocation
 
 ## Requirements
@@ -83,7 +83,7 @@ echo '{"message":"ok","metrics":[{"name":"value","value":42}]}'
 
 See `probes/examples/` for a full example. Reload without restart:
 ```sh
-curl -X POST http://localhost:8080/admin/probes/reload \
+curl -X POST http://localhost:8080/probes/reload \
   -H "Authorization: Bearer $TOKEN"
 ```
 

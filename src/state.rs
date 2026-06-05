@@ -100,7 +100,7 @@ pub struct AppState {
 
     /// Loaded probe set + per-probe last result + scheduler join handles.
     /// Populated by `probes::scheduler::load_and_spawn` at boot and again
-    /// on `POST /admin/probes/reload`. REST handlers read this for the
+    /// on `POST /probes/reload`. REST handlers read this for the
     /// list/detail endpoints; history queries go through the DB.
     pub probe_registry: ProbeRegistry,
 

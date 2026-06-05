@@ -185,7 +185,7 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/probes", get(probes::list_probes))
         .route("/probes/{name}", get(probes::get_probe))
         .route("/probes/{name}/history", get(probes::get_probe_history))
-        .route("/admin/probes/reload", post(probes::reload_probes))
+        .route("/probes/reload", post(probes::reload_probes))
         .route(
             "/metrics/probe/{probe_name}/{metric_name}",
             get(probes::get_probe_metric_history),

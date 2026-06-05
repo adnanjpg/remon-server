@@ -3,7 +3,7 @@
 //! - `GET    /probes`                                 — list with run-meta preview
 //! - `GET    /probes/{name}`                          — single probe + last run + last metrics
 //! - `GET    /probes/{name}/history?limit=`           — paged run-meta history
-//! - `POST   /admin/probes/reload`                    — re-scan `probes/`
+//! - `POST   /probes/reload`                          — re-scan `probes/`
 //! - `GET    /metrics/probe/{probe}/{metric}?…`       — probe metric time-series
 
 use std::path::PathBuf;
@@ -138,7 +138,7 @@ pub async fn get_probe_history(
     }))
 }
 
-/// `POST /admin/probes/reload` — rescan manifests and sync registry.
+/// `POST /probes/reload` — rescan manifests and sync registry.
 pub async fn reload_probes(
     _claims: Claims,
     State(state): State<Arc<AppState>>,

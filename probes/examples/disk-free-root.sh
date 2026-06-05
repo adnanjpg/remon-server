@@ -3,7 +3,7 @@
 #
 # Move/copy this file to probes/disk-free-root.sh (drop the
 # `examples/` parent), `chmod +x`, then either restart the server or
-# POST /admin/probes/reload.
+# POST /probes/reload.
 #
 # Probes are PURE METRIC SOURCES in this codebase — no warn/crit
 # severity here. Express thresholds via /alerts CRUD with
