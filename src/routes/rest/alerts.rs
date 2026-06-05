@@ -469,6 +469,12 @@ fn build_alerts_schema() -> AlertsSchemaResponse {
                 dynamic_metrics: false,
                 metrics: vec![
                     MetricSchemaDto {
+                        name: "total_bytes",
+                        unit: Some("bytes"),
+                        description: None,
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
                         name: "used_bytes",
                         unit: Some("bytes"),
                         description: None,
@@ -479,6 +485,12 @@ fn build_alerts_schema() -> AlertsSchemaResponse {
                         unit: Some("bytes"),
                         description: None,
                         value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "used_percent",
+                        unit: Some("%"),
+                        description: Some("Computed: used_bytes/total_bytes*100"),
+                        value_type: "float",
                     },
                     MetricSchemaDto {
                         name: "read_bytes_per_sec",

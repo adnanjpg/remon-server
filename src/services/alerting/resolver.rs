@@ -88,18 +88,31 @@ const MEMORY_FIELDS: &[&str] = &[
 const MEMORY_I64: &[&str] = MEMORY_FIELDS; // every memory field is INTEGER
 
 const DISK_FIELDS: &[&str] = &[
+    "total_bytes",
     "used_bytes",
     "available_bytes",
+    "used_percent",
     "read_bytes_per_sec",
     "write_bytes_per_sec",
     "inode_used_percent",
 ];
 const DISK_I64: &[&str] = &[
+    "total_bytes",
     "used_bytes",
     "available_bytes",
     "read_bytes_per_sec",
     "write_bytes_per_sec",
 ];
+// Synthetic disk fields: a SQL expression stands in for a stored column.
+// `used_percent` = used_bytes/total_bytes*100; NULLIF makes a 0-total
+// mount resolve to NULL so the latest-non-null fallback skips it. Read as
+// f64 (never in *_I64); the expression is a `&'static str` we own.
+const DISK_COMPUTED: &[(&str, &str)] = &[(
+    "used_percent",
+    "CAST(used_bytes AS REAL) * 100.0 / NULLIF(total_bytes, 0)",
+)];
+// Namespaces whose fields are all real columns.
+const NO_COMPUTED: &[(&str, &str)] = &[];
 
 const NETWORK_FIELDS: &[&str] = &[
     "rx_bytes_per_sec",
@@ -164,6 +177,7 @@ async fn resolve_inner(
                 DISK_FIELDS,
                 DISK_I64,
                 "mount_point",
+                DISK_COMPUTED,
             )
             .await
         }
@@ -175,6 +189,7 @@ async fn resolve_inner(
                 NETWORK_FIELDS,
                 NETWORK_I64,
                 "interface_name",
+                NO_COMPUTED,
             )
             .await
         }
@@ -186,6 +201,7 @@ async fn resolve_inner(
                 PRESSURE_FIELDS,
                 PRESSURE_I64,
                 "resource",
+                NO_COMPUTED,
             )
             .await
         }
@@ -197,6 +213,7 @@ async fn resolve_inner(
                 COMPONENTS_FIELDS,
                 COMPONENTS_I64,
                 "label",
+                NO_COMPUTED,
             )
             .await
         }
@@ -267,8 +284,16 @@ async fn resolve_keyed(
     valid_fields: &[&str],
     i64_fields: &[&str],
     label_column: &str,
+    computed: &[(&str, &str)],
 ) -> Result<Vec<ResolvedSample>, ResolveError> {
     let column = check_field(metric, valid_fields)?;
+
+    // A synthetic field selects its SQL expression; every other field
+    // selects its own (whitelisted) column name.
+    let select_expr: &str = computed
+        .iter()
+        .find_map(|(name, expr)| (*name == column).then_some(*expr))
+        .unwrap_or(column);
 
     let mut filter_value: Option<&str> = None;
     for (k, v) in &metric.labels {
@@ -300,7 +325,7 @@ async fn resolve_keyed(
                GROUP BY {label}
             )",
         label = label_column,
-        col = column,
+        col = select_expr,
         table = table,
         where_label = where_label,
     );
@@ -544,6 +569,7 @@ mod tests {
             CREATE TABLE metrics_disk (
                 resolution TEXT, timestamp INTEGER,
                 mount_point TEXT,
+                total_bytes INTEGER,
                 used_bytes INTEGER, available_bytes INTEGER,
                 read_bytes_per_sec INTEGER, write_bytes_per_sec INTEGER,
                 inode_used_percent REAL
@@ -713,6 +739,76 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.message.contains("'mount_point'"));
+    }
+
+    #[tokio::test]
+    async fn disk_total_bytes_resolves() {
+        let pool = fixture().await;
+        sqlx::query(
+            "INSERT INTO metrics_disk (resolution, timestamp, mount_point, total_bytes, used_bytes)
+             VALUES ('raw', 100, '/', 5000, 1000)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let out = resolve(
+            &pool,
+            &metric("disk", "total_bytes", &[("mount_point", "/")]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].value, 5000.0);
+    }
+
+    #[tokio::test]
+    async fn disk_used_percent_computed() {
+        let pool = fixture().await;
+        sqlx::query(
+            "INSERT INTO metrics_disk (resolution, timestamp, mount_point, total_bytes, used_bytes)
+             VALUES ('raw', 100, '/data', 1000, 900)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let out = resolve(
+            &pool,
+            &metric("disk", "used_percent", &[("mount_point", "/data")]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(
+            (out[0].value - 90.0).abs() < 1e-9,
+            "expected 90.0, got {}",
+            out[0].value
+        );
+        assert_eq!(out[0].label_set, r#"{"mount_point":"/data"}"#);
+    }
+
+    #[tokio::test]
+    async fn disk_used_percent_zero_total_falls_back() {
+        // total_bytes=0 -> NULLIF -> NULL, so the newest sample is skipped
+        // and the resolver falls back to the last row whose computed value
+        // is non-NULL (mirrors keyed_uses_latest_non_null for a synthetic
+        // field).
+        let pool = fixture().await;
+        sqlx::query(
+            "INSERT INTO metrics_disk (resolution, timestamp, mount_point, total_bytes, used_bytes)
+             VALUES ('raw', 100, '/', 200, 50), ('raw', 200, '/', 0, 50)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let out = resolve(&pool, &metric("disk", "used_percent", &[]))
+            .await
+            .unwrap();
+        assert_eq!(
+            out.len(),
+            1,
+            "mount must not vanish when newest value is NULL"
+        );
+        assert_eq!(out[0].value, 25.0, "should fall back to last non-NULL");
     }
 
     #[tokio::test]
