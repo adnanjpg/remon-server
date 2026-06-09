@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **`GET /summary`** — one-call host overview aimed at multi-server clients: server name, hostname, OS, version, uptime, latest CPU/memory gauges, fullest-mount disk percentage, and pending/firing alert counts. A fleet view polls this once per daemon instead of fanning out to `/system/info` + `/metrics/*` + `/alerts/state`. Live-gauge fields are `null` until the first collector tick.
+- `probes/examples/peer-health.sh` — sibling-daemon reachability probe. A daemon cannot report its own death; in a multi-server setup each daemon watches a peer's `/health` so a dead host still produces an alert (`probe`/`peer-health`/`up < 1`).
+
 ## [0.8.3] - 2026-06-05
 
 ### Added
