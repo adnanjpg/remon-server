@@ -23,7 +23,11 @@ pub fn set_socket_path(path: &str) {
     let _ = DOCKER_SOCKET.set(path.to_string());
 }
 
-fn new_docker() -> Result<Docker, DockerError> {
+/// Socket-path-aware connection — the single way to obtain a Docker
+/// handle. Also used by the WS exec endpoint; bypassing this for
+/// `connect_with_local_defaults` silently breaks Podman / custom-socket
+/// setups on one path while the REST routes honor them.
+pub fn new_docker() -> Result<Docker, DockerError> {
     let path = DOCKER_SOCKET.get().map(|s| s.as_str()).unwrap_or("");
     if path.is_empty() {
         Docker::connect_with_local_defaults().map_err(|e| DockerError::NotAvailable(e.to_string()))

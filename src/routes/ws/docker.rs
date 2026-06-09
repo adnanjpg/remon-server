@@ -30,10 +30,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use bollard::{
-    Docker,
-    exec::{CreateExecOptions, StartExecResults},
-};
+use bollard::exec::{CreateExecOptions, StartExecResults};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, warn};
 use serde::{Deserialize, Serialize};
@@ -118,7 +115,7 @@ async fn handle_docker_exec(
         container_id, cmd_argv, params.tty
     );
 
-    let docker = match Docker::connect_with_local_defaults() {
+    let docker = match crate::services::docker::new_docker() {
         Ok(d) => d,
         Err(e) => {
             error!("Failed to connect to Docker: {}", e);
