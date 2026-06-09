@@ -654,6 +654,90 @@ fn build_alerts_schema() -> AlertsSchemaResponse {
                 }],
             },
             NamespaceSchemaDto {
+                name: "smart",
+                description: "SMART disk health via smartctl. Empty on hosts without smartmontools. ATA-only fields are absent on NVMe devices and vice versa.",
+                dynamic_metrics: false,
+                metrics: vec![
+                    MetricSchemaDto {
+                        name: "health_passed",
+                        unit: None,
+                        description: Some("smartctl overall verdict — 1 passed, 0 failing"),
+                        value_type: "bool",
+                    },
+                    MetricSchemaDto {
+                        name: "temperature_c",
+                        unit: Some("°C"),
+                        description: None,
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "power_on_hours",
+                        unit: Some("h"),
+                        description: None,
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "power_cycles",
+                        unit: None,
+                        description: None,
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "reallocated_sectors",
+                        unit: None,
+                        description: Some(
+                            "ATA attr 5 — non-zero and growing is the classic pre-failure signal",
+                        ),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "pending_sectors",
+                        unit: None,
+                        description: Some("ATA attr 197 — sectors awaiting remap"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "uncorrectable_sectors",
+                        unit: None,
+                        description: Some("ATA attr 198"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "udma_crc_errors",
+                        unit: None,
+                        description: Some("ATA attr 199 — usually cabling, not the disk"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "percentage_used",
+                        unit: Some("%"),
+                        description: Some("NVMe wear indicator; can exceed 100"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "available_spare_percent",
+                        unit: Some("%"),
+                        description: Some("NVMe remaining spare capacity"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "media_errors",
+                        unit: None,
+                        description: Some("NVMe media/data-integrity error count"),
+                        value_type: "int",
+                    },
+                ],
+                labels: vec![LabelSchemaDto {
+                    name: "device",
+                    required: false,
+                    values: None,
+                    source: Some(LabelSourceDto {
+                        endpoint: "/system/smart",
+                        json_path: "devices[].device",
+                    }),
+                }],
+            },
+            NamespaceSchemaDto {
                 name: "probe",
                 description: "Metrics emitted by user-defined probe scripts. Metric name is whatever the script reported.",
                 dynamic_metrics: true,

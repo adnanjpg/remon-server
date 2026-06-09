@@ -137,6 +137,33 @@ const PRESSURE_I64: &[&str] = &[];
 const COMPONENTS_FIELDS: &[&str] = &["temperature_c", "max_c", "critical_c"];
 const COMPONENTS_I64: &[&str] = &[];
 
+const SMART_FIELDS: &[&str] = &[
+    "health_passed",
+    "temperature_c",
+    "power_on_hours",
+    "power_cycles",
+    "reallocated_sectors",
+    "pending_sectors",
+    "uncorrectable_sectors",
+    "udma_crc_errors",
+    "percentage_used",
+    "available_spare_percent",
+    "media_errors",
+];
+// Everything except temperature_c is stored INTEGER (health_passed as 0/1).
+const SMART_I64: &[&str] = &[
+    "health_passed",
+    "power_on_hours",
+    "power_cycles",
+    "reallocated_sectors",
+    "pending_sectors",
+    "uncorrectable_sectors",
+    "udma_crc_errors",
+    "percentage_used",
+    "available_spare_percent",
+    "media_errors",
+];
+
 // Live-check namespace; resolved via ServiceManager, not the DB.
 const SERVICE_FIELDS: &[&str] = &["up"];
 
@@ -213,6 +240,18 @@ async fn resolve_inner(
                 COMPONENTS_FIELDS,
                 COMPONENTS_I64,
                 "label",
+                NO_COMPUTED,
+            )
+            .await
+        }
+        "smart" => {
+            resolve_keyed(
+                pool,
+                metric,
+                "metrics_smart",
+                SMART_FIELDS,
+                SMART_I64,
+                "device",
                 NO_COMPUTED,
             )
             .await
@@ -590,6 +629,16 @@ mod tests {
                 probe_name TEXT, metric_name TEXT,
                 labels TEXT, value REAL
             );
+            CREATE TABLE metrics_smart (
+                resolution TEXT, timestamp INTEGER,
+                device TEXT,
+                health_passed INTEGER, temperature_c REAL,
+                power_on_hours INTEGER, power_cycles INTEGER,
+                reallocated_sectors INTEGER, pending_sectors INTEGER,
+                uncorrectable_sectors INTEGER, udma_crc_errors INTEGER,
+                percentage_used INTEGER, available_spare_percent INTEGER,
+                media_errors INTEGER
+            );
         "#;
         pool.execute(schema).await.expect("schema");
         pool
@@ -916,6 +965,43 @@ mod tests {
             .unwrap();
         out.sort_by(|a, b| a.label_set.cmp(&b.label_set));
         assert_eq!(out.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn smart_keyed_by_device() {
+        let pool = fixture().await;
+        sqlx::query(
+            "INSERT INTO metrics_smart
+               (resolution, timestamp, device, health_passed, temperature_c, reallocated_sectors)
+             VALUES
+               ('raw', 100, '/dev/sda',   1, 34.0, 0),
+               ('raw', 100, '/dev/nvme0', 1, 41.0, NULL),
+               ('raw', 200, '/dev/sda',   0, 52.0, 1532)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // health_passed is INTEGER → coerced to f64; latest row per device wins.
+        let mut out = resolve(&pool, &metric("smart", "health_passed", &[]))
+            .await
+            .unwrap();
+        out.sort_by(|a, b| a.label_set.cmp(&b.label_set));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].label_set, r#"{"device":"/dev/nvme0"}"#);
+        assert_eq!(out[0].value, 1.0);
+        assert_eq!(out[1].label_set, r#"{"device":"/dev/sda"}"#);
+        assert_eq!(out[1].value, 0.0);
+
+        // Device filter narrows to one sample.
+        let out = resolve(
+            &pool,
+            &metric("smart", "reallocated_sectors", &[("device", "/dev/sda")]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].value, 1532.0);
     }
 
     #[tokio::test]
