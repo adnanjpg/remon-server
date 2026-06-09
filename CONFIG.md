@@ -41,6 +41,14 @@ Server-side credentials. Channel targets (chat_id, topic, URL) are managed via `
 - `socket_path` — custom socket (empty = use `DOCKER_HOST` env or platform default). Useful for Podman: `/run/podman/podman.sock`
 - `exec_enabled` — master kill-switch for `WS /docker/.../exec` (default: false; opt in explicitly to allow container exec)
 
+### `[smart]`
+SMART disk health, collected by shelling out to `smartctl` (smartmontools). When the binary is missing the collector logs one info line at boot and turns itself off; `GET /system/smart` then reports `available: false`. Readings land in `metrics_smart` (raw-only, 1-year retention) and are alertable via the `smart` namespace, e.g. `smart.health_passed{device="/dev/sda"} < 1` or `smart.temperature_c > 60`.
+- `enabled` — master switch (default: true; absence of smartctl already degrades gracefully)
+- `smartctl_path` — explicit binary path (default: empty = resolve `smartctl` from `PATH`)
+- `interval_secs` — poll interval (default: 1800; floor 60). Each poll issues real commands to every disk; `-n standby` keeps sleeping HDDs asleep, so a standby disk simply skips ticks until it wakes.
+
+Note: `smartctl` needs root/Administrator to reach the devices — the same privilege level the service/process endpoints already require.
+
 ### `[cors]`
 - `allow_any_origin` — `true` in dev, `false` in production
 - `allowed_origins` — required when `allow_any_origin = false`, e.g. `["https://app.example.com"]`

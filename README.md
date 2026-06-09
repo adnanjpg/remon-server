@@ -7,6 +7,7 @@ Server component of Remon — a self-hosted system monitoring platform. Exposes 
 ## Features
 
 - **System metrics** — CPU, memory, disk, network, pressure, hardware components; time-series with configurable rollup (raw / 1m / 5m / 1h) and retention
+- **SMART disk health** — via `smartctl` (auto-detected, optional); per-device health verdict, temperature, wear and error counters; alertable (`smart.health_passed < 1`)
 - **Processes** — list and kill
 - **Services** — systemd (full), OpenRC (full), Windows SCM (full); timers, cron listing, live log streaming
 - **Docker / Podman** — container lifecycle, logs, stats, exec over WebSocket; optional at compile time (`--no-default-features`)
