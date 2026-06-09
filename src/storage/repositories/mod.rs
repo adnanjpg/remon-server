@@ -1,7 +1,7 @@
 mod alerts;
 mod config;
 mod devices;
-mod logs;
+pub mod logs;
 mod metrics;
 mod notifications;
 mod probes;

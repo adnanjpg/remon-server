@@ -26,6 +26,7 @@ use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 
 use crate::storage::repositories::LogRepository;
+use crate::storage::repositories::logs::NewLogRow;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AppLog {
@@ -178,20 +179,46 @@ impl Visit for EventVisitor {
     }
 }
 
+/// Upper bound on one writer drain. Matches the channel capacity order
+/// of magnitude — a full channel flushes in a couple of commits instead
+/// of hundreds.
+const WRITE_BATCH: usize = 64;
+
 /// Drain the log channel into the `logs` table. Spawned as a tokio task
 /// after the DB pool is available.
+///
+/// `recv_many` blocks for the first message, then grabs whatever else is
+/// already queued (up to `WRITE_BATCH`) so a burst lands as one
+/// transaction. Quiet periods still flush every message immediately —
+/// there is no time-based buffering to lose on crash.
 pub fn start_db_writer(mut rx: mpsc::Receiver<AppLog>, pool: SqlitePool) {
     let repo = LogRepository::new(pool);
     tokio::spawn(async move {
-        while let Some(app_log) = rx.recv().await {
-            let level = app_log.log_level.as_i32();
-            if let Err(e) = repo
-                .insert(level, &app_log.app_id, &app_log.target, &app_log.message)
-                .await
-            {
+        let mut buf: Vec<AppLog> = Vec::with_capacity(WRITE_BATCH);
+        loop {
+            buf.clear();
+            if rx.recv_many(&mut buf, WRITE_BATCH).await == 0 {
+                // Channel closed and drained — sender side shut down.
+                return;
+            }
+            let rows: Vec<NewLogRow> = buf
+                .drain(..)
+                .map(|l| NewLogRow {
+                    timestamp: l.logged_at,
+                    level: l.log_level.as_i32(),
+                    source: l.app_id,
+                    target: l.target,
+                    message: l.message,
+                })
+                .collect();
+            if let Err(e) = repo.insert_batch(&rows).await {
                 // stderr only — emitting a `log::*!` or `tracing::*!` here
                 // would feed back through DbLayer and loop.
-                eprintln!("LogService: failed to persist log entry: {:?}", e);
+                eprintln!(
+                    "LogService: failed to persist {} log entries: {:?}",
+                    rows.len(),
+                    e
+                );
             }
         }
     });
