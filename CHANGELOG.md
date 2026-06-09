@@ -3,14 +3,17 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.9.0] - 2026-06-10
+
+### Breaking
+
+- `metrics_smart` was folded into the initial migration (pre-1.0 policy — no migration chaining). Existing databases fail the migration checksum at boot: delete the database folder and re-pair devices after upgrading.
 
 ### Added
 
 - **SMART disk health** — built-in collector wrapping `smartctl --json` (the same approach Scrutiny/Netdata take; there is no viable pure-Rust SMART stack covering ATA + NVMe + USB bridges). Auto-detects the binary at boot and degrades gracefully when absent. Polls every 30 min by default (`[smart]` config: `enabled`, `smartctl_path`, `interval_secs`), uses `-n standby` so sleeping HDDs are never spun up. Readings (health verdict, temperature, power-on hours, ATA attrs 5/197/198/199, NVMe wear/spare/media-errors) land in the new `metrics_smart` table (raw-only, 1-year retention seed).
 - **`GET /system/smart`** — latest reading per device plus an `available` flag distinguishing "no smartmontools" from "no readings yet".
 - **`smart` alert namespace** — `smart.health_passed{device="/dev/sda"} < 1`, `smart.temperature_c > 60`, `smart.reallocated_sectors > 0` etc.; device label sourced from `/system/smart` in the alerts schema.
-- Schema note: `metrics_smart` was folded into the initial migration (pre-1.0 policy — recreate the dev database rather than chaining migrations).
 
 - **`GET /summary`** — one-call host overview aimed at multi-server clients: server name, hostname, OS, version, uptime, latest CPU/memory gauges, fullest-mount disk percentage, and pending/firing alert counts. A fleet view polls this once per daemon instead of fanning out to `/system/info` + `/metrics/*` + `/alerts/state`. Live-gauge fields are `null` until the first collector tick.
 - `probes/examples/peer-health.sh` — sibling-daemon reachability probe. A daemon cannot report its own death; in a multi-server setup each daemon watches a peer's `/health` so a dead host still produces an alert (`probe`/`peer-health`/`up < 1`).
