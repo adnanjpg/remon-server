@@ -3,6 +3,27 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.1] - 2026-06-10
+
+### Added
+
+- **`GET /logs`** — read API over the daemon's own log table (written since 0.7.4 but previously unreadable without opening the SQLite file). Filters: `start`/`end`, `level` (minimum severity), `limit` (default 500, max 5000); newest-first.
+- **`GET /ready`** — readiness as opposed to `/health` liveness: performs a DB round-trip and returns 503 with `{"failed_check":"db"}` when the pool can't serve queries. Public, like `/health`. (Named `/ready` rather than k8s-style `/readyz` to stay symmetric with the established `/health`.)
+
+### Removed
+
+- The toy `GET /hello` and `GET /teapot` endpoints; use `GET /health` for connectivity checks. No known client called either.
+- The Bruno API collection (`bruno/`). It duplicated the route table by hand and drifted; the authoritative reference is `src/routes/{rest,sse,ws}/mod.rs` plus the DTO modules, which is also what coding agents read.
+
+### Fixed
+
+- Docker WS exec now connects through the same socket-path-aware helper as every REST route, so `docker.socket_path` (Podman, custom sockets) applies to `/docker/containers/{id}/exec` too — previously it silently used the platform default socket.
+
+### Changed
+
+- `GET /health` returns JSON (`{"status":"ok"}`) instead of a plain-text greeting. Status-code-based checks (curl `--fail`, the peer-health example probe) are unaffected.
+- DB log writer drains the channel in batches (up to 64 entries per transaction) instead of one commit per line, and stores the emission timestamp captured at the call site rather than the insert time.
+
 ## [0.9.0] - 2026-06-10
 
 ### Breaking
