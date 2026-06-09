@@ -12,6 +12,7 @@
 mod alerts_api;
 mod auth_flow;
 mod config_api;
+mod logs_api;
 mod process_api;
 mod public;
 mod push_api;

@@ -4,6 +4,7 @@ pub mod auth;
 pub mod cron;
 #[cfg(feature = "docker")]
 pub mod docker;
+pub mod logs;
 pub mod me;
 pub mod metrics;
 pub mod misc;
@@ -167,6 +168,7 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         )
         .route("/metrics/components", get(metrics::components_history))
         .route("/metrics/batch", get(metrics::batch_history))
+        .route("/logs", get(logs::list_logs))
         .route("/processes", get(process::get_processes))
         .route("/processes/{pid}", delete(process::delete_process))
         // Init-system services (systemd / OpenRC / Windows SCM)
