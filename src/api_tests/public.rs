@@ -11,6 +11,14 @@ async fn health_is_public() {
 }
 
 #[tokio::test]
+async fn ready_is_public_and_reports_ready() {
+    let app = TestApp::spawn().await;
+    let (status, body) = app.request("GET", "/ready", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "ready");
+}
+
+#[tokio::test]
 async fn hello_is_public() {
     let app = TestApp::spawn().await;
     let (status, _) = app.request("GET", "/hello", None, None).await;
