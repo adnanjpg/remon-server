@@ -98,4 +98,4 @@ Removes all `/docker/*` endpoints and the bollard dependency.
 
 ## API Reference
 
-See the Bruno collection in `bruno/` for a complete, runnable API reference. Bootstrap flow: `auth/Pair Initiate` → read code from server terminal → `auth/Pair Complete` → `auth/Login`.
+The route table in `src/routes/{rest,sse,ws}/mod.rs` is the authoritative endpoint list; request/response shapes live in `src/routes/dtos/` and behaviour notes in the handler doc comments. Bootstrap flow: `POST /auth/pair/initiate` → read the 8-digit code from the server terminal → `POST /auth/pair/complete` → `POST /auth/login`.

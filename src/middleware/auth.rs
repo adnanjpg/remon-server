@@ -19,7 +19,7 @@ use crate::storage::repositories::DeviceRepository;
 ///
 /// Token sources, in order of preference:
 /// 1. `Authorization: Bearer <jwt>` — the canonical path; used by every
-///    non-browser client (mobile app, curl, Bruno).
+///    non-browser client (mobile app, curl).
 /// 2. `?access_token=<jwt>` — fallback for browser-driven SSE/WS, since
 ///    `EventSource` and `new WebSocket(...)` cannot send custom headers.
 ///    The token is redacted from request span URIs by the trace layer
