@@ -62,6 +62,46 @@ pub struct SystemInfoResponse {
     pub hardware: HardwareInfoDto,
 }
 
+/// One disk in the `GET /system/smart` response. ATA-only fields are
+/// `null` on NVMe devices and vice versa; every field except `device`
+/// is best-effort (vendor JSON varies).
+#[derive(Debug, Serialize)]
+pub struct SmartDeviceDto {
+    pub device: String,
+    pub model: Option<String>,
+    pub serial: Option<String>,
+    /// smartctl's overall verdict. `false` is the headline alarm.
+    pub health_passed: Option<bool>,
+    pub temperature_c: Option<f64>,
+    pub power_on_hours: Option<i64>,
+    pub power_cycles: Option<i64>,
+    /// ATA attribute 5 — sectors remapped to spares. Non-zero and
+    /// growing is the classic pre-failure signal.
+    pub reallocated_sectors: Option<i64>,
+    /// ATA attribute 197 — sectors awaiting remap.
+    pub pending_sectors: Option<i64>,
+    /// ATA attribute 198 — sectors unreadable even offline.
+    pub uncorrectable_sectors: Option<i64>,
+    /// ATA attribute 199 — interface CRC errors; usually cabling.
+    pub udma_crc_errors: Option<i64>,
+    /// NVMe wear indicator, 0-100+ (can exceed 100).
+    pub percentage_used: Option<i64>,
+    pub available_spare_percent: Option<i64>,
+    pub media_errors: Option<i64>,
+    /// Unix seconds of the reading. Stale relative to the poll interval
+    /// means the device stopped responding (or was unplugged).
+    pub timestamp: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SmartResponse {
+    /// False until the collector has confirmed a working `smartctl`.
+    /// Lets clients render "install smartmontools" instead of an empty
+    /// disk list.
+    pub available: bool,
+    pub devices: Vec<SmartDeviceDto>,
+}
+
 /// `GET /summary` — one-call host overview for multi-server clients.
 ///
 /// Deliberately flat and small: a fleet view polls this once per daemon to

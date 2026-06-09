@@ -15,6 +15,7 @@ mod config_api;
 mod process_api;
 mod public;
 mod push_api;
+mod smart_api;
 mod summary_api;
 
 use std::net::SocketAddr;

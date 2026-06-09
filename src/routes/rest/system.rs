@@ -1,18 +1,19 @@
-//! `GET /system/info` and `GET /summary`.
+//! `GET /system/info`, `GET /system/smart`, and `GET /summary`.
 
 use axum::{Json, extract::State};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use crate::error::AppResult;
 use crate::models::system::{DiskInfo, HardwareInfo, NetworkInterfaceInfo};
 use crate::routes::dtos::system::{
-    DiskInfoDto, HardwareInfoDto, NetworkInterfaceInfoDto, SummaryResponse, SystemDescriptionDto,
-    SystemInfoResponse,
+    DiskInfoDto, HardwareInfoDto, NetworkInterfaceInfoDto, SmartDeviceDto, SmartResponse,
+    SummaryResponse, SystemDescriptionDto, SystemInfoResponse,
 };
 use crate::routes::extractors::Claims;
 use crate::services::system as system_svc;
 use crate::state::AppState;
-use crate::storage::repositories::AlertRepository;
+use crate::storage::repositories::{AlertRepository, SmartRepository};
 
 pub async fn get_system_info(
     _claims: Claims,
@@ -38,6 +39,38 @@ pub async fn get_system_info(
             built_at: env!("BUILD_TIME").parse().unwrap_or(0),
         },
         hardware: hardware_info_to_dto(hardware),
+    }))
+}
+
+/// SMART disk health — latest reading per device, plus whether the
+/// collector found a usable `smartctl` at all.
+pub async fn get_smart(
+    _claims: Claims,
+    State(state): State<Arc<AppState>>,
+) -> AppResult<Json<SmartResponse>> {
+    let latest = SmartRepository::new(state.db.clone()).read_latest().await?;
+    Ok(Json(SmartResponse {
+        available: state.smart_available.load(Ordering::Relaxed),
+        devices: latest
+            .into_iter()
+            .map(|l| SmartDeviceDto {
+                device: l.row.device,
+                model: l.row.model,
+                serial: l.row.serial,
+                health_passed: l.row.health_passed,
+                temperature_c: l.row.temperature_c,
+                power_on_hours: l.row.power_on_hours,
+                power_cycles: l.row.power_cycles,
+                reallocated_sectors: l.row.reallocated_sectors,
+                pending_sectors: l.row.pending_sectors,
+                uncorrectable_sectors: l.row.uncorrectable_sectors,
+                udma_crc_errors: l.row.udma_crc_errors,
+                percentage_used: l.row.percentage_used,
+                available_spare_percent: l.row.available_spare_percent,
+                media_errors: l.row.media_errors,
+                timestamp: l.timestamp,
+            })
+            .collect(),
     }))
 }
 

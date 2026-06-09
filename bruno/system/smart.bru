@@ -1,0 +1,58 @@
+meta {
+  name: SMART disk health
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/system/smart
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{jwt_token}}
+}
+
+docs {
+  SMART disk health — latest reading per device, collected by the
+  smartctl-wrapping collector ([smart] config section).
+
+  `available` is false until the collector confirms a working smartctl
+  binary; render "install smartmontools" instead of an empty list.
+
+  ATA-only fields (reallocated/pending/uncorrectable sectors, CRC
+  errors) are null on NVMe devices; NVMe-only fields (percentage_used,
+  available_spare_percent, media_errors) are null on ATA. A stale
+  `timestamp` (older than the poll interval) means the device stopped
+  responding or was unplugged.
+
+  Alerting: smart namespace, keyed by `device` —
+    smart.health_passed{device="/dev/sda"} < 1
+    smart.temperature_c > 60
+    smart.reallocated_sectors > 0
+
+  Response shape:
+    {
+      "available": true,
+      "devices": [
+        {
+          "device": "/dev/sda",
+          "model": "WDC WD40EFRX-68N32N0",
+          "serial": "WD-WCC7K1234567",
+          "health_passed": true,
+          "temperature_c": 34.0,
+          "power_on_hours": 21345,
+          "power_cycles": 87,
+          "reallocated_sectors": 0,
+          "pending_sectors": 0,
+          "uncorrectable_sectors": 0,
+          "udma_crc_errors": 13,
+          "percentage_used": null,
+          "available_spare_percent": null,
+          "media_errors": null,
+          "timestamp": 1700000000
+        }
+      ]
+    }
+}

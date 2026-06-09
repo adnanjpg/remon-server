@@ -129,6 +129,8 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         // Local host description + hardware inventory (uptime is fresh; the
         // rest is cached at boot — see services/system.rs).
         .route("/system/info", get(system::get_system_info))
+        // SMART disk health — latest reading per device (smartctl-backed).
+        .route("/system/smart", get(system::get_smart))
         // One-call host overview — fleet/multi-server clients poll this
         // once per daemon instead of fanning out to info/metrics/alerts.
         .route("/summary", get(system::get_summary))
