@@ -66,3 +66,16 @@ socket_path = ""
 # Keep false in production — any valid token can exec into privileged containers.
 # Env: REMON__DOCKER__EXEC_ENABLED
 exec_enabled = false
+
+[smart]
+# SMART disk health via smartctl (smartmontools). When the binary is
+# missing the collector logs once and turns itself off — no other cost.
+# Env: REMON__SMART__ENABLED
+enabled = true
+# Explicit binary path; empty = resolve "smartctl" from PATH.
+# Env: REMON__SMART__SMARTCTL_PATH
+smartctl_path = ""
+# Poll interval in seconds (floor 60). SMART moves slowly; each poll
+# issues real commands to every disk, so keep this lazy.
+# Env: REMON__SMART__INTERVAL_SECS
+interval_secs = 1800

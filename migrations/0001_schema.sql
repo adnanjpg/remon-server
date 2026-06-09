@@ -123,6 +123,7 @@ INSERT INTO retention_policy (resource, resolution, keep_seconds) VALUES
     ('probe',        '1m',  604800),
     ('probe',        '5m',  2592000),
     ('probe',        '1h',  31536000),
+    ('smart',        'raw', 31536000),
     ('alert_events', 'raw', 7776000);
 
 -- ─── ROLLUP STATE ───────────────────────────────────────────────────────────
@@ -256,6 +257,35 @@ CREATE TABLE metrics_probe (
 ) WITHOUT ROWID;
 
 CREATE INDEX idx_metrics_probe_lookup ON metrics_probe(probe_name, metric_name, timestamp DESC);
+
+-- ─── METRICS — SMART disk health ────────────────────────────────────────────
+-- Populated by the smartctl-wrapping collector (collectors/smart.rs).
+-- One row per (device, tick). Raw-only: SMART changes on the scale of
+-- hours/days, so rollup resolutions would add rows without adding signal.
+-- ATA-only columns are NULL on NVMe devices and vice versa.
+CREATE TABLE metrics_smart (
+    resolution              TEXT    NOT NULL REFERENCES resolutions(name),
+    timestamp               INTEGER NOT NULL,
+    device                  TEXT    NOT NULL,
+    model                   TEXT,
+    serial                  TEXT,
+    -- Overall smartctl verdict (smart_status.passed). 1/0; NULL when the
+    -- device did not report.
+    health_passed           INTEGER,
+    temperature_c           REAL,
+    power_on_hours          INTEGER,
+    power_cycles            INTEGER,
+    -- ATA attributes (raw values): 5, 197, 198, 199.
+    reallocated_sectors     INTEGER,
+    pending_sectors         INTEGER,
+    uncorrectable_sectors   INTEGER,
+    udma_crc_errors         INTEGER,
+    -- NVMe health log fields.
+    percentage_used         INTEGER,
+    available_spare_percent INTEGER,
+    media_errors            INTEGER,
+    PRIMARY KEY (resolution, timestamp, device)
+) WITHOUT ROWID;
 
 -- ─── LOGS ───────────────────────────────────────────────────────────────────
 CREATE TABLE logs (

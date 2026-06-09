@@ -1,3 +1,4 @@
+pub mod smart;
 mod stats;
 
 use log::info;

@@ -237,6 +237,7 @@ async fn main() {
     services::logging::start_db_writer(log_rx, db.pool().clone());
 
     collectors::spawn_all(app_state.clone());
+    collectors::smart::spawn(app_state.clone(), config.smart.clone());
 
     services::rollup::spawn(app_state.clone());
     services::retention::spawn(app_state.clone());

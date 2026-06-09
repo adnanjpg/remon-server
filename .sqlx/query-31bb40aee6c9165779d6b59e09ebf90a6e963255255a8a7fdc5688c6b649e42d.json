@@ -1,0 +1,194 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT timestamp as \"timestamp!\", device as \"device!\", model, serial,\n                    health_passed, temperature_c, power_on_hours, power_cycles,\n                    reallocated_sectors, pending_sectors, uncorrectable_sectors,\n                    udma_crc_errors, percentage_used, available_spare_percent,\n                    media_errors\n               FROM metrics_smart\n              WHERE resolution = 'raw'\n                AND (device, timestamp) IN (\n                  SELECT device, MAX(timestamp)\n                    FROM metrics_smart\n                   WHERE resolution = 'raw'\n                   GROUP BY device\n                )\n              ORDER BY device ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "timestamp!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metrics_smart",
+            "name": "timestamp"
+          }
+        }
+      },
+      {
+        "name": "device!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metrics_smart",
+            "name": "device"
+          }
+        }
+      },
+      {
+        "name": "model",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metrics_smart",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "name": "serial",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metrics_smart",
+            "name": "serial"
+          }
+        }
+      },
+      {
+        "name": "health_passed",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metrics_smart",
+            "name": "health_passed"
+          }
+        }
+      },
+      {
+        "name": "temperature_c",
+        "ordinal": 5,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "metrics_smart",
+            "name": "temperature_c"
+          }
+        }
+      },
+      {
+        "name": "power_on_hours",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metrics_smart",
+            "name": "power_on_hours"
+          }
+        }
+      },
+      {
+        "name": "power_cycles",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metrics_smart",
+            "name": "power_cycles"
+          }
+        }
+      },
+      {
+        "name": "reallocated_sectors",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metrics_smart",
+            "name": "reallocated_sectors"
+          }
+        }
+      },
+      {
+        "name": "pending_sectors",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metrics_smart",
+            "name": "pending_sectors"
+          }
+        }
+      },
+      {
+        "name": "uncorrectable_sectors",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metrics_smart",
+            "name": "uncorrectable_sectors"
+          }
+        }
+      },
+      {
+        "name": "udma_crc_errors",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metrics_smart",
+            "name": "udma_crc_errors"
+          }
+        }
+      },
+      {
+        "name": "percentage_used",
+        "ordinal": 12,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metrics_smart",
+            "name": "percentage_used"
+          }
+        }
+      },
+      {
+        "name": "available_spare_percent",
+        "ordinal": 13,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metrics_smart",
+            "name": "available_spare_percent"
+          }
+        }
+      },
+      {
+        "name": "media_errors",
+        "ordinal": 14,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metrics_smart",
+            "name": "media_errors"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "31bb40aee6c9165779d6b59e09ebf90a6e963255255a8a7fdc5688c6b649e42d"
+}

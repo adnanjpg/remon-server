@@ -14,6 +14,8 @@ pub struct Config {
     pub docker: DockerConfig,
     #[serde(default)]
     pub cors: CorsConfig,
+    #[serde(default)]
+    pub smart: SmartConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -140,6 +142,44 @@ pub struct DockerConfig {
     /// Defaults to false; opt-in explicitly in config.toml to enable.
     #[serde(default)]
     pub exec_enabled: bool,
+}
+
+/// SMART disk-health collection. Wraps the `smartctl` binary
+/// (smartmontools) — the de-facto cross-platform way to read SMART;
+/// there is no maintained pure-Rust alternative covering ATA + NVMe +
+/// USB bridges. When the binary is absent the collector logs once and
+/// exits; everything else keeps working.
+#[derive(Debug, Deserialize, Clone)]
+pub struct SmartConfig {
+    /// Master switch. Default true — absence of smartctl degrades
+    /// gracefully, so there is no cost on hosts without it.
+    #[serde(default = "default_smart_enabled")]
+    pub enabled: bool,
+    /// Explicit path to smartctl. Empty (default) = resolve from PATH.
+    #[serde(default)]
+    pub smartctl_path: String,
+    /// Poll interval in seconds. Default 1800 (30 min) — SMART moves
+    /// slowly and each poll issues real commands to every disk. Floor 60.
+    #[serde(default = "default_smart_interval_secs")]
+    pub interval_secs: u64,
+}
+
+impl Default for SmartConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_smart_enabled(),
+            smartctl_path: String::new(),
+            interval_secs: default_smart_interval_secs(),
+        }
+    }
+}
+
+fn default_smart_enabled() -> bool {
+    true
+}
+
+fn default_smart_interval_secs() -> u64 {
+    1800
 }
 
 /// CORS policy.

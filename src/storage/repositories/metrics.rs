@@ -642,7 +642,7 @@ impl MetricsRepository {
                     .await?
             }
             "cpu" | "memory" | "disk" | "network" | "docker" | "pressure" | "components"
-            | "probe" => {
+            | "probe" | "smart" => {
                 let table = format!("metrics_{}", resource);
                 let sql = format!(
                     "DELETE FROM {} WHERE resolution = ? AND timestamp < ?",

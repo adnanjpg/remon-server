@@ -1,7 +1,5 @@
 use std::sync::Arc;
-#[cfg(feature = "docker")]
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 use sqlx::SqlitePool;
 use tokio::sync::{Mutex, RwLock, broadcast};
@@ -89,6 +87,12 @@ pub struct AppState {
     #[cfg(feature = "docker")]
     pub docker_exec_enabled: Arc<AtomicBool>,
 
+    /// Set by the SMART collector once it has confirmed a working
+    /// `smartctl` binary. `GET /system/smart` reports it so clients can
+    /// distinguish "no smartmontools" from "no readings yet". Starts
+    /// false; never constructor-injected.
+    pub smart_available: AtomicBool,
+
     /// Hardware inventory captured at boot. Static for the server's
     /// lifetime — hot-plug requires a restart.
     pub hardware_info: Arc<HardwareInfo>,
@@ -153,6 +157,7 @@ impl AppState {
             processes_cache_ttl_ms: Arc::new(AtomicU64::new(processes_cache_ttl_ms)),
             #[cfg(feature = "docker")]
             docker_exec_enabled: Arc::new(AtomicBool::new(docker_exec_enabled)),
+            smart_available: AtomicBool::new(false),
             hardware_info,
             service_manager,
             probe_registry,

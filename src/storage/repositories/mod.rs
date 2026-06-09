@@ -8,6 +8,7 @@ mod probes;
 mod resolutions;
 mod retention;
 mod rollup_state;
+mod smart;
 
 pub use alerts::{AlertRepository, UpsertAlertRule};
 pub use config::{ConfigRepository, RuntimeOverrides};
@@ -19,3 +20,4 @@ pub use probes::{ProbeDefinitionRow, ProbeRepository};
 pub use resolutions::{Resolution, ResolutionRepository};
 pub use retention::RetentionRepository;
 pub use rollup_state::RollupStateRepository;
+pub use smart::{SmartDeviceRow, SmartRepository};
