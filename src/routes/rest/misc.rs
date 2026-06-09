@@ -1,3 +1,7 @@
+//! Operational endpoints: `/health` (liveness) and `/ready` (readiness).
+//! Both are public — orchestrators and peer-health probes call them
+//! without a token, so neither response carries internal detail.
+
 use std::sync::Arc;
 
 use axum::{Json, extract::State, http::StatusCode};
@@ -5,16 +9,12 @@ use log::warn;
 
 use crate::state::AppState;
 
-pub async fn hello() -> &'static str {
-    "Hello World!"
-}
-
-pub async fn teapot() -> (StatusCode, &'static str) {
-    (StatusCode::IM_A_TEAPOT, "I'm a teapot!")
-}
-
-pub async fn healthcheck() -> &'static str {
-    "Running smoothly!"
+/// GET /health — liveness: the process is up and the router answers.
+/// Says nothing about whether the daemon can actually serve queries;
+/// that's `/ready`. The peer-health example probe keys off this status
+/// code, so it must stay cheap and dependency-free.
+pub async fn healthcheck() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "status": "ok" }))
 }
 
 /// GET /ready — readiness, as opposed to `/health`'s liveness. A process

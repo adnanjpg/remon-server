@@ -6,8 +6,9 @@ use axum::http::StatusCode;
 #[tokio::test]
 async fn health_is_public() {
     let app = TestApp::spawn().await;
-    let (status, _) = app.request("GET", "/health", None, None).await;
+    let (status, body) = app.request("GET", "/health", None, None).await;
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "ok");
 }
 
 #[tokio::test]
@@ -16,20 +17,6 @@ async fn ready_is_public_and_reports_ready() {
     let (status, body) = app.request("GET", "/ready", None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], "ready");
-}
-
-#[tokio::test]
-async fn hello_is_public() {
-    let app = TestApp::spawn().await;
-    let (status, _) = app.request("GET", "/hello", None, None).await;
-    assert_eq!(status, StatusCode::OK);
-}
-
-#[tokio::test]
-async fn teapot_returns_418() {
-    let app = TestApp::spawn().await;
-    let (status, _) = app.request("GET", "/teapot", None, None).await;
-    assert_eq!(status, StatusCode::IM_A_TEAPOT);
 }
 
 #[tokio::test]

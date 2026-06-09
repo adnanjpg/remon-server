@@ -106,8 +106,6 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
     };
 
     let public_routes = Router::new()
-        .route("/hello", get(misc::hello))
-        .route("/teapot", get(misc::teapot))
         .route("/health", get(misc::healthcheck))
         .route("/ready", get(misc::ready))
         .merge(rate_limited_auth);
