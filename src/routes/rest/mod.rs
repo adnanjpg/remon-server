@@ -129,6 +129,9 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         // Local host description + hardware inventory (uptime is fresh; the
         // rest is cached at boot — see services/system.rs).
         .route("/system/info", get(system::get_system_info))
+        // One-call host overview — fleet/multi-server clients poll this
+        // once per daemon instead of fanning out to info/metrics/alerts.
+        .route("/summary", get(system::get_summary))
         // Runtime configuration
         .route("/config", get(admin::get_config).patch(admin::patch_config))
         // Alert engine: rule CRUD + active-state + event log

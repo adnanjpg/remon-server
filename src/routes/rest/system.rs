@@ -1,4 +1,4 @@
-//! `GET /system/info`.
+//! `GET /system/info` and `GET /summary`.
 
 use axum::{Json, extract::State};
 use std::sync::Arc;
@@ -6,11 +6,13 @@ use std::sync::Arc;
 use crate::error::AppResult;
 use crate::models::system::{DiskInfo, HardwareInfo, NetworkInterfaceInfo};
 use crate::routes::dtos::system::{
-    DiskInfoDto, HardwareInfoDto, NetworkInterfaceInfoDto, SystemDescriptionDto, SystemInfoResponse,
+    DiskInfoDto, HardwareInfoDto, NetworkInterfaceInfoDto, SummaryResponse, SystemDescriptionDto,
+    SystemInfoResponse,
 };
 use crate::routes::extractors::Claims;
 use crate::services::system as system_svc;
 use crate::state::AppState;
+use crate::storage::repositories::AlertRepository;
 
 pub async fn get_system_info(
     _claims: Claims,
@@ -36,6 +38,67 @@ pub async fn get_system_info(
             built_at: env!("BUILD_TIME").parse().unwrap_or(0),
         },
         hardware: hardware_info_to_dto(hardware),
+    }))
+}
+
+/// One-call host overview for multi-server clients. Reads the latest
+/// collector tick from the in-memory cache (no DB round trip for gauges)
+/// plus a single COUNT over `alert_state`.
+pub async fn get_summary(
+    _claims: Claims,
+    State(state): State<Arc<AppState>>,
+) -> AppResult<Json<SummaryResponse>> {
+    let desc = system_svc::get_description();
+    let server_name = state.effective_config.read().await.server_name.clone();
+    let (alerts_pending, alerts_firing) = AlertRepository::new(state.db.clone())
+        .count_active_state()
+        .await?;
+
+    let stats = state.stats_latest.read().await.clone();
+    let (stats_timestamp, cpu_usage_percent, memory_used, memory_total, disk_max) = match &stats {
+        Some(s) => {
+            // Fullest mount wins the card slot; removable/pseudo mounts are
+            // already filtered by the collector.
+            let disk_max = s
+                .disks
+                .iter()
+                .filter(|d| d.total_bytes > 0)
+                .map(|d| {
+                    (
+                        d.used_bytes as f64 / d.total_bytes as f64 * 100.0,
+                        d.mount_point.clone(),
+                    )
+                })
+                .max_by(|a, b| a.0.total_cmp(&b.0));
+            (
+                Some(s.cpu.timestamp),
+                Some(s.cpu.usage_percent),
+                Some(s.memory.used_bytes),
+                Some(s.memory.total_bytes),
+                disk_max,
+            )
+        }
+        None => (None, None, None, None, None),
+    };
+    let (disk_max_used_percent, disk_max_mount) = match disk_max {
+        Some((pct, mount)) => (Some(pct), Some(mount)),
+        None => (None, None),
+    };
+
+    Ok(Json(SummaryResponse {
+        server_name,
+        hostname: desc.hostname,
+        os: desc.os,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        uptime_secs: desc.uptime_secs,
+        stats_timestamp,
+        cpu_usage_percent,
+        memory_used_bytes: memory_used,
+        memory_total_bytes: memory_total,
+        disk_max_used_percent,
+        disk_max_mount,
+        alerts_pending,
+        alerts_firing,
     }))
 }
 

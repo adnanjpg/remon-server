@@ -61,3 +61,31 @@ pub struct SystemInfoResponse {
     pub description: SystemDescriptionDto,
     pub hardware: HardwareInfoDto,
 }
+
+/// `GET /summary` — one-call host overview for multi-server clients.
+///
+/// Deliberately flat and small: a fleet view polls this once per daemon to
+/// render a server card (name, health, headline gauges, alert badge)
+/// without fanning out to `/system/info` + `/metrics/*` + `/alerts/state`.
+/// Live-stat fields are `None` until the first collector tick lands.
+#[derive(Debug, Serialize)]
+pub struct SummaryResponse {
+    /// Operator-set display name (`server_name` from runtime config).
+    pub server_name: String,
+    pub hostname: String,
+    pub os: String,
+    /// remon-server build version, for client compatibility checks.
+    pub version: String,
+    pub uptime_secs: u64,
+    /// Timestamp of the stats tick the gauge fields below were read from.
+    pub stats_timestamp: Option<i64>,
+    pub cpu_usage_percent: Option<f64>,
+    pub memory_used_bytes: Option<u64>,
+    pub memory_total_bytes: Option<u64>,
+    /// Fullest mount's used percentage — the single most useful disk
+    /// number for an at-a-glance card. Mount identified by `disk_max_mount`.
+    pub disk_max_used_percent: Option<f64>,
+    pub disk_max_mount: Option<String>,
+    pub alerts_pending: u32,
+    pub alerts_firing: u32,
+}

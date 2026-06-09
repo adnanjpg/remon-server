@@ -243,6 +243,21 @@ impl AlertRepository {
             .collect())
     }
 
+    /// Count active state rows per lifecycle — `(pending, firing)`. Backs
+    /// the lightweight `GET /summary` endpoint so a fleet view can show an
+    /// alert badge without pulling the full active-state list.
+    pub async fn count_active_state(&self) -> AppResult<(u32, u32)> {
+        let row = sqlx::query!(
+            r#"SELECT
+                 COALESCE(SUM(state = 'pending'), 0) as "pending!: i64",
+                 COALESCE(SUM(state = 'firing'), 0) as "firing!: i64"
+               FROM alert_state"#
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok((row.pending as u32, row.firing as u32))
+    }
+
     // ===== alert_events =====
 
     pub async fn insert_event(
