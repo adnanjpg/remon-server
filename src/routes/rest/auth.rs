@@ -71,8 +71,12 @@ pub async fn refresh(
 
     let device_repo = DeviceRepository::new(state.db.clone());
 
-    // Revocation check: the refresh jti must still be active.
-    if !device_repo.session_exists(&claims.jti).await? {
+    // Single-use consume of the refresh jti, atomic by virtue of SQLite's
+    // serialised writes. This both enforces revocation and closes the
+    // rotation race: if the same refresh token is presented twice in
+    // parallel, exactly one delete removes a row — the other gets `false`
+    // here and is rejected, instead of both minting fresh pairs.
+    if !device_repo.consume_session(&claims.jti).await? {
         return Err(AppError::InvalidToken);
     }
 
@@ -84,10 +88,9 @@ pub async fn refresh(
         return Err(AppError::DeviceInactive);
     }
 
-    // Rotation: wipe ALL sessions for this device, then issue and persist a
-    // fresh pair. This is intentionally aggressive — if a stolen refresh
-    // token has been used in parallel with the legitimate one, both sides
-    // get logged out and the device must re-authenticate.
+    // Rotation: wipe any remaining sessions for this device (the refresh jti
+    // itself is already gone), then issue and persist a fresh pair. Aggressive
+    // by design — a parallel use of a stolen token logs both sides out.
     device_repo.delete_device_sessions(&claims.sub).await?;
 
     let tokens = auth_service.create_tokens(&claims.sub)?;

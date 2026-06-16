@@ -129,6 +129,22 @@ impl DeviceRepository {
         Ok(row.is_some())
     }
 
+    /// Atomically consume (delete) a single non-expired session by jti.
+    /// Returns true if a row was actually removed; false means the jti was
+    /// already consumed, revoked, or expired. The refresh path uses this as a
+    /// single-use gate: two requests presenting the same refresh token both
+    /// attempt the delete, but SQLite serialises writes so only one removes a
+    /// row — the loser sees `false` and is rejected as a replay.
+    pub async fn consume_session(&self, jti: &str) -> AppResult<bool> {
+        let result = sqlx::query!(
+            "DELETE FROM sessions WHERE id = ? AND expires_at > unixepoch()",
+            jti
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn delete_session(&self, session_id: &str) -> AppResult<()> {
         sqlx::query!("DELETE FROM sessions WHERE id = ?", session_id)
             .execute(&self.pool)

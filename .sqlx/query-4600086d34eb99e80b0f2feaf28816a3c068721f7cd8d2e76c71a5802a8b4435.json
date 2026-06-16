@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM sessions WHERE id = ? AND expires_at > unixepoch()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "4600086d34eb99e80b0f2feaf28816a3c068721f7cd8d2e76c71a5802a8b4435"
+}
