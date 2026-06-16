@@ -61,14 +61,11 @@ pub async fn stream_service_logs(
         let unit = normalize_unit_name(&name, "service");
         let tail = params.tail.unwrap_or(50).to_string();
 
-        // Lifetime note: the `Child` handle is dropped when this function
-        // returns. We intentionally do NOT set `kill_on_drop(true)` — that
-        // would SIGKILL journalctl before any data flowed, since the Child
-        // dies at end of scope here even though the stream is still alive.
-        // Instead the child is reaped via SIGPIPE when the SSE response is
-        // dropped (client disconnect) and the stdout fd closes. A noisy
-        // unit can buffer a few KB before the pipe closure registers, which
-        // is the trade-off we accept.
+        // `kill_on_drop(true)` plus carrying the `Child` inside the stream's
+        // state (below) means a client disconnect — which drops the SSE
+        // response and with it the stream — SIGKILLs and reaps journalctl.
+        // The old approach relied on SIGPIPE alone, which never fires for a
+        // quiet unit, leaking the follow process and never calling wait().
         let mut child = tokio::process::Command::new("journalctl")
             .args([
                 "-fu",
@@ -80,6 +77,7 @@ pub async fn stream_service_logs(
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
+            .kill_on_drop(true)
             .spawn()
             .map_err(|e| AppError::Internal(format!("journalctl spawn failed: {}", e)))?;
 
@@ -88,10 +86,18 @@ pub async fn stream_service_logs(
             .take()
             .ok_or_else(|| AppError::Internal("journalctl stdout not captured".to_string()))?;
         let reader = tokio::io::BufReader::new(stdout);
-        let stream = LinesStream::new(reader.lines()).map(|line| match line {
-            Ok(l) => Ok::<_, std::convert::Infallible>(Event::default().data(l)),
-            Err(e) => Ok(Event::default().event("error").data(e.to_string())),
-        });
+        let lines = LinesStream::new(reader.lines());
+
+        // Move `child` into the unfold state so it lives exactly as long as
+        // the stream; dropping the stream drops the child (→ kill_on_drop).
+        let stream =
+            futures_util::stream::unfold((lines, child), |(mut lines, child)| async move {
+                let event = match lines.next().await? {
+                    Ok(l) => Ok::<_, std::convert::Infallible>(Event::default().data(l)),
+                    Err(e) => Ok(Event::default().event("error").data(e.to_string())),
+                };
+                Some((event, (lines, child)))
+            });
 
         Ok(Sse::new(stream)
             .keep_alive(KeepAlive::default())
