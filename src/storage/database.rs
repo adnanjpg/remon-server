@@ -29,6 +29,13 @@ const CACHE_SIZE_KB: i64 = -65_536;
 /// eviction so this is an upper bound, not a reservation.
 const MMAP_SIZE_BYTES: u64 = 256 * 1024 * 1024;
 
+/// Truncate the WAL back to this size after each checkpoint instead of
+/// leaving it at its high-water mark. The 2-second collector writes across
+/// ~8 metric tables churn the WAL steadily; without a limit the file sits
+/// at whatever the busiest burst grew it to. 8 MB comfortably spans one
+/// autocheckpoint window.
+const JOURNAL_SIZE_LIMIT_BYTES: i64 = 8 * 1024 * 1024;
+
 /// Database wrapper with repository access
 #[derive(Clone)]
 pub struct Database {
@@ -47,6 +54,9 @@ impl Database {
     /// - `temp_store=MEMORY`: keep temp tables, sort scratch, and
     ///   intermediate join buffers in RAM instead of spilling to disk.
     /// - `mmap_size`: see [`MMAP_SIZE_BYTES`].
+    /// - `wal_autocheckpoint=1000`: checkpoint every ~4 MB (the default,
+    ///   pinned explicitly so it can't drift).
+    /// - `journal_size_limit`: see [`JOURNAL_SIZE_LIMIT_BYTES`].
     pub async fn connect(url: &str, max_connections: u32) -> anyhow::Result<Self> {
         let opts = SqliteConnectOptions::from_str(url)?
             .create_if_missing(true)
@@ -56,7 +66,9 @@ impl Database {
             .foreign_keys(true)
             .pragma("cache_size", CACHE_SIZE_KB.to_string())
             .pragma("temp_store", "MEMORY")
-            .pragma("mmap_size", MMAP_SIZE_BYTES.to_string());
+            .pragma("mmap_size", MMAP_SIZE_BYTES.to_string())
+            .pragma("wal_autocheckpoint", "1000")
+            .pragma("journal_size_limit", JOURNAL_SIZE_LIMIT_BYTES.to_string());
 
         let pool = SqlitePoolOptions::new()
             .max_connections(max_connections)
