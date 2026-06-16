@@ -264,12 +264,18 @@ async fn evaluate_once(
             _ => (None, false),
         };
 
-        // Optimistically stamp `last_notified_at = now` when we intend to
-        // notify. If the fanout below produces zero deliveries (no
-        // channels configured, all timed out), cooldown still kicks in —
-        // we treat that as "we tried, don't try again immediately" rather
-        // than letting a misconfigured server re-attempt every tick.
-        let new_last_notified_at = if notify_intent {
+        // Stamp `last_notified_at = now` when we intend to notify AND at
+        // least one channel would actually receive it. If a channel exists
+        // but the fanout below fails (timeout, upstream down) cooldown still
+        // arms — "we tried, don't retry every tick". But a fire with no
+        // channels configured must not silently arm cooldown, or the rule
+        // would look rate-limited the instant a channel is finally added.
+        let new_last_notified_at = if notify_intent
+            && state
+                .notify
+                .has_channel_for(alert_severity(rule.severity))
+                .await
+        {
             Some(now)
         } else {
             prior_last_notified

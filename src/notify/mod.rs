@@ -160,6 +160,17 @@ impl NotificationManager {
         total
     }
 
+    /// Whether at least one loaded channel would receive a notification of
+    /// this severity. Lets the alert evaluator avoid arming a rule's cooldown
+    /// on a fire that has nowhere to go (no channels configured).
+    pub async fn has_channel_for(&self, severity: Severity) -> bool {
+        self.channels
+            .read()
+            .await
+            .iter()
+            .any(|s| s.min_severity.is_none_or(|min| severity_gte(severity, min)))
+    }
+
     /// Snapshot of the current webhook SSRF policy, derived from server
     /// config. Used by REST create / update handlers to fail-fast at 400
     /// before persisting a channel row that would be blocked anyway.
