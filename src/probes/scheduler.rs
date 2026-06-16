@@ -351,6 +351,40 @@ pub async fn load_and_spawn(
         report.loaded.push(manifest.name);
     }
 
+    // Reconcile: stop tasks for probes that no longer have a live definition
+    // this pass — removed from disk, newly disabled, now failing to parse, or
+    // platform-excluded. `report.loaded` is exactly the set that should keep a
+    // running task; anything else still in the registry is a stale task
+    // executing an old manifest (and spawning child processes on schedule)
+    // that the loop above never reached.
+    {
+        let live: std::collections::HashSet<&str> =
+            report.loaded.iter().map(String::as_str).collect();
+        let stale: Vec<(String, Option<tokio::task::JoinHandle<()>>)> = {
+            let mut reg = registry.write().await;
+            let names: Vec<String> = reg
+                .probes
+                .keys()
+                .filter(|n| !live.contains(n.as_str()))
+                .cloned()
+                .collect();
+            names
+                .into_iter()
+                .map(|n| {
+                    let task = reg.probes.remove(&n).and_then(|e| e.task);
+                    (n, task)
+                })
+                .collect()
+        };
+        for (name, task) in stale {
+            if let Some(task) = task {
+                info!("probe loader: '{}' no longer active, stopping task", name);
+                task.abort();
+                let _ = tokio::time::timeout(ABORTED_TASK_GRACE, task).await;
+            }
+        }
+    }
+
     info!(
         "probe loader: {} loaded, {} disabled, {} skipped(platform), {} failed",
         report.loaded.len(),
