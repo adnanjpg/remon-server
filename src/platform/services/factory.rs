@@ -38,7 +38,7 @@ pub async fn create(init: &InitSystem) -> Arc<dyn ServiceManager> {
     {
         let _ = init;
         info!("Service backend: Windows SCM (via PowerShell)");
-        Arc::new(super::windows_scm::WindowsScmManager)
+        Arc::new(super::windows_scm::WindowsScmManager::new())
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]

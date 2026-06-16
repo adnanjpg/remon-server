@@ -4,13 +4,37 @@
 /// so no unsafe Win32 bindings are required in Phase 2.
 /// Phase 3 can swap this for direct SCM API calls using the `windows` crate
 /// (Win32_System_Services) for lower latency and richer error codes.
+use std::time::{Duration, Instant};
+
 use async_trait::async_trait;
 use serde::Deserialize;
 use tokio::process::Command;
+use tokio::sync::Mutex;
 
 use super::{Service, ServiceBackend, ServiceError, ServiceFilter, ServiceManager, ServiceState};
 
-pub struct WindowsScmManager;
+/// The list endpoint shells out to PowerShell (cold start + full enumeration
+/// ≈ 1s) and service states rarely change second-to-second, so the unfiltered
+/// list is cached briefly. Per-service `get()` stays uncached for freshness.
+const LIST_CACHE_TTL: Duration = Duration::from_secs(3);
+
+pub struct WindowsScmManager {
+    list_cache: Mutex<Option<(Instant, Vec<Service>)>>,
+}
+
+impl WindowsScmManager {
+    pub fn new() -> Self {
+        Self {
+            list_cache: Mutex::new(None),
+        }
+    }
+}
+
+impl Default for WindowsScmManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 // ===== PowerShell record shapes =====
 
@@ -53,7 +77,7 @@ fn is_permission_denied(stderr: &str) -> bool {
 
 async fn run_ps(cmd: &str) -> Result<String, ServiceError> {
     let out = Command::new("powershell")
-        .args(["-NonInteractive", "-Command", cmd])
+        .args(["-NoProfile", "-NonInteractive", "-Command", cmd])
         .output()
         .await
         .map_err(|e| ServiceError::BackendError(format!("PowerShell exec: {}", e)))?;
@@ -71,7 +95,7 @@ async fn run_ps(cmd: &str) -> Result<String, ServiceError> {
 
 async fn run_ps_action(cmd: &str, unit: &str) -> Result<(), ServiceError> {
     let out = Command::new("powershell")
-        .args(["-NonInteractive", "-Command", cmd])
+        .args(["-NoProfile", "-NonInteractive", "-Command", cmd])
         .output()
         .await
         .map_err(|e| ServiceError::BackendError(e.to_string()))?;
@@ -138,6 +162,26 @@ fn record_to_service(r: ScmRecord) -> Service {
 #[async_trait]
 impl ServiceManager for WindowsScmManager {
     async fn list(&self, filter: ServiceFilter) -> Result<Vec<Service>, ServiceError> {
+        let apply_filter = |services: &[Service]| -> Vec<Service> {
+            services
+                .iter()
+                .filter(|s| match &filter.state {
+                    Some(f) => &s.state == f,
+                    None => true,
+                })
+                .cloned()
+                .collect()
+        };
+
+        {
+            let cache = self.list_cache.lock().await;
+            if let Some((at, services)) = cache.as_ref()
+                && at.elapsed() < LIST_CACHE_TTL
+            {
+                return Ok(apply_filter(services));
+            }
+        }
+
         // @(...) wrapper forces ConvertTo-Json to always output an array.
         let raw = run_ps(
             "@(Get-Service | Select-Object Name,DisplayName,Status,StartType) | ConvertTo-Json -Compress",
@@ -147,16 +191,10 @@ impl ServiceManager for WindowsScmManager {
         let records: Vec<ScmRecord> = serde_json::from_str(&raw)
             .map_err(|e| ServiceError::BackendError(format!("parse error: {}", e)))?;
 
-        let services: Vec<Service> = records
-            .into_iter()
-            .map(record_to_service)
-            .filter(|s| match &filter.state {
-                Some(f) => &s.state == f,
-                None => true,
-            })
-            .collect();
-
-        Ok(services)
+        let all: Vec<Service> = records.into_iter().map(record_to_service).collect();
+        let result = apply_filter(&all);
+        *self.list_cache.lock().await = Some((Instant::now(), all));
+        Ok(result)
     }
 
     async fn get(&self, name: &str) -> Result<Service, ServiceError> {
