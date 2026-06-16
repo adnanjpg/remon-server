@@ -2538,6 +2538,7 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "serde_yaml_ng",
  "shell-words",
  "sqlx",

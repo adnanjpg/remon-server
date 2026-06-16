@@ -2,7 +2,7 @@
 
 use axum::{
     Json,
-    extract::{Path, Query, State},
+    extract::{Path, State},
 };
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ use crate::routes::dtos::metrics::{
     DiskHistoryResponse, DiskPoint, MemoryHistoryResponse, MemoryPoint, MetricsRangeQuery,
     NetworkHistoryResponse, NetworkPoint, PressureHistoryResponse, PressurePoint,
 };
-use crate::routes::extractors::Claims;
+use crate::routes::extractors::{Claims, ValidatedQuery};
 use crate::state::AppState;
 use crate::storage::repositories::MetricsRepository;
 
@@ -83,7 +83,7 @@ fn resolve_range(q: &MetricsRangeQuery) -> AppResult<(i64, i64, String, u32)> {
 pub async fn cpu_history(
     _claims: Claims,
     State(state): State<Arc<AppState>>,
-    Query(q): Query<MetricsRangeQuery>,
+    ValidatedQuery(q): ValidatedQuery<MetricsRangeQuery>,
 ) -> AppResult<Json<CpuHistoryResponse>> {
     let (start, end, resolution, limit) = resolve_range(&q)?;
     let repo = MetricsRepository::new(state.db.clone());
@@ -117,7 +117,7 @@ pub async fn cpu_history(
 pub async fn cpu_cores_history(
     _claims: Claims,
     State(state): State<Arc<AppState>>,
-    Query(q): Query<MetricsRangeQuery>,
+    ValidatedQuery(q): ValidatedQuery<MetricsRangeQuery>,
 ) -> AppResult<Json<CpuCoresHistoryResponse>> {
     let (start, end, _resolution, limit) = resolve_range(&q)?;
     let repo = MetricsRepository::new(state.db.clone());
@@ -143,7 +143,7 @@ pub async fn cpu_cores_history(
 pub async fn memory_history(
     _claims: Claims,
     State(state): State<Arc<AppState>>,
-    Query(q): Query<MetricsRangeQuery>,
+    ValidatedQuery(q): ValidatedQuery<MetricsRangeQuery>,
 ) -> AppResult<Json<MemoryHistoryResponse>> {
     let (start, end, resolution, limit) = resolve_range(&q)?;
     let repo = MetricsRepository::new(state.db.clone());
@@ -175,7 +175,7 @@ pub async fn memory_history(
 pub async fn disk_history(
     _claims: Claims,
     State(state): State<Arc<AppState>>,
-    Query(q): Query<MetricsRangeQuery>,
+    ValidatedQuery(q): ValidatedQuery<MetricsRangeQuery>,
 ) -> AppResult<Json<DiskHistoryResponse>> {
     let (start, end, resolution, limit) = resolve_range(&q)?;
     let repo = MetricsRepository::new(state.db.clone());
@@ -207,7 +207,7 @@ pub async fn disk_history(
 pub async fn network_history(
     _claims: Claims,
     State(state): State<Arc<AppState>>,
-    Query(q): Query<MetricsRangeQuery>,
+    ValidatedQuery(q): ValidatedQuery<MetricsRangeQuery>,
 ) -> AppResult<Json<NetworkHistoryResponse>> {
     let (start, end, resolution, limit) = resolve_range(&q)?;
     let repo = MetricsRepository::new(state.db.clone());
@@ -241,7 +241,7 @@ pub async fn pressure_history(
     _claims: Claims,
     State(state): State<Arc<AppState>>,
     Path(resource): Path<String>,
-    Query(q): Query<MetricsRangeQuery>,
+    ValidatedQuery(q): ValidatedQuery<MetricsRangeQuery>,
 ) -> AppResult<Json<PressureHistoryResponse>> {
     if !VALID_PRESSURE_RESOURCES.contains(&resource.as_str()) {
         return Err(AppError::BadRequest(format!(
@@ -286,7 +286,7 @@ pub async fn pressure_history(
 pub async fn components_history(
     _claims: Claims,
     State(state): State<Arc<AppState>>,
-    Query(q): Query<MetricsRangeQuery>,
+    ValidatedQuery(q): ValidatedQuery<MetricsRangeQuery>,
 ) -> AppResult<Json<ComponentsHistoryResponse>> {
     let (start, end, resolution, limit) = resolve_range(&q)?;
     let repo = MetricsRepository::new(state.db.clone());
@@ -350,7 +350,7 @@ fn parse_span(s: &str) -> AppResult<i64> {
 pub async fn batch_history(
     _claims: Claims,
     State(state): State<Arc<AppState>>,
-    Query(q): Query<BatchMetricsQuery>,
+    ValidatedQuery(q): ValidatedQuery<BatchMetricsQuery>,
 ) -> AppResult<Json<BatchMetricsResponse>> {
     // Window: span XOR start/end. Both supplied is ambiguous → 400.
     if q.span.is_some() && (q.start.is_some() || q.end.is_some()) {
