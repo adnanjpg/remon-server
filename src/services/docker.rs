@@ -63,12 +63,20 @@ pub enum DockerError {
 
 impl From<bollard::errors::Error> for DockerError {
     fn from(err: bollard::errors::Error) -> Self {
+        use bollard::errors::Error as BE;
         match err {
-            bollard::errors::Error::DockerResponseServerError {
+            BE::DockerResponseServerError {
                 status_code: 404,
                 message,
             } => DockerError::ContainerNotFound(message),
-            _ => DockerError::ApiError(err.to_string()),
+            // The daemon answered with a real API error (e.g. 409 conflict on
+            // a running container) — surface its own message, it's useful.
+            BE::DockerResponseServerError { message, .. } => DockerError::ApiError(message),
+            // Anything else (connect refused, broken pipe, timeout, protocol
+            // mismatch) means the daemon is unreachable, not that the request
+            // was bad. Map to NotAvailable -> 503 with a generic public body,
+            // instead of a misleading 422 that leaks the transport error.
+            other => DockerError::NotAvailable(other.to_string()),
         }
     }
 }
