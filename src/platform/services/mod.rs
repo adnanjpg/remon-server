@@ -143,6 +143,21 @@ pub trait ServiceManager: Send + Sync {
     async fn list_timers(&self) -> Result<Vec<TimerUnit>, ServiceError> {
         Err(ServiceError::NotSupported)
     }
+
+    /// Enable a timer unit at boot. Distinct from `enable_at_boot`: the unit
+    /// must be normalised with the `.timer` suffix, not `.service`, or a bare
+    /// name silently targets the wrong unit. NotSupported where there are no
+    /// timers.
+    async fn enable_timer(&self, name: &str) -> Result<(), ServiceError> {
+        let _ = name;
+        Err(ServiceError::NotSupported)
+    }
+
+    /// Disable a timer unit at boot. See [`ServiceManager::enable_timer`].
+    async fn disable_timer(&self, name: &str) -> Result<(), ServiceError> {
+        let _ = name;
+        Err(ServiceError::NotSupported)
+    }
 }
 
 // ===== Helpers =====

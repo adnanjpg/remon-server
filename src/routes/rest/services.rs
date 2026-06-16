@@ -168,7 +168,7 @@ pub async fn enable_timer(
     Path(name): Path<String>,
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
-    state.service_manager.enable_at_boot(&name).await?;
+    state.service_manager.enable_timer(&name).await?;
     Ok(Json(ServiceActionResponse::ok(format!(
         "Timer '{}' enabled",
         name
@@ -182,7 +182,7 @@ pub async fn disable_timer(
     Path(name): Path<String>,
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
-    state.service_manager.disable_at_boot(&name).await?;
+    state.service_manager.disable_timer(&name).await?;
     Ok(Json(ServiceActionResponse::ok(format!(
         "Timer '{}' disabled",
         name

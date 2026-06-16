@@ -297,6 +297,16 @@ impl ServiceManager for SystemdManager {
         run_systemctl_action(&["disable", &unit], &unit).await
     }
 
+    async fn enable_timer(&self, name: &str) -> Result<(), ServiceError> {
+        let unit = normalize_unit_name(name, "timer");
+        run_systemctl_action(&["enable", &unit], &unit).await
+    }
+
+    async fn disable_timer(&self, name: &str) -> Result<(), ServiceError> {
+        let unit = normalize_unit_name(name, "timer");
+        run_systemctl_action(&["disable", &unit], &unit).await
+    }
+
     async fn list_timers(&self) -> Result<Vec<TimerUnit>, ServiceError> {
         let raw = run_systemctl(&[
             "list-units",
