@@ -266,7 +266,6 @@ async fn main() {
         .nest("/sse", routes::sse::create_routes(app_state.clone()))
         .nest("/ws", routes::ws::create_routes(app_state.clone()))
         .with_state(app_state)
-        .layer(cors_layer)
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(compression)
         // SSE/WS browser clients authenticate via query string, so redact
@@ -286,7 +285,11 @@ async fn main() {
                         .level(Level::INFO)
                         .latency_unit(LatencyUnit::Millis),
                 ),
-        );
+        )
+        // Outermost so responses produced by inner layers — notably the
+        // 413 from the body limit above — still carry CORS headers; without
+        // this a browser sees an opaque CORS error instead of the real status.
+        .layer(cors_layer);
 
     let bind_addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
         .parse()
