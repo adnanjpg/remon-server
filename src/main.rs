@@ -37,38 +37,10 @@ mod models;
 mod platform;
 mod probes;
 mod services;
+mod shutdown;
 mod storage;
 
 use crate::services::system as system_svc;
-
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        if let Err(e) = tokio::signal::ctrl_c().await {
-            error!("Ctrl+C handler error: {}", e);
-        }
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut sig) => {
-                sig.recv().await;
-            }
-            Err(e) => {
-                error!("Failed to install SIGTERM handler: {}", e);
-                std::future::pending::<()>().await;
-            }
-        }
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => info!("Received Ctrl+C, shutting down..."),
-        _ = terminate => info!("Received SIGTERM, shutting down..."),
-    }
-}
 
 #[cfg(test)]
 #[ctor::ctor(unsafe)]
@@ -315,7 +287,7 @@ async fn main() {
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(shutdown::signal())
     .await
     {
         error!("server error: {}", e);
