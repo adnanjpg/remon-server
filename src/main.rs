@@ -1,25 +1,10 @@
 use anyhow::Context;
-use axum::{
-    Router,
-    http::{HeaderName, HeaderValue, Method, StatusCode},
-};
 use log::{error, info};
 use std::io::IsTerminal;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use tower_http::LatencyUnit;
-use tower_http::compression::{
-    CompressionLayer,
-    predicate::{DefaultPredicate, NotForContentType, Predicate},
-};
-use tower_http::cors::{AllowOrigin, CorsLayer};
-use tower_http::limit::RequestBodyLimitLayer;
-use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::{DefaultOnResponse, TraceLayer};
-use tracing::Level;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod config;
@@ -228,7 +213,7 @@ async fn run(
     )
     .await;
 
-    let app = build_router(app_state, &config)?;
+    let app = routes::build_app(app_state, &config)?;
 
     let bind_addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
         .parse()
@@ -257,106 +242,4 @@ async fn run(
     }
 
     Ok(())
-}
-
-/// Assemble the full application router: REST (with request timeouts) merged
-/// with the long-lived SSE/WS streams, wrapped in the shared tower-http stack.
-fn build_router(
-    app_state: Arc<state::AppState>,
-    config: &config::Config,
-) -> anyhow::Result<Router> {
-    let cors_layer = build_cors_layer(&config.cors)?;
-
-    // REST gets request timeouts; SSE/WS streams stay long-lived.
-    let rest_router = routes::rest::create_routes(app_state.clone()).layer(
-        TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(30)),
-    );
-    let compression = CompressionLayer::new()
-        .compress_when(DefaultPredicate::new().and(NotForContentType::new("text/event-stream")));
-
-    let app = Router::new()
-        .merge(rest_router)
-        .nest("/sse", routes::sse::create_routes(app_state.clone()))
-        .nest("/ws", routes::ws::create_routes(app_state.clone()))
-        .with_state(app_state)
-        .layer(RequestBodyLimitLayer::new(64 * 1024))
-        .layer(compression)
-        // SSE/WS browser clients authenticate via query string, so redact
-        // access_token before the URI reaches stdout or DB-backed logs.
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(|req: &axum::http::Request<_>| {
-                    let uri = request_log::redact_access_token(&req.uri().to_string());
-                    tracing::info_span!(
-                        "request",
-                        method = %req.method(),
-                        uri = %uri,
-                    )
-                })
-                .on_response(
-                    DefaultOnResponse::new()
-                        .level(Level::INFO)
-                        .latency_unit(LatencyUnit::Millis),
-                ),
-        )
-        // Outermost so responses produced by inner layers — notably the
-        // 413 from the body limit above — still carry CORS headers; without
-        // this a browser sees an opaque CORS error instead of the real status.
-        .layer(cors_layer);
-
-    Ok(app)
-}
-
-/// Build CORS from config, failing fast when production allow-listing is empty.
-fn build_cors_layer(cfg: &config::CorsConfig) -> anyhow::Result<CorsLayer> {
-    let methods = [
-        Method::GET,
-        Method::POST,
-        Method::PUT,
-        Method::PATCH,
-        Method::DELETE,
-        Method::OPTIONS,
-    ];
-    let allowed_headers = [
-        HeaderName::from_static("authorization"),
-        HeaderName::from_static("content-type"),
-    ];
-
-    let base = CorsLayer::new()
-        .allow_methods(methods)
-        .allow_headers(allowed_headers);
-
-    if cfg.allow_any_origin {
-        return Ok(base.allow_origin(AllowOrigin::any()));
-    }
-
-    if cfg.allowed_origins.is_empty() {
-        anyhow::bail!(
-            "cors.allow_any_origin = false but cors.allowed_origins is empty. \
-             Set REMON__CORS__ALLOW_ANY_ORIGIN=true (dev) or populate allowed_origins."
-        );
-    }
-
-    let parsed: Vec<HeaderValue> = cfg
-        .allowed_origins
-        .iter()
-        .filter_map(|o| match HeaderValue::from_str(o) {
-            Ok(v) => Some(v),
-            Err(_) => {
-                error!("Skipping invalid CORS origin '{}'", o);
-                None
-            }
-        })
-        .collect();
-
-    if parsed.is_empty() {
-        anyhow::bail!("cors.allowed_origins had no valid entries");
-    }
-
-    info!(
-        "CORS: explicit allow-list ({} origin{})",
-        parsed.len(),
-        if parsed.len() == 1 { "" } else { "s" }
-    );
-    Ok(base.allow_origin(AllowOrigin::list(parsed)))
 }
