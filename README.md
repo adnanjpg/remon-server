@@ -26,8 +26,8 @@ Rust toolchain (stable).
 # 1. Copy env file
 cp .env.example .env
 
-# 2. Edit config/default.toml — set a strong jwt_secret for production,
-#    or override via environment variable:
+# 2. (Optional) Left unset, the server generates and persists a JWT secret on
+#    first boot. Override only to share/rotate one across instances:
 #    REMON__AUTH__JWT_SECRET="your-secret-here"
 
 # 3. Run
@@ -49,8 +49,8 @@ See [CONFIG.md](CONFIG.md) for all options. The layered system:
 Key values to set in production:
 ```toml
 # config/production.toml
-[auth]
-jwt_secret = "change-me"   # or via REMON__AUTH__JWT_SECRET
+# [auth] jwt_secret is optional — auto-generated and persisted on first boot.
+# Set it only to share or rotate the secret across instances.
 
 [logging]
 format = "json"

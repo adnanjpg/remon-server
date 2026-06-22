@@ -143,11 +143,9 @@ fn init_logging(
 /// subscriber already installed, so every fatal here is surfaced via the
 /// `?`-propagated error that `main` logs once.
 async fn run(
-    config: config::Config,
+    mut config: config::Config,
     log_rx: mpsc::Receiver<services::logging::AppLog>,
 ) -> anyhow::Result<()> {
-    auth::token::validate().map_err(anyhow::Error::msg)?;
-
     #[cfg(feature = "docker")]
     services::docker::set_socket_path(&config.docker.socket_path);
 
@@ -161,6 +159,14 @@ async fn run(
         .context("database connection")?;
 
     db.migrate().await.context("database migration")?;
+
+    // Resolve the effective JWT secret now that the DB is migrated: an
+    // operator-provided strong secret wins, otherwise fall back to the
+    // per-install secret generated and persisted on first boot.
+    let jwt_secret = auth::secret::resolve(&config.auth.jwt_secret, db.pool())
+        .await
+        .context("resolve JWT secret")?;
+    config.auth.jwt_secret = jwt_secret;
 
     let local_hardware = Arc::new(system_svc::get_hardware_info());
 

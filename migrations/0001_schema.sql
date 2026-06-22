@@ -52,6 +52,15 @@ CREATE TABLE vapid_keys (
     created_at  INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
+-- The JWT signing secret. An operator-provided strong secret (config/env)
+-- takes precedence; otherwise a per-install secret is generated on first boot
+-- and persisted here — same generate-or-load contract as vapid_keys above.
+CREATE TABLE server_secrets (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    jwt_secret TEXT    NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
 -- ─── RUNTIME CONFIG ─────────────────────────────────────────────────────────
 CREATE TABLE server_config (
     id                              INTEGER PRIMARY KEY CHECK (id = 1),
