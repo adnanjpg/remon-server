@@ -3,6 +3,24 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.2] - 2026-06-23
+
+### Breaking
+
+- A `server_secrets` table was folded into the initial migration (pre-1.0 policy — no migration chaining). Existing databases fail the migration checksum at boot: delete the database folder and re-pair devices after upgrading.
+
+### Changed
+
+- **JWT secret is now auto-managed.** A weak or unset `auth.jwt_secret` no longer aborts startup; the server generates a strong per-install secret on first boot and persists it in `server_secrets`. An explicit strong secret in config/env still takes precedence, so sharing or rotating a secret across instances is unchanged.
+
+### Fixed
+
+- Graceful shutdown is no longer triggered spuriously when the Ctrl+C / SIGTERM handler fails to install — the signal future stays pending on error instead of resolving immediately.
+- Probe scheduler aborts in-flight tasks for probes removed, disabled, or failed on reload.
+- SSE: the `journalctl` follower is killed when the client disconnects.
+- Services: enable/disable on a timer targets the `.timer` unit, not the `.service`.
+- Auth: refresh tokens are consumed single-use, closing the rotation race.
+
 ## [0.9.1] - 2026-06-10
 
 ### Added
