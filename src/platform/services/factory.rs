@@ -17,16 +17,16 @@ pub async fn create(init: &InitSystem) -> Arc<dyn ServiceManager> {
     {
         match init {
             InitSystem::Systemd => {
-                info!("Service backend: systemd");
+                info!("service backend: systemd");
                 Arc::new(super::systemd::SystemdManager)
             }
             InitSystem::OpenRc => {
-                info!("Service backend: OpenRC");
+                info!("service backend: OpenRC");
                 Arc::new(super::openrc::OpenRcManager)
             }
             _ => {
                 warn!(
-                    "Unknown Linux init system ({:?}); service management unavailable",
+                    "unknown Linux init system ({:?}); service management unavailable",
                     init
                 );
                 Arc::new(super::unsupported::UnsupportedManager)
@@ -37,7 +37,7 @@ pub async fn create(init: &InitSystem) -> Arc<dyn ServiceManager> {
     #[cfg(target_os = "windows")]
     {
         let _ = init;
-        info!("Service backend: Windows SCM (via PowerShell)");
+        info!("service backend: Windows SCM (via PowerShell)");
         Arc::new(super::windows_scm::WindowsScmManager::new())
     }
 

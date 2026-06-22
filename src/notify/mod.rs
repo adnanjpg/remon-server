@@ -62,9 +62,9 @@ impl NotificationManager {
             Ok(slots) => {
                 let count = slots.len();
                 *self.channels.write().await = slots;
-                info!("Notification channels loaded: {}", count);
+                info!("notification channels loaded: {}", count);
             }
-            Err(e) => warn!("Failed to load notification channels: {}", e),
+            Err(e) => warn!("failed to load notification channels: {}", e),
         }
     }
 

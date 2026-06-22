@@ -78,7 +78,7 @@ pub async fn load_or_generate(pool: &SqlitePool) -> Result<VapidKeyPair> {
         .execute(pool)
         .await
         .context("insert generated vapid_keys row")?;
-    log::info!("Generated and stored fresh VAPID keypair");
+    log::info!("generated and stored fresh VAPID keypair");
     Ok(pair)
 }
 

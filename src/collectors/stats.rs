@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use log::{debug, warn};
+use log::warn;
 use sysinfo::{Components, Disks, MINIMUM_CPU_UPDATE_INTERVAL, Networks, System};
 
 use crate::models::stats::{AllStats, PressureSnapshot, StatsEvent};
@@ -226,12 +226,6 @@ pub async fn run(state: Arc<AppState>) {
             db_write_dur,
         ]);
         tick_stats.flush_if_needed();
-
-        debug!(
-            "Stats collected: CPU {:.1}%, Memory {:.1}%",
-            cpu.usage_percent,
-            (memory.used_bytes as f64 / memory.total_bytes.max(1) as f64) * 100.0
-        );
 
         // Rebuild on interval change to avoid an immediate double-fire.
         let new_interval_ms = state

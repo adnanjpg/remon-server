@@ -25,6 +25,7 @@ pub fn build_cors_layer(cfg: &CorsConfig) -> Result<CorsLayer> {
         .allow_headers(allowed_headers);
 
     if cfg.allow_any_origin {
+        info!("CORS: allowing any origin");
         return Ok(base.allow_origin(AllowOrigin::any()));
     }
 
@@ -41,7 +42,7 @@ pub fn build_cors_layer(cfg: &CorsConfig) -> Result<CorsLayer> {
         .filter_map(|o| match HeaderValue::from_str(o) {
             Ok(v) => Some(v),
             Err(_) => {
-                error!("Skipping invalid CORS origin '{}'", o);
+                error!("skipping invalid CORS origin '{}'", o);
                 None
             }
         })

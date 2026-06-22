@@ -76,7 +76,7 @@ impl Database {
             .await?;
 
         info!(
-            "Connected to database (WAL, foreign_keys=ON, max_connections={}, cache={}MB, mmap={}MB)",
+            "connected to database (WAL, foreign_keys=ON, max_connections={}, cache={}MB, mmap={}MB)",
             max_connections,
             CACHE_SIZE_KB.unsigned_abs() / 1024,
             MMAP_SIZE_BYTES / 1024 / 1024
@@ -91,7 +91,7 @@ impl Database {
     /// `_sqlx_migrations` table that sqlx maintains automatically.
     pub async fn migrate(&self) -> anyhow::Result<()> {
         sqlx::migrate!("./migrations").run(&self.pool).await?;
-        info!("Database migrations applied");
+        info!("database migrations applied");
         Ok(())
     }
 

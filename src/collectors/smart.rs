@@ -63,8 +63,8 @@ async fn run(state: Arc<AppState>, cfg: SmartConfig) {
         }
         Err(e) => {
             info!(
-                "SMART collector: smartctl not available ('{}': {}) — disk health \
-                 monitoring off. Install smartmontools to enable.",
+                "SMART collector: smartctl not available ('{}': {}); disk health \
+                 monitoring off, install smartmontools to enable",
                 bin, e
             );
             return;

@@ -21,7 +21,7 @@ const PLACEHOLDER_SECRET: &str = "d3f4ult";
 /// per-install secret from the database.
 pub async fn resolve(configured: &str, pool: &SqlitePool) -> Result<String> {
     if is_strong(configured) {
-        log::info!("Using operator-provided JWT secret from config/env");
+        log::info!("using operator-provided JWT secret from config/env");
         return Ok(configured.to_string());
     }
 
@@ -29,7 +29,7 @@ pub async fn resolve(configured: &str, pool: &SqlitePool) -> Result<String> {
     // "operator set something, but it's too weak" (worth a warning).
     if configured != PLACEHOLDER_SECRET && !configured.is_empty() {
         log::warn!(
-            "Configured JWT secret is too weak ({} chars, minimum {}); using the \
+            "configured JWT secret is too weak ({} chars, minimum {}); using the \
              auto-generated per-install secret instead",
             configured.len(),
             MIN_SECRET_LEN
@@ -63,7 +63,7 @@ async fn load_or_generate(pool: &SqlitePool) -> Result<String> {
         .execute(pool)
         .await
         .context("insert generated server_secrets row")?;
-    log::info!("Generated and stored a fresh per-install JWT secret");
+    log::info!("generated and stored a fresh per-install JWT secret");
     Ok(secret)
 }
 

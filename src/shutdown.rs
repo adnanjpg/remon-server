@@ -2,14 +2,14 @@ use log::{error, info};
 
 pub async fn signal() {
     tokio::select! {
-        _ = ctrl_c() => info!("Received Ctrl+C, shutting down..."),
-        _ = terminate() => info!("Received SIGTERM, shutting down..."),
+        _ = ctrl_c() => info!("received ctrl+c, shutting down"),
+        _ = terminate() => info!("received SIGTERM, shutting down"),
     }
 }
 
 async fn ctrl_c() {
     if let Err(e) = tokio::signal::ctrl_c().await {
-        error!("Ctrl+C handler error: {}", e);
+        error!("ctrl+c handler error: {}", e);
         std::future::pending::<()>().await;
     }
 }
@@ -22,7 +22,7 @@ async fn terminate() {
             sig.recv().await;
         }
         Err(e) => {
-            error!("Failed to install SIGTERM handler: {}", e);
+            error!("failed to install SIGTERM handler: {}", e);
             std::future::pending::<()>().await;
         }
     }

@@ -119,6 +119,12 @@ async fn run(
     mut config: config::Config,
     log_rx: mpsc::Receiver<services::logging::AppLog>,
 ) -> anyhow::Result<()> {
+    info!(
+        "starting remon-server v{} (env={})",
+        env!("CARGO_PKG_VERSION"),
+        std::env::var("RUN_ENV").unwrap_or_else(|_| "development".into())
+    );
+
     #[cfg(feature = "docker")]
     services::docker::set_socket_path(&config.docker.socket_path);
 
@@ -157,7 +163,7 @@ async fn run(
     };
 
     let init_system = platform::init::detect();
-    info!("Init system detected: {:?}", init_system);
+    info!("init system detected: {:?}", init_system);
     let service_manager = platform::services::factory::create(&init_system).await;
 
     let probe_registry = probes::registry::new_registry();
@@ -192,7 +198,7 @@ async fn run(
         notify,
         vapid_keys,
     ));
-    info!("AppState initialized with broadcast channels and layered config");
+    info!("app state initialized with broadcast channels and layered config");
 
     services::logging::start_db_writer(log_rx, db.pool().clone());
 
@@ -203,7 +209,7 @@ async fn run(
     services::retention::spawn(app_state.clone());
     services::alerts::spawn(app_state.clone());
     services::sessions::spawn(app_state.clone());
-    info!("Rollup, retention, alert evaluator, and session cleanup workers spawned");
+    info!("rollup, retention, alert evaluator, and session cleanup workers spawned");
 
     let probe_dir = std::path::PathBuf::from("probes");
     let _ = probes::scheduler::load_and_spawn(
@@ -225,7 +231,7 @@ async fn run(
             SocketAddr::from(([0, 0, 0, 0], config.server.port))
         });
 
-    info!("Listening on http://{}", bind_addr);
+    info!("listening on http://{}", bind_addr);
 
     let listener = TcpListener::bind(bind_addr)
         .await
@@ -241,5 +247,6 @@ async fn run(
         error!("server error: {}", e);
     }
 
+    info!("shutdown complete");
     Ok(())
 }
