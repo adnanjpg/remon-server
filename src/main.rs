@@ -1,3 +1,4 @@
+use anyhow::Context;
 use axum::{
     Router,
     http::{HeaderName, HeaderValue, Method, StatusCode},
@@ -8,6 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 use tower_http::LatencyUnit;
 use tower_http::compression::{
     CompressionLayer,
@@ -57,6 +59,9 @@ fn init_tests() {
 
 #[tokio::main]
 async fn main() {
+    // Config load and logging install both run before the tracing subscriber
+    // exists, so their failures go to stderr + exit rather than through the
+    // log macros. Everything past this point logs via `error!`.
     let config = match config::Config::new() {
         Ok(cfg) => cfg,
         Err(e) => {
@@ -65,8 +70,27 @@ async fn main() {
         }
     };
 
-    // One tracing registry handles stdout and DB persistence. The default
-    // filter keeps dependency logs quiet unless RUST_LOG overrides it.
+    let log_rx = match init_logging(&config) {
+        Ok(rx) => rx,
+        Err(e) => {
+            eprintln!("Failed to initialize logging: {:#}", e);
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(e) = run(config, log_rx).await {
+        error!("fatal during startup: {:#}", e);
+        std::process::exit(1);
+    }
+}
+
+/// Install the tracing subscriber and return the receiver half of the
+/// DB-log channel (drained later by `start_db_writer`). One registry handles
+/// stdout and DB persistence; the default filter keeps dependency logs quiet
+/// unless `RUST_LOG` overrides it.
+fn init_logging(
+    config: &config::Config,
+) -> anyhow::Result<mpsc::Receiver<services::logging::AppLog>> {
     let level_str = config.logging.level.to_lowercase();
     let default_filter = format!(
         "remon_server={lvl},sqlx=warn,hyper=warn,h2=warn,rustls=warn,tower_http={lvl}",
@@ -76,7 +100,7 @@ async fn main() {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
 
     // Drained by `start_db_writer` once the DB connection is ready.
-    let (log_tx, log_rx) = tokio::sync::mpsc::channel::<services::logging::AppLog>(100);
+    let (log_tx, log_rx) = mpsc::channel::<services::logging::AppLog>(100);
     let persist_level =
         services::logging::parse_persist_level(&config.monitoring.log_insertion_level);
     let db_layer =
@@ -90,7 +114,7 @@ async fn main() {
         .with(db_layer);
 
     let format = config.logging.format.to_lowercase();
-    let install_result = match format.as_str() {
+    match format.as_str() {
         "json" => registry
             .with(tracing_subscriber::fmt::layer().with_ansi(false).json())
             .try_init(),
@@ -108,51 +132,44 @@ async fn main() {
                     .compact(),
             )
             .try_init(),
-    };
-    if let Err(e) = install_result {
-        eprintln!("Failed to install tracing subscriber: {}", e);
-        std::process::exit(1);
     }
-    if let Err(e) = auth::token::validate() {
-        error!("{}", e);
-        std::process::exit(1);
-    }
+    .map_err(|e| anyhow::anyhow!("install tracing subscriber: {e}"))?;
+
+    Ok(log_rx)
+}
+
+/// Boot the server: validate config, open the database, wire shared state,
+/// spawn background workers, and serve until shutdown. Runs with the tracing
+/// subscriber already installed, so every fatal here is surfaced via the
+/// `?`-propagated error that `main` logs once.
+async fn run(
+    config: config::Config,
+    log_rx: mpsc::Receiver<services::logging::AppLog>,
+) -> anyhow::Result<()> {
+    auth::token::validate().map_err(anyhow::Error::msg)?;
 
     #[cfg(feature = "docker")]
     services::docker::set_socket_path(&config.docker.socket_path);
 
-    if let Err(e) = tokio::fs::create_dir_all(&config.database.folder_path).await {
-        error!(
-            "Failed to create database folder {}: {:?}",
-            config.database.folder_path, e
-        );
-        std::process::exit(1);
-    }
+    tokio::fs::create_dir_all(&config.database.folder_path)
+        .await
+        .with_context(|| format!("create database folder {}", config.database.folder_path))?;
 
     let db_url = format!("sqlite:{}", config.database.path);
-    let db = match storage::Database::connect(&db_url, config.database.max_connections).await {
-        Ok(db) => db,
-        Err(e) => {
-            error!("Database connection failed: {:?}", e);
-            std::process::exit(1);
-        }
-    };
+    let db = storage::Database::connect(&db_url, config.database.max_connections)
+        .await
+        .context("database connection")?;
 
-    if let Err(e) = db.migrate().await {
-        error!("Database migration failed: {:?}", e);
-        std::process::exit(1);
-    }
+    db.migrate().await.context("database migration")?;
 
     let local_hardware = Arc::new(system_svc::get_hardware_info());
 
     // DB-backed runtime config overrides selected TOML defaults at boot.
-    let overrides = match db.config().load().await {
-        Ok(o) => o,
-        Err(e) => {
-            error!("Failed to load runtime config from DB: {:?}", e);
-            std::process::exit(1);
-        }
-    };
+    let overrides = db
+        .config()
+        .load()
+        .await
+        .context("load runtime config from DB")?;
 
     let effective_config = state::EffectiveConfig {
         server_name: overrides.server_name,
@@ -167,27 +184,19 @@ async fn main() {
     let probe_registry = probes::registry::new_registry();
 
     // Push delivery cannot work without a VAPID keypair.
-    let vapid_keys = match services::webpush::load_or_generate(db.pool()).await {
-        Ok(k) => Arc::new(k),
-        Err(e) => {
-            error!("Failed to load/generate VAPID keypair: {:?}", e);
-            std::process::exit(1);
-        }
-    };
+    let vapid_keys = Arc::new(
+        services::webpush::load_or_generate(db.pool())
+            .await
+            .context("load/generate VAPID keypair")?,
+    );
 
-    let notify = match notify::NotificationManager::new(
+    let notify = notify::NotificationManager::new(
         db.pool().clone(),
         config.notifications.clone(),
         Arc::clone(&vapid_keys),
     )
     .await
-    {
-        Ok(m) => m,
-        Err(e) => {
-            error!("Failed to initialize notification manager: {:?}", e);
-            std::process::exit(1);
-        }
-    };
+    .context("initialize notification manager")?;
 
     let app_state = Arc::new(state::AppState::new(
         db.pool().clone(),
@@ -225,7 +234,44 @@ async fn main() {
     )
     .await;
 
-    let cors_layer = build_cors_layer(&config.cors);
+    let app = build_router(app_state, &config)?;
+
+    let bind_addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
+        .parse()
+        .unwrap_or_else(|_| {
+            error!(
+                "Invalid server.host '{}', falling back to 0.0.0.0:{}",
+                config.server.host, config.server.port
+            );
+            SocketAddr::from(([0, 0, 0, 0], config.server.port))
+        });
+
+    info!("Listening on http://{}", bind_addr);
+
+    let listener = TcpListener::bind(bind_addr)
+        .await
+        .with_context(|| format!("bind on {bind_addr}"))?;
+
+    if let Err(e) = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown::signal())
+    .await
+    {
+        error!("server error: {}", e);
+    }
+
+    Ok(())
+}
+
+/// Assemble the full application router: REST (with request timeouts) merged
+/// with the long-lived SSE/WS streams, wrapped in the shared tower-http stack.
+fn build_router(
+    app_state: Arc<state::AppState>,
+    config: &config::Config,
+) -> anyhow::Result<Router> {
+    let cors_layer = build_cors_layer(&config.cors)?;
 
     // REST gets request timeouts; SSE/WS streams stay long-lived.
     let rest_router = routes::rest::create_routes(app_state.clone()).layer(
@@ -233,6 +279,7 @@ async fn main() {
     );
     let compression = CompressionLayer::new()
         .compress_when(DefaultPredicate::new().and(NotForContentType::new("text/event-stream")));
+
     let app = Router::new()
         .merge(rest_router)
         .nest("/sse", routes::sse::create_routes(app_state.clone()))
@@ -263,35 +310,7 @@ async fn main() {
         // this a browser sees an opaque CORS error instead of the real status.
         .layer(cors_layer);
 
-    let bind_addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
-        .parse()
-        .unwrap_or_else(|_| {
-            error!(
-                "Invalid server.host '{}', falling back to 0.0.0.0:{}",
-                config.server.host, config.server.port
-            );
-            SocketAddr::from(([0, 0, 0, 0], config.server.port))
-        });
-
-    info!("Listening on http://{}", bind_addr);
-
-    let listener = match TcpListener::bind(bind_addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            error!("Failed to bind on {}: {}", bind_addr, e);
-            std::process::exit(1);
-        }
-    };
-
-    if let Err(e) = axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown::signal())
-    .await
-    {
-        error!("server error: {}", e);
-    }
+    Ok(app)
 }
 
 /// Redact `access_token` query values before request URIs are logged.
@@ -313,7 +332,7 @@ fn redact_access_token(uri: &str) -> String {
 }
 
 /// Build CORS from config, failing fast when production allow-listing is empty.
-fn build_cors_layer(cfg: &config::CorsConfig) -> CorsLayer {
+fn build_cors_layer(cfg: &config::CorsConfig) -> anyhow::Result<CorsLayer> {
     let methods = [
         Method::GET,
         Method::POST,
@@ -332,15 +351,14 @@ fn build_cors_layer(cfg: &config::CorsConfig) -> CorsLayer {
         .allow_headers(allowed_headers);
 
     if cfg.allow_any_origin {
-        return base.allow_origin(AllowOrigin::any());
+        return Ok(base.allow_origin(AllowOrigin::any()));
     }
 
     if cfg.allowed_origins.is_empty() {
-        error!(
-            "FATAL: cors.allow_any_origin = false but cors.allowed_origins is empty. \
+        anyhow::bail!(
+            "cors.allow_any_origin = false but cors.allowed_origins is empty. \
              Set REMON__CORS__ALLOW_ANY_ORIGIN=true (dev) or populate allowed_origins."
         );
-        std::process::exit(1);
     }
 
     let parsed: Vec<HeaderValue> = cfg
@@ -356,8 +374,7 @@ fn build_cors_layer(cfg: &config::CorsConfig) -> CorsLayer {
         .collect();
 
     if parsed.is_empty() {
-        error!("FATAL: cors.allowed_origins had no valid entries");
-        std::process::exit(1);
+        anyhow::bail!("cors.allowed_origins had no valid entries");
     }
 
     info!(
@@ -365,7 +382,7 @@ fn build_cors_layer(cfg: &config::CorsConfig) -> CorsLayer {
         parsed.len(),
         if parsed.len() == 1 { "" } else { "s" }
     );
-    base.allow_origin(AllowOrigin::list(parsed))
+    Ok(base.allow_origin(AllowOrigin::list(parsed)))
 }
 
 #[cfg(test)]
