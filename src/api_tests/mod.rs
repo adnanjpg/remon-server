@@ -35,6 +35,20 @@ use crate::config::{AuthConfig, NotificationsConfig};
 use crate::notify::NotificationManager;
 use crate::state::{AppState, EffectiveConfig};
 
+/// Install a test-only tracing subscriber once, before any test runs, so
+/// `log::*` / `tracing::*` output stays visible under `cargo test`. Runs via
+/// `ctor` at test-binary load; `try_init` keeps it idempotent.
+#[ctor::ctor(unsafe)]
+fn init_test_logging() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("trace")),
+        )
+        .with_test_writer()
+        .try_init();
+}
+
 /// A wired-up server under test: the router plus the shared [`AppState`], so
 /// tests can both issue HTTP requests and inspect/seed internal state (e.g.
 /// read the active pairing code the server only prints to its terminal).

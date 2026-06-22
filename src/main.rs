@@ -38,24 +38,12 @@ mod middleware;
 mod models;
 mod platform;
 mod probes;
+mod request_log;
 mod services;
 mod shutdown;
 mod storage;
 
 use crate::services::system as system_svc;
-
-#[cfg(test)]
-#[ctor::ctor(unsafe)]
-fn init_tests() {
-    // Keep `log::*` output visible under `cargo test`.
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("trace")),
-        )
-        .with_test_writer()
-        .try_init();
-}
 
 #[tokio::main]
 async fn main() {
@@ -298,7 +286,7 @@ fn build_router(
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|req: &axum::http::Request<_>| {
-                    let uri = redact_access_token(&req.uri().to_string());
+                    let uri = request_log::redact_access_token(&req.uri().to_string());
                     tracing::info_span!(
                         "request",
                         method = %req.method(),
@@ -317,24 +305,6 @@ fn build_router(
         .layer(cors_layer);
 
     Ok(app)
-}
-
-/// Redact `access_token` query values before request URIs are logged.
-fn redact_access_token(uri: &str) -> String {
-    let Some((path, query)) = uri.split_once('?') else {
-        return uri.to_string();
-    };
-    let scrubbed: Vec<String> = query
-        .split('&')
-        .map(|pair| {
-            if pair.starts_with("access_token=") || pair == "access_token" {
-                "access_token=REDACTED".to_string()
-            } else {
-                pair.to_string()
-            }
-        })
-        .collect();
-    format!("{}?{}", path, scrubbed.join("&"))
 }
 
 /// Build CORS from config, failing fast when production allow-listing is empty.
@@ -389,38 +359,4 @@ fn build_cors_layer(cfg: &config::CorsConfig) -> anyhow::Result<CorsLayer> {
         if parsed.len() == 1 { "" } else { "s" }
     );
     Ok(base.allow_origin(AllowOrigin::list(parsed)))
-}
-
-#[cfg(test)]
-mod redact_tests {
-    use super::redact_access_token;
-
-    #[test]
-    fn no_query_passes_through() {
-        assert_eq!(redact_access_token("/sse/stats"), "/sse/stats");
-    }
-
-    #[test]
-    fn token_first_param_redacted() {
-        assert_eq!(
-            redact_access_token("/sse/stats?access_token=abc.def.ghi"),
-            "/sse/stats?access_token=REDACTED"
-        );
-    }
-
-    #[test]
-    fn token_with_other_params_redacted() {
-        assert_eq!(
-            redact_access_token("/sse/stats?foo=1&access_token=abc&bar=2"),
-            "/sse/stats?foo=1&access_token=REDACTED&bar=2"
-        );
-    }
-
-    #[test]
-    fn unrelated_query_untouched() {
-        assert_eq!(
-            redact_access_token("/processes?limit=10"),
-            "/processes?limit=10"
-        );
-    }
 }
