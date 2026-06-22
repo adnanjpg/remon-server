@@ -35,7 +35,7 @@ fn format_message(n: &Notification) -> String {
     let icon = match (n.event, n.severity) {
         (NotificationEvent::Fired, Severity::Crit) => "🔴",
         (NotificationEvent::Fired, Severity::Warn) => "🟡",
-        (NotificationEvent::Resolved, _) => "✅",
+        (NotificationEvent::Resolved, _) => "🟢",
     };
     let prefix = if n.event == NotificationEvent::Resolved {
         "Resolved: "
