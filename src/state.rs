@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use sqlx::SqlitePool;
 use tokio::sync::{Mutex, RwLock, broadcast};
 
+use crate::auth::session_cache::SessionCache;
 use crate::config::AuthConfig;
 use crate::models::process::ProcessList;
 use crate::models::stats::{AllStats, StatsEvent};
@@ -56,6 +57,11 @@ pub struct AppState {
 
     /// Active pairing window (only one at a time; see PAIRING_MAX_ATTEMPTS).
     pub pairing_state: RwLock<Option<PairingState>>,
+
+    /// Positive cache over `sessions` consulted by the auth middleware
+    /// before falling back to the DB. Revocation paths must evict —
+    /// see [`SessionCache`] for the contract.
+    pub session_cache: SessionCache,
 
     pub stats_tx: broadcast::Sender<StatsEvent>,
     /// Process snapshots are wrapped in `Arc` so a broadcast fan-out and
@@ -147,6 +153,7 @@ impl AppState {
             auth_config,
             trusted_proxy,
             pairing_state: RwLock::new(None),
+            session_cache: SessionCache::new(),
             stats_tx,
             processes_tx,
             stats_latest: Arc::new(RwLock::new(None)),

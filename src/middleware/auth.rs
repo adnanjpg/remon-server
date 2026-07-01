@@ -36,9 +36,15 @@ pub async fn auth_middleware(
         .validate_access_token(&token)
         .map_err(|_| AppError::InvalidToken)?;
 
-    let device_repo = DeviceRepository::new(state.db.clone());
-    if !device_repo.session_exists(&claims.jti).await? {
-        return Err(AppError::InvalidToken);
+    // Revocation check: positive in-memory cache first, DB on a miss. Only
+    // DB-confirmed jtis ever enter the cache; logout/rotation/revoke evict
+    // (see SessionCache for the staleness bound when they don't).
+    if !state.session_cache.check(&claims.jti) {
+        let device_repo = DeviceRepository::new(state.db.clone());
+        if !device_repo.session_exists(&claims.jti).await? {
+            return Err(AppError::InvalidToken);
+        }
+        state.session_cache.insert(&claims.jti);
     }
 
     req.extensions_mut().insert(Claims {

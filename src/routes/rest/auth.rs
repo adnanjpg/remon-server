@@ -92,6 +92,8 @@ pub async fn refresh(
     // itself is already gone), then issue and persist a fresh pair. Aggressive
     // by design — a parallel use of a stolen token logs both sides out.
     device_repo.delete_device_sessions(&claims.sub).await?;
+    // The wiped access jtis may still sit in the auth cache — drop them too.
+    state.session_cache.clear();
 
     let tokens = auth_service.create_tokens(&claims.sub)?;
     persist_session_pair(&device_repo, &claims.sub, &tokens).await?;
@@ -111,6 +113,7 @@ pub async fn refresh(
 pub async fn logout(State(state): State<Arc<AppState>>, claims: Claims) -> AppResult<StatusCode> {
     let device_repo = DeviceRepository::new(state.db.clone());
     device_repo.delete_session(&claims.jti).await?;
+    state.session_cache.evict(&claims.jti);
     info!(
         "Device {} logged out (jti={})",
         claims.device_id, claims.jti

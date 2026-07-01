@@ -102,5 +102,8 @@ pub async fn revoke_session(
 ) -> AppResult<StatusCode> {
     let repo = DeviceRepository::new(state.db.clone());
     repo.delete(&id).await?;
+    // The cascade happens inside SQLite, so there is no per-jti signal to
+    // evict on — drop the auth cache wholesale.
+    state.session_cache.clear();
     Ok(StatusCode::NO_CONTENT)
 }
