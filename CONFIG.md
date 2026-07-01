@@ -14,7 +14,7 @@ Set `RUN_ENV=production` to load `config/production.toml` (optional file, create
 ### `[database]`
 - `path` — SQLite file path
 - `folder_path` — created at boot if missing
-- `max_connections` — pool size (1 is correct for SQLite WAL)
+- `max_connections` — pool size (default: 5). WAL serialises writes but reads run concurrently, so keep this above 1 — with a single connection every short query queues behind long metrics-history scans.
 
 ### `[auth]`
 - `jwt_secret` — **change in production** (min 32 chars enforced)
