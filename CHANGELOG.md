@@ -3,6 +3,25 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.0] - 2026-07-05
+
+### Breaking
+
+- `heartbeat_checks` / `heartbeat_pings` tables were folded into the initial migration (pre-1.0 policy — no migration chaining). Existing databases fail the migration checksum at boot: delete the database folder and re-pair devices after upgrading.
+
+### Added
+
+- **Heartbeat checks** — push-model dead-man's switches, the inverse of a probe: an external job (cron, backup, anything that can `curl`) proves liveness by pinging an anonymous capability URL; missing the deadline (`period + grace`) flips the check to `down`. No scheduler and no watchdog task — state is derived from timestamps at read/eval time, so the alert rule's own tick is the deadline check and nothing new can leak.
+  - `GET|POST /ping/{slug}` (+ `/fail`, `/{exit_code}`) — the slug is the credential: 128-bit random, stored blake3-hashed, shown once at create/rotate, scrubbed from request logs like `access_token`. Fail bodies (≤4 KiB) land on the ping log for 3am debugging. Own per-IP rate-limit bucket sized for NAT'd cron fleets.
+  - **Pause windows** ("this silence is expected") — operator pause via `POST /heartbeats/{id}/pause` (indefinite / until / duration, 30d cap), or announced by the service itself via `POST /ping/{slug}/pause?duration=3h` (24h cap; bare form means "quiet until my next ping"). Operator always outranks service. A pause expiring re-anchors the deadline — one fresh `period + grace` instead of an instant page at window end.
+  - **`heartbeat` alert namespace** — `heartbeat.up < 1` (one unfiltered rule covers every check, current and future, via label_sets) and `heartbeat.late == 1` for a warn tier that holds through `down`. Paused/disabled checks read `up` so declared maintenance resolves an open alert instead of stranding it. Rules validate before the first check exists.
+  - CRUD under `/heartbeats` incl. slug rotation and a 30-day ping log (`/heartbeats/{id}/pings`).
+
+### Fixed
+
+- Alert evaluator: a label_set that vanished from resolver output while `firing` stranded forever — never resolved, never re-notified. Vanished `firing` rows now emit a synthetic resolve ("target removed") and are pruned; `pending` rows are pruned silently. Deleting or renaming an alert target (mount, probe stream, heartbeat check) is an ordinary operation now, not a state leak.
+- Alert events sharing the same second are returned in insertion order (`id` tiebreak) instead of arbitrary order.
+
 ## [0.9.2] - 2026-06-23
 
 ### Breaking
