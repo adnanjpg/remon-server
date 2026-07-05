@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, rule_id, label_set, event_type, severity,\n                    occurred_at, metric_value, notified as \"notified: bool\"\n               FROM alert_events\n              WHERE rule_id = ?\n              ORDER BY occurred_at DESC\n              LIMIT ? OFFSET ?",
+  "query": "SELECT id, rule_id, label_set, event_type, severity,\n                    occurred_at, metric_value, notified as \"notified: bool\"\n               FROM alert_events\n              WHERE rule_id = ?\n              ORDER BY occurred_at DESC, id DESC\n              LIMIT ? OFFSET ?",
   "describe": {
     "columns": [
       {
@@ -106,5 +106,5 @@
       false
     ]
   },
-  "hash": "e24f5dbf574dc500cc177794a7a9dc74dae2ed29d85614f3350680ac085474df"
+  "hash": "20d5718bcafc06739d2fabcf1ab977ba3d66e6aecc62a8188c90772d1a618e06"
 }

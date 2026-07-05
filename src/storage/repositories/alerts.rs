@@ -162,18 +162,28 @@ impl AlertRepository {
 
     // ===== alert_state =====
 
-    /// Remove an `Ok` state row for a label_set that disappeared from
-    /// resolver output. `Pending`/`Firing` rows are never touched here.
-    pub async fn delete_ok_state(&self, rule_id: i64, label_set: &str) -> AppResult<()> {
-        sqlx::query!(
+    /// Remove a state row for a label_set that disappeared from resolver
+    /// output — but only if it still holds `expected` state, so a row that
+    /// transitioned between the caller's snapshot and this delete survives.
+    /// Returns whether a row was actually deleted; the evaluator keys its
+    /// synthetic-resolve side effects off that.
+    pub async fn delete_state_if(
+        &self,
+        rule_id: i64,
+        label_set: &str,
+        expected: AlertLifecycle,
+    ) -> AppResult<bool> {
+        let expected = expected.as_str();
+        let r = sqlx::query!(
             "DELETE FROM alert_state
-              WHERE rule_id = ? AND label_set = ? AND state = 'ok'",
+              WHERE rule_id = ? AND label_set = ? AND state = ?",
             rule_id,
             label_set,
+            expected,
         )
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(r.rows_affected() > 0)
     }
 
     /// Upsert the current lifecycle for one (rule, label_set). The
@@ -302,7 +312,7 @@ impl AlertRepository {
                     occurred_at, metric_value, notified as "notified: bool"
                FROM alert_events
               WHERE rule_id = ?
-              ORDER BY occurred_at DESC
+              ORDER BY occurred_at DESC, id DESC
               LIMIT ? OFFSET ?"#,
             rule_id,
             limit,
@@ -323,7 +333,7 @@ impl AlertRepository {
             r#"SELECT id, rule_id, label_set, event_type, severity,
                     occurred_at, metric_value, notified as "notified: bool"
                FROM alert_events
-              ORDER BY occurred_at DESC
+              ORDER BY occurred_at DESC, id DESC
               LIMIT ? OFFSET ?"#,
             limit,
             offset,

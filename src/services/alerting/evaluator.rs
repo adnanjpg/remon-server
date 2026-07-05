@@ -24,10 +24,12 @@
 //!   `resolved` event; notification fans out unconditionally (recovery
 //!   is more useful than spam-protection here).
 //!
-//! Probe / built-in metric absence (resolver returns empty vec) is
-//! treated as "no current data": existing state rows are left alone,
-//! no transitions. A long absence eventually shows up as stale
-//! `last_eval_at`, which UI can highlight.
+//! Label_sets that vanish from resolver output are pruned: Ok and
+//! Pending rows silently (pending → ok is silent by design), Firing
+//! rows with a synthetic resolved event + notification ("target
+//! removed") — otherwise a deleted/renamed target would strand its
+//! Firing row forever, since nothing re-evaluates a label_set that
+//! stops appearing.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -171,7 +173,9 @@ async fn run_rule_loop(rule: AlertRule, state: Arc<AppState>) {
 }
 
 /// One eval pass: resolve, walk samples, transition state, emit events.
-async fn evaluate_once(
+/// `pub(crate)` so the API-test tier can drive single ticks without the
+/// supervisor's timing.
+pub(crate) async fn evaluate_once(
     rule: &AlertRule,
     expr: &Expression,
     state: &AppState,
@@ -345,16 +349,40 @@ async fn evaluate_once(
         }
     }
 
-    // Remove Ok rows for label_sets that vanished from resolver output.
+    // Prune state rows whose label_set vanished from resolver output.
+    // Ok and Pending go quietly; a Firing row gets a synthetic resolve
+    // first — its target is gone (check deleted, mount unmounted, probe
+    // data aged out) and nothing will ever flip it back otherwise. The
+    // state-guarded delete wins races: if the row transitioned between
+    // snapshot and delete, we skip side effects and re-examine next tick.
     for (label_set, prior) in &prior_by_label {
-        if !seen.contains(label_set)
-            && prior.state == AlertLifecycle::Ok
-            && let Err(e) = repo.delete_ok_state(rule.id, label_set).await
-        {
-            warn!(
+        if seen.contains(label_set) {
+            continue;
+        }
+        match repo.delete_state_if(rule.id, label_set, prior.state).await {
+            Ok(true) if prior.state == AlertLifecycle::Firing => {
+                let value = prior.last_value.unwrap_or(0.0);
+                let notified =
+                    resolve_notify(state, rule, label_set, value, Some("target removed")).await;
+                if let Err(e) = repo
+                    .insert_event(
+                        rule.id,
+                        label_set,
+                        AlertEventType::Resolved,
+                        rule.severity,
+                        prior.last_value,
+                        notified,
+                    )
+                    .await
+                {
+                    warn!("alert_events insert failed: {:?}", e);
+                }
+            }
+            Ok(_) => {}
+            Err(e) => warn!(
                 "alert_state prune failed for rule='{}' label={}: {:?}",
                 rule.name, label_set, e
-            );
+            ),
         }
     }
 

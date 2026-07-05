@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM alert_state\n              WHERE rule_id = ? AND label_set = ? AND state = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "e14b74a50e2159cc74377ddacdff83a3740494056c09bfa4ad517124dc3fbec2"
+}
