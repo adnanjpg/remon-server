@@ -1,6 +1,7 @@
 mod alerts;
 mod config;
 mod devices;
+mod heartbeats;
 pub mod logs;
 mod metrics;
 mod notifications;
@@ -13,6 +14,7 @@ mod smart;
 pub use alerts::{AlertRepository, UpsertAlertRule};
 pub use config::{ConfigRepository, RuntimeOverrides};
 pub use devices::DeviceRepository;
+pub use heartbeats::{HeartbeatRepository, UpsertHeartbeatCheck};
 pub use logs::LogRepository;
 pub use metrics::MetricsRepository;
 pub use notifications::{NotificationChannelRepository, NotificationChannelRow};

@@ -44,12 +44,13 @@ pub fn build_app(app_state: Arc<AppState>, config: &Config) -> anyhow::Result<Ro
         .with_state(app_state)
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(compression)
-        // SSE/WS browser clients authenticate via query string, so redact
-        // access_token before the URI reaches stdout or DB-backed logs.
+        // SSE/WS browser clients authenticate via query string and
+        // heartbeat pings carry their capability slug in the path, so
+        // scrub both before the URI reaches stdout or DB-backed logs.
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|req: &axum::http::Request<_>| {
-                    let uri = request_log::redact_access_token(&req.uri().to_string());
+                    let uri = request_log::redact_uri(&req.uri().to_string());
                     tracing::info_span!(
                         "request",
                         method = %req.method(),

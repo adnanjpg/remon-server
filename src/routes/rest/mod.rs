@@ -4,12 +4,14 @@ pub mod auth;
 pub mod cron;
 #[cfg(feature = "docker")]
 pub mod docker;
+pub mod heartbeats;
 pub mod logs;
 pub mod me;
 pub mod metrics;
 pub mod misc;
 pub mod notifications;
 pub mod pairing;
+pub mod ping;
 pub mod probes;
 pub mod process;
 pub mod push;
@@ -35,6 +37,31 @@ use tower_http::limit::RequestBodyLimitLayer;
 /// any handler code runs.
 const ANON_AUTH_BODY_LIMIT: usize = 8 * 1024;
 
+/// The heartbeat ping router. Anonymous — the slug is the credential —
+/// so it gets its own per-IP governor, sized for the legitimate case of
+/// many cron jobs behind one NAT (burst 60, then ~1 req/s sustained)
+/// rather than the auth limiter's brute-force posture. Online brute force
+/// against a 128-bit slug space is a non-issue at any of these rates.
+fn ping_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route(
+            "/ping/{slug}",
+            get(ping::ping_success).post(ping::ping_success),
+        )
+        .route(
+            "/ping/{slug}/fail",
+            get(ping::ping_fail).post(ping::ping_fail),
+        )
+        // POST-only: a pasted URL must not let a link prefetcher flip
+        // monitoring state.
+        .route("/ping/{slug}/pause", post(ping::ping_pause))
+        .route("/ping/{slug}/resume", post(ping::ping_resume))
+        .route(
+            "/ping/{slug}/{exit_code}",
+            get(ping::ping_exit_code).post(ping::ping_exit_code),
+        )
+}
+
 /// Build the REST router. Public routes are merged with protected routes; the
 /// latter run through `auth_middleware` (which needs `AppState` for the
 /// session/jti revocation check, hence the explicit `state` argument).
@@ -54,7 +81,7 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
     // under abuse. Spawned once per limiter; duplicated inside each branch
     // because the limiter's concrete type depends on the key extractor and
     // a generic helper would mean importing `governor`'s internals.
-    let rate_limited_auth = if state.trusted_proxy {
+    let (rate_limited_auth, rate_limited_ping) = if state.trusted_proxy {
         let conf = Arc::new(
             GovernorConfigBuilder::default()
                 .per_second(12)
@@ -72,13 +99,37 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
                 limiter.retain_recent();
             }
         });
-        Router::new()
+        let auth_router = Router::new()
             .route("/auth/pair/initiate", post(pairing::initiate_pairing))
             .route("/auth/pair/complete", post(pairing::complete_pairing))
             .route("/auth/login", post(auth::login))
             .route("/auth/refresh", post(auth::refresh))
             .layer(GovernorLayer::new(conf))
-            .layer(RequestBodyLimitLayer::new(ANON_AUTH_BODY_LIMIT))
+            .layer(RequestBodyLimitLayer::new(ANON_AUTH_BODY_LIMIT));
+
+        let ping_conf = Arc::new(
+            GovernorConfigBuilder::default()
+                .per_second(1)
+                .burst_size(60)
+                .key_extractor(SmartIpKeyExtractor)
+                .finish()
+                .expect("valid governor config"),
+        );
+        let ping_limiter = ping_conf.limiter().clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(60));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                ping_limiter.retain_recent();
+            }
+        });
+        // No per-route body limit: fail bodies are read capped (4 KiB)
+        // inside the handlers so an oversized trace truncates instead of
+        // 413-ing away the fail signal; the app-wide 64 KiB limit stays.
+        let ping_router = ping_routes().layer(GovernorLayer::new(ping_conf));
+
+        (auth_router, ping_router)
     } else {
         let conf = Arc::new(
             GovernorConfigBuilder::default()
@@ -96,19 +147,40 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
                 limiter.retain_recent();
             }
         });
-        Router::new()
+        let auth_router = Router::new()
             .route("/auth/pair/initiate", post(pairing::initiate_pairing))
             .route("/auth/pair/complete", post(pairing::complete_pairing))
             .route("/auth/login", post(auth::login))
             .route("/auth/refresh", post(auth::refresh))
             .layer(GovernorLayer::new(conf))
-            .layer(RequestBodyLimitLayer::new(ANON_AUTH_BODY_LIMIT))
+            .layer(RequestBodyLimitLayer::new(ANON_AUTH_BODY_LIMIT));
+
+        let ping_conf = Arc::new(
+            GovernorConfigBuilder::default()
+                .per_second(1)
+                .burst_size(60)
+                .finish()
+                .expect("valid governor config"),
+        );
+        let ping_limiter = ping_conf.limiter().clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(60));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                ping_limiter.retain_recent();
+            }
+        });
+        let ping_router = ping_routes().layer(GovernorLayer::new(ping_conf));
+
+        (auth_router, ping_router)
     };
 
     let public_routes = Router::new()
         .route("/health", get(misc::healthcheck))
         .route("/ready", get(misc::ready))
-        .merge(rate_limited_auth);
+        .merge(rate_limited_auth)
+        .merge(rate_limited_ping);
 
     let protected_routes = Router::new()
         .route("/auth/logout", post(auth::logout))
@@ -196,6 +268,28 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
             "/metrics/probe/{probe_name}/{metric_name}",
             get(probes::get_probe_metric_history),
         )
+        // Heartbeat checks — push-model dead-man's switches. The paired
+        // anonymous ping surface is `ping_routes()` above; alerting goes
+        // through the `heartbeat` resolver namespace (heartbeat.up < 1).
+        .route(
+            "/heartbeats",
+            get(heartbeats::list_heartbeats).post(heartbeats::create_heartbeat),
+        )
+        .route(
+            "/heartbeats/{id}",
+            get(heartbeats::get_heartbeat)
+                .put(heartbeats::update_heartbeat)
+                .delete(heartbeats::delete_heartbeat),
+        )
+        .route(
+            "/heartbeats/{id}/pause",
+            post(heartbeats::pause_heartbeat).delete(heartbeats::resume_heartbeat),
+        )
+        .route(
+            "/heartbeats/{id}/rotate-slug",
+            post(heartbeats::rotate_heartbeat_slug),
+        )
+        .route("/heartbeats/{id}/pings", get(heartbeats::list_heartbeat_pings))
         // Notification channels
         .route(
             "/notifications/channels",

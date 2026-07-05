@@ -633,6 +633,17 @@ impl MetricsRepository {
                     .execute(&self.pool)
                     .await?
             }
+            "heartbeat_pings" => {
+                if resolution != "raw" {
+                    return Ok(0);
+                }
+                sqlx::query!(
+                    "DELETE FROM heartbeat_pings WHERE received_at < ?",
+                    cutoff_ts
+                )
+                .execute(&self.pool)
+                .await?
+            }
             "alert_events" => {
                 if resolution != "raw" {
                     return Ok(0);

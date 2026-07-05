@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO heartbeat_checks\n                (name, description, slug_hash, period_secs, grace_secs, enabled,\n                 paused_at, pause_origin, pause_reason, created_at, updated_at)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": []
+  },
+  "hash": "92294e11802ce1ccc9f4a3f576614e350d644cfa5f4e12114beba702ac9cd433"
+}

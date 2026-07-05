@@ -37,6 +37,9 @@ pub enum AppError {
     #[error("Resource already exists")]
     AlreadyExists,
 
+    #[error("{0}")]
+    Conflict(String),
+
     // ===== Validation =====
     #[error("{0}")]
     BadRequest(String),
@@ -127,6 +130,7 @@ impl IntoResponse for AppError {
                 "ALREADY_EXISTS",
                 "Resource already exists".to_string(),
             ),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, "CONFLICT", msg.clone()),
 
             // 410 Gone
             AppError::PairingExpired => (

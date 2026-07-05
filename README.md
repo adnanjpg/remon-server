@@ -14,6 +14,7 @@ Server component of Remon — a self-hosted system monitoring platform. Exposes 
 - **Alert engine** — expression-based rules (`cpu.usage_percent > 80`), pending/firing/ok lifecycle, configurable for-duration and cooldown
 - **Notification channels** — FCM, Telegram, ntfy, webhook; managed via REST API
 - **Custom probes** — shell scripts with inline YAML header; drop into `probes/`, hot-reload via `POST /probes/reload`
+- **Heartbeat checks** — push-model dead-man's switches for cron jobs and external services: `curl` a capability URL on schedule, alert when it goes quiet (`heartbeat.up < 1`); pause windows for planned downtime, service-announced via the same URL
 - **Device pairing** — 8-digit code, Argon2-hashed token, JWT access+refresh with JTI revocation
 
 ## Requirements
@@ -87,6 +88,36 @@ See `probes/examples/` for a full example. Reload without restart:
 curl -X POST http://localhost:8080/probes/reload \
   -H "Authorization: Bearer $TOKEN"
 ```
+
+## Heartbeat Checks
+
+The inverse of a probe: instead of the server running a script, an external
+job proves it is alive by pinging a capability URL. Miss the deadline
+(`period + grace`) and the check reads `down`; the first ping brings it back.
+
+```sh
+# Create a check (the slug is shown ONCE — store it in the job's env)
+curl -X POST http://localhost:8080/heartbeats \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"db-backup","period_secs":86400,"grace_secs":3600}'
+
+# From the monitored job — no token needed, the slug is the credential:
+curl https://remon.example.com/ping/<slug>          # I'm alive
+curl https://remon.example.com/ping/<slug>/$?       # report exit code
+curl -X POST .../ping/<slug>/fail --data 'trace'    # explicit failure
+
+# Planned downtime, announced by the service itself (capped at 24h):
+curl -X POST '.../ping/<slug>/pause?duration=3h&reason=deploy'
+curl -X POST .../ping/<slug>/resume                 # done early
+```
+
+Alerting goes through the normal rule engine — one unfiltered rule covers
+every check, present and future: `heartbeat.up < 1` (crit). Add
+`heartbeat.late == 1` (warn) to hear about the grace window before the page.
+Operator pauses (`POST /heartbeats/{id}/pause`, indefinite allowed) always
+override service-announced ones. When a pause expires the check gets one
+fresh `period + grace` before it can go down — maintenance ending is not an
+instant page.
 
 ## Build without Docker
 

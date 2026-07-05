@@ -126,7 +126,12 @@ pub async fn logout(State(state): State<Arc<AppState>>, claims: Claims) -> AppRe
 /// true (deployer has opted in), prefer the leftmost XFF entry, which is the
 /// real client under any proxy that strips incoming XFF before adding its
 /// own. Falls back to the peer if XFF is absent or malformed.
-fn extract_client_ip(headers: &HeaderMap, addr: &SocketAddr, trust_proxy: bool) -> String {
+/// `pub(crate)`: the heartbeat ping log records the same audit IP.
+pub(crate) fn extract_client_ip(
+    headers: &HeaderMap,
+    addr: &SocketAddr,
+    trust_proxy: bool,
+) -> String {
     if trust_proxy
         && let Some(v) = headers
             .get("x-forwarded-for")

@@ -126,8 +126,9 @@ INSERT INTO retention_policy (resource, resolution, keep_seconds) VALUES
     ('components',   '1m',  604800),
     ('components',   '5m',  2592000),
     ('components',   '1h',  31536000),
-    ('logs',         'raw', 2592000),
-    ('probe_runs',   'raw', 2592000),
+    ('logs',            'raw', 2592000),
+    ('probe_runs',      'raw', 2592000),
+    ('heartbeat_pings', 'raw', 2592000),
     ('probe',        'raw', 86400),
     ('probe',        '1m',  604800),
     ('probe',        '5m',  2592000),
@@ -338,6 +339,61 @@ CREATE TABLE probe_runs (
 
 CREATE INDEX idx_probe_runs_name_ts ON probe_runs(probe_name, timestamp DESC);
 CREATE INDEX idx_probe_runs_ts      ON probe_runs(timestamp DESC);
+
+-- ─── HEARTBEATS ─────────────────────────────────────────────────────────────
+-- Push-model dead-man's switches: an external job proves liveness by pinging
+-- an anonymous capability URL (/ping/{slug}). The inverse of a probe — no
+-- scheduler, no watchdog task. State (up/late/down/…) is a pure function of
+-- the timestamps below, derived at read/eval time; see models/heartbeat.rs
+-- for the anchor formula. Severity stays in alert_rules (heartbeat.up < 1).
+CREATE TABLE heartbeat_checks (
+    id               INTEGER PRIMARY KEY,
+    name             TEXT    NOT NULL UNIQUE,
+    description      TEXT,
+    -- blake3 hex of the capability slug. The slug itself is returned once
+    -- at create/rotate and never stored; high-entropy (128-bit), so a fast
+    -- hash suffices — Argon2 here would just tax the ping hot path.
+    slug_hash        TEXT    NOT NULL UNIQUE,
+    period_secs      INTEGER NOT NULL,
+    grace_secs       INTEGER NOT NULL,
+    enabled          INTEGER NOT NULL DEFAULT 1,
+    last_ping_at     INTEGER,
+    -- `failed` is the explicit-failure latch: /fail (and nonzero exit
+    -- codes) set it, the next success clears it. A write-order flag, not
+    -- a timestamp comparison — epoch-second ties would misread rapid
+    -- fail→recover sequences. last_fail_at is display metadata.
+    failed           INTEGER NOT NULL DEFAULT 0,
+    last_fail_at     INTEGER,
+    -- Pause = "this silence is expected". Active while paused_at is set and
+    -- (paused_until IS NULL — operator-indefinite — or now < paused_until).
+    -- Expired pause columns are never cleared: a stale paused_until
+    -- re-anchors the down-deadline so maintenance expiry grants one fresh
+    -- period+grace instead of firing the instant the window lapses.
+    -- pause_until_ping marks a bare service pause ("quiet until I ping
+    -- again"); it is the only pause a success ping auto-resumes.
+    paused_at        INTEGER,
+    paused_until     INTEGER,
+    pause_origin     TEXT CHECK (pause_origin IN ('operator','service')),
+    pause_reason     TEXT,
+    pause_until_ping INTEGER NOT NULL DEFAULT 0,
+    created_at       INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at       INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+-- One row per accepted ping-family request; the check's timeline.
+-- `body` is captured only for fail/nonzero-exit pings, truncated server-side.
+CREATE TABLE heartbeat_pings (
+    id          INTEGER PRIMARY KEY,
+    check_id    INTEGER NOT NULL REFERENCES heartbeat_checks(id) ON DELETE CASCADE,
+    received_at INTEGER NOT NULL,
+    kind        TEXT    NOT NULL CHECK (kind IN ('success','fail','pause','resume')),
+    exit_code   INTEGER,
+    source_ip   TEXT,
+    user_agent  TEXT,
+    body        TEXT
+);
+CREATE INDEX idx_heartbeat_pings_check ON heartbeat_pings(check_id, received_at DESC);
+CREATE INDEX idx_heartbeat_pings_ts    ON heartbeat_pings(received_at DESC);
 
 -- ─── ALERT ENGINE ───────────────────────────────────────────────────────────
 -- Expression syntax: <metric_ref> <comparator> <number>

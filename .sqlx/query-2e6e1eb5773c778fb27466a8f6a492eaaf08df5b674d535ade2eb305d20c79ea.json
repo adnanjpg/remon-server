@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM heartbeat_pings WHERE received_at < ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "2e6e1eb5773c778fb27466a8f6a492eaaf08df5b674d535ade2eb305d20c79ea"
+}

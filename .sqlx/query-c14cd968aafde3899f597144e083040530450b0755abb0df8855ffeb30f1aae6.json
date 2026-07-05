@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE heartbeat_checks SET\n                last_ping_at = MAX(COALESCE(last_ping_at, 0), ?),\n                failed = 0,\n                paused_until = CASE\n                    WHEN pause_until_ping = 1 AND paused_until > ? THEN ?\n                    ELSE paused_until END,\n                pause_until_ping = 0\n              WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "c14cd968aafde3899f597144e083040530450b0755abb0df8855ffeb30f1aae6"
+}

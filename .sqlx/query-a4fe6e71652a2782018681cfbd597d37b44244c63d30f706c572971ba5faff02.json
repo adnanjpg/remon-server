@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE heartbeat_checks SET\n                failed       = 0,\n                paused_until = MAX(COALESCE(paused_until, 0), ?)\n              WHERE id = ?\n                AND NOT (paused_at IS NOT NULL AND paused_until IS NULL)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "a4fe6e71652a2782018681cfbd597d37b44244c63d30f706c572971ba5faff02"
+}

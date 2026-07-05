@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE heartbeat_checks SET slug_hash = ?, updated_at = unixepoch() WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "1bbdf520db527447fd92070cae7691418c816d0f35d2ae88d179b7528d226831"
+}

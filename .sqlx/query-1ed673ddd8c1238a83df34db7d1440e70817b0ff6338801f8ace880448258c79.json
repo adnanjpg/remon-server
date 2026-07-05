@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO heartbeat_pings\n                (check_id, received_at, kind, exit_code, source_ip, user_agent, body)\n             VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "1ed673ddd8c1238a83df34db7d1440e70817b0ff6338801f8ace880448258c79"
+}

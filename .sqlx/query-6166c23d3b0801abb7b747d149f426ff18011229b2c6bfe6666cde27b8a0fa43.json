@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, check_id, received_at, kind, exit_code, source_ip, user_agent, body\n               FROM heartbeat_pings\n              WHERE check_id = ?\n              ORDER BY received_at DESC, id DESC\n              LIMIT ? OFFSET ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "heartbeat_pings",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "check_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "heartbeat_pings",
+            "name": "check_id"
+          }
+        }
+      },
+      {
+        "name": "received_at",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "heartbeat_pings",
+            "name": "received_at"
+          }
+        }
+      },
+      {
+        "name": "kind",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "heartbeat_pings",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "exit_code",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "heartbeat_pings",
+            "name": "exit_code"
+          }
+        }
+      },
+      {
+        "name": "source_ip",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "heartbeat_pings",
+            "name": "source_ip"
+          }
+        }
+      },
+      {
+        "name": "user_agent",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "heartbeat_pings",
+            "name": "user_agent"
+          }
+        }
+      },
+      {
+        "name": "body",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "heartbeat_pings",
+            "name": "body"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "6166c23d3b0801abb7b747d149f426ff18011229b2c6bfe6666cde27b8a0fa43"
+}

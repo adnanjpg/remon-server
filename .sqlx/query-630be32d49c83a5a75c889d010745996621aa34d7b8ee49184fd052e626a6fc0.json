@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE heartbeat_checks SET\n                failed = 1,\n                last_fail_at = MAX(COALESCE(last_fail_at, 0), ?)\n              WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "630be32d49c83a5a75c889d010745996621aa34d7b8ee49184fd052e626a6fc0"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE heartbeat_checks SET\n                paused_at        = ?,\n                paused_until     = ?,\n                pause_origin     = 'service',\n                pause_reason     = ?,\n                pause_until_ping = ?,\n                updated_at       = unixepoch()\n              WHERE id = ?\n                AND NOT (paused_at IS NOT NULL\n                         AND pause_origin = 'operator'\n                         AND (paused_until IS NULL OR paused_until > ?))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "69ec27e0e4b8cbfb83d19543755f01999f19b5d0dddf0af3d1c536e998cb1263"
+}

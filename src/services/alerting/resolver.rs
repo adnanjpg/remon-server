@@ -167,6 +167,10 @@ const SMART_I64: &[&str] = &[
 // Live-check namespace; resolved via ServiceManager, not the DB.
 const SERVICE_FIELDS: &[&str] = &["up"];
 
+// Heartbeat checks; state derived from heartbeat_checks timestamps at
+// resolve time — the rule's eval tick IS the deadline check.
+const HEARTBEAT_FIELDS: &[&str] = &["up", "late"];
+
 // ===== Public entry =====
 
 /// DB-only entry. Service-namespace rules error out here; use
@@ -257,6 +261,7 @@ async fn resolve_inner(
             .await
         }
         "probe" => resolve_probe(pool, metric).await,
+        "heartbeat" => resolve_heartbeat(pool, metric).await,
         "service" => match services {
             Some(sm) => resolve_service(sm.as_ref(), metric).await,
             None => Err(ResolveError::msg(
@@ -509,6 +514,79 @@ async fn resolve_probe(
         .collect())
 }
 
+// ===== Heartbeat namespace =====
+
+/// Resolve `heartbeat.up` / `heartbeat.late` from the check registry.
+///
+/// One sample per existing check, every tick, INCLUDING disabled and
+/// paused ones — the evaluator strands a Firing label_set that stops
+/// appearing, so "no sample" is reserved for checks that were deleted
+/// (which the evaluator prune then resolves). A `{check=...}` filter
+/// matching nothing yields an empty vec, never an error: rules must be
+/// creatable before their check and must survive a rename underneath.
+///
+/// `up` is 0 only for down/failed. `late` rises at the grace boundary
+/// and stays 1 through down/failed, so a warn-tier `late == 1` rule
+/// doesn't resolve while things get worse.
+async fn resolve_heartbeat(
+    pool: &SqlitePool,
+    metric: &MetricRef,
+) -> Result<Vec<ResolvedSample>, ResolveError> {
+    let field = check_field(metric, HEARTBEAT_FIELDS)?;
+
+    let mut name_filter: Option<&str> = None;
+    for (k, v) in &metric.labels {
+        if k == "check" {
+            name_filter = Some(v.as_str());
+        } else {
+            return Err(ResolveError::msg(format!(
+                "namespace 'heartbeat' supports only the 'check' label, got '{}'",
+                k
+            )));
+        }
+    }
+
+    let repo = crate::storage::repositories::HeartbeatRepository::new(pool.clone());
+    let checks = repo
+        .list_all()
+        .await
+        .map_err(|e| ResolveError::msg(format!("heartbeat lookup failed: {}", e)))?;
+
+    use crate::models::heartbeat::HeartbeatState;
+    let now = chrono::Utc::now().timestamp();
+
+    Ok(checks
+        .into_iter()
+        .filter(|c| name_filter.is_none_or(|f| c.name == f))
+        .map(|c| {
+            let state = c.state(now);
+            let up = !matches!(state, HeartbeatState::Down | HeartbeatState::Failed);
+            let late = matches!(
+                state,
+                HeartbeatState::Late | HeartbeatState::Down | HeartbeatState::Failed
+            );
+            let value = match field {
+                "late" => late as i64 as f64,
+                _ => up as i64 as f64,
+            };
+            let meta = match state {
+                HeartbeatState::Paused => match c.paused_until {
+                    Some(until) => format!("paused until {}", until),
+                    None => "paused".to_string(),
+                },
+                s => s.as_str().to_string(),
+            };
+            let mut labels = BTreeMap::new();
+            labels.insert("check".to_string(), c.name);
+            ResolvedSample {
+                label_set: canonical_labels(&labels),
+                value,
+                meta: Some(meta),
+            }
+        })
+        .collect())
+}
+
 // ===== Service namespace =====
 
 async fn resolve_service(
@@ -638,6 +716,25 @@ mod tests {
                 uncorrectable_sectors INTEGER, udma_crc_errors INTEGER,
                 percentage_used INTEGER, available_spare_percent INTEGER,
                 media_errors INTEGER
+            );
+            CREATE TABLE heartbeat_checks (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT,
+                slug_hash TEXT NOT NULL UNIQUE,
+                period_secs INTEGER NOT NULL,
+                grace_secs INTEGER NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                last_ping_at INTEGER,
+                failed INTEGER NOT NULL DEFAULT 0,
+                last_fail_at INTEGER,
+                paused_at INTEGER,
+                paused_until INTEGER,
+                pause_origin TEXT,
+                pause_reason TEXT,
+                pause_until_ping INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
             );
         "#;
         pool.execute(schema).await.expect("schema");
@@ -1002,6 +1099,111 @@ mod tests {
         .unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].value, 1532.0);
+    }
+
+    async fn seed_heartbeat(
+        pool: &SqlitePool,
+        name: &str,
+        period: i64,
+        grace: i64,
+        enabled: bool,
+        last_ping_at: Option<i64>,
+    ) {
+        sqlx::query(
+            "INSERT INTO heartbeat_checks
+                (name, slug_hash, period_secs, grace_secs, enabled, last_ping_at,
+                 created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(name)
+        .bind(format!("hash-{}", name))
+        .bind(period)
+        .bind(grace)
+        .bind(enabled)
+        .bind(last_ping_at)
+        .bind(0_i64)
+        .bind(0_i64)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn heartbeat_up_emits_every_check() {
+        let pool = fixture().await;
+        let now = chrono::Utc::now().timestamp();
+        // Fresh ping → up; silent for ages → down; disabled → still emitted, up.
+        seed_heartbeat(&pool, "fresh", 3600, 300, true, Some(now)).await;
+        seed_heartbeat(&pool, "silent", 60, 30, true, Some(now - 86_400)).await;
+        seed_heartbeat(&pool, "off", 60, 30, false, Some(now - 86_400)).await;
+
+        let mut out = resolve(&pool, &metric("heartbeat", "up", &[]))
+            .await
+            .unwrap();
+        out.sort_by(|a, b| a.label_set.cmp(&b.label_set));
+        assert_eq!(out.len(), 3, "disabled checks must keep emitting");
+        assert_eq!(out[0].label_set, r#"{"check":"fresh"}"#);
+        assert_eq!(out[0].value, 1.0);
+        assert_eq!(out[1].label_set, r#"{"check":"off"}"#);
+        assert_eq!(out[1].value, 1.0);
+        assert_eq!(out[1].meta.as_deref(), Some("disabled"));
+        assert_eq!(out[2].label_set, r#"{"check":"silent"}"#);
+        assert_eq!(out[2].value, 0.0);
+        assert_eq!(out[2].meta.as_deref(), Some("down"));
+    }
+
+    #[tokio::test]
+    async fn heartbeat_late_stays_violated_through_down() {
+        let pool = fixture().await;
+        let now = chrono::Utc::now().timestamp();
+        // Past period but inside grace → late; past deadline → down. Both
+        // must read late=1 so a warn rule doesn't resolve as things worsen.
+        seed_heartbeat(&pool, "graceful", 60, 3600, true, Some(now - 120)).await;
+        seed_heartbeat(&pool, "gone", 60, 30, true, Some(now - 86_400)).await;
+
+        let mut out = resolve(&pool, &metric("heartbeat", "late", &[]))
+            .await
+            .unwrap();
+        out.sort_by(|a, b| a.label_set.cmp(&b.label_set));
+        assert_eq!(out[0].meta.as_deref(), Some("down"));
+        assert_eq!(out[0].value, 1.0);
+        assert_eq!(out[1].meta.as_deref(), Some("late"));
+        assert_eq!(out[1].value, 1.0);
+
+        // The graceful one is still up=1 while late.
+        let out = resolve(
+            &pool,
+            &metric("heartbeat", "up", &[("check", "graceful")]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].value, 1.0);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_filter_miss_is_empty_not_error() {
+        let pool = fixture().await;
+        let out = resolve(
+            &pool,
+            &metric("heartbeat", "up", &[("check", "no-such-check")]),
+        )
+        .await
+        .unwrap();
+        assert!(out.is_empty(), "rules must be creatable before their check");
+    }
+
+    #[tokio::test]
+    async fn heartbeat_unknown_field_and_label_rejected() {
+        let pool = fixture().await;
+        let err = resolve(&pool, &metric("heartbeat", "age_secs", &[]))
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("not valid"));
+        let err = resolve(&pool, &metric("heartbeat", "up", &[("unit", "x")]))
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("'check'"));
     }
 
     #[tokio::test]

@@ -753,6 +753,34 @@ fn build_alerts_schema() -> AlertsSchemaResponse {
                 }],
             },
             NamespaceSchemaDto {
+                name: "heartbeat",
+                description: "Push heartbeat checks. Derived at eval time from the last ping: up flips to 0 past period+grace (or on an explicit fail), late flips to 1 at the period boundary and stays 1 through down. Paused/disabled checks read as up.",
+                dynamic_metrics: false,
+                metrics: vec![
+                    MetricSchemaDto {
+                        name: "up",
+                        unit: None,
+                        description: Some("0 when down or failed, 1 otherwise (incl. paused/disabled)"),
+                        value_type: "bool",
+                    },
+                    MetricSchemaDto {
+                        name: "late",
+                        unit: None,
+                        description: Some("1 from the grace boundary on; holds through down/failed — warn tier"),
+                        value_type: "bool",
+                    },
+                ],
+                labels: vec![LabelSchemaDto {
+                    name: "check",
+                    required: false,
+                    values: None,
+                    source: Some(LabelSourceDto {
+                        endpoint: "/heartbeats",
+                        json_path: "checks[].name",
+                    }),
+                }],
+            },
+            NamespaceSchemaDto {
                 name: "service",
                 description: "Live OS service state. Resolver returns 1 when Running, 0 otherwise; the actual state name (failed/stopped/...) is included in the notification body.",
                 dynamic_metrics: false,
