@@ -206,6 +206,19 @@ pub(crate) async fn evaluate_once(
     for sample in &samples {
         seen.insert(sample.label_set.clone());
 
+        // NaN/inf poisons every comparator (ordered ones read false, `!=`
+        // reads true), silently neutralizing or spuriously firing the
+        // rule. Treat the sample as "no data this tick": state is left
+        // alone, and it stays in `seen` so the prune below doesn't
+        // mistake it for a vanished target.
+        if !sample.value.is_finite() {
+            warn!(
+                "Alert rule '{}' label={}: non-finite sample ({}) skipped",
+                rule.name, sample.label_set, sample.value
+            );
+            continue;
+        }
+
         let violating = expr.comparator.evaluate(sample.value, expr.threshold);
 
         let prior_state = prior_by_label

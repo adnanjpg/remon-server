@@ -352,8 +352,16 @@ impl<'a> Parser<'a> {
             }
         }
         let text = &self.src[start..self.pos];
-        text.parse::<f64>()
-            .map_err(|_| self.err(format!("could not parse '{}' as number", text)))
+        let n = text
+            .parse::<f64>()
+            .map_err(|_| self.err(format!("could not parse '{}' as number", text)))?;
+        // A long-enough digit string parses to ±inf, which no ordered
+        // comparator can ever satisfy — reject at write time instead of
+        // letting the rule silently never fire.
+        if !n.is_finite() {
+            return Err(self.err(format!("threshold '{}' is out of range", text)));
+        }
+        Ok(n)
     }
 }
 
@@ -363,6 +371,15 @@ mod tests {
 
     fn must_parse(s: &str) -> Expression {
         parse(s).unwrap_or_else(|e| panic!("expected '{}' to parse, got {}", s, e))
+    }
+
+    #[test]
+    fn overflowing_threshold_rejected() {
+        // Parses to +inf, which no ordered comparator can satisfy — the
+        // rule would validate and then silently never fire.
+        let huge = format!("cpu.usage_percent > 1{}", "0".repeat(400));
+        let err = parse(&huge).unwrap_err();
+        assert!(err.to_string().contains("out of range"));
     }
 
     #[test]
