@@ -40,6 +40,13 @@ const PROBE_PERMITS: usize = 5;
 static PROBE_GATE: LazyLock<Arc<Semaphore>> =
     LazyLock::new(|| Arc::new(Semaphore::new(PROBE_PERMITS)));
 
+/// Serializes load passes. `load_and_spawn` is read-diff-write over the
+/// registry with no lock held across the pass; two concurrent reloads
+/// interleave so both see a probe as "already running", both spawn, and
+/// the second `insert` drops the first task's JoinHandle detached — a
+/// zombie loop that keeps firing child processes forever.
+static LOAD_PASS: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 /// Grace window for an aborted probe task to drop its DB connection and
 /// file handles before the replacement spawns. Windows file locks are
 /// mandatory — parallel runs can hit "process cannot access file".
@@ -220,6 +227,8 @@ pub async fn load_and_spawn(
     registry: ProbeRegistry,
     db: SqlitePool,
 ) -> LoadReport {
+    // One pass at a time — see LOAD_PASS.
+    let _pass = LOAD_PASS.lock().await;
     let mut report = LoadReport::default();
     let repo = ProbeRepository::new(db.clone());
 
