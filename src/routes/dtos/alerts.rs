@@ -68,6 +68,8 @@ pub struct CreateAlertRuleRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpdateAlertRuleRequest {
     pub name: Option<String>,
+    /// Absent = leave as-is; explicit `null` = clear.
+    #[serde(default, deserialize_with = "super::double_option")]
     pub description: Option<Option<String>>,
     pub enabled: Option<bool>,
     pub expression: Option<String>,
@@ -75,10 +77,11 @@ pub struct UpdateAlertRuleRequest {
     pub for_duration_secs: Option<i64>,
     pub eval_interval_secs: Option<i64>,
     pub cooldown_secs: Option<i64>,
-    /// Absolute unix-epoch timestamp. `Some(None)` clears the silence.
-    /// Prefer the dedicated `POST/DELETE /alerts/{id}/silence` endpoints
-    /// when the intent is just "silence this rule" — that path doesn't
-    /// re-validate the entire expression.
+    /// Absolute unix-epoch timestamp; explicit `null` clears the
+    /// silence. Prefer the dedicated `POST/DELETE /alerts/{id}/silence`
+    /// endpoints when the intent is just "silence this rule" — that path
+    /// doesn't re-validate the entire expression.
+    #[serde(default, deserialize_with = "super::double_option")]
     pub silenced_until: Option<Option<i64>>,
 }
 

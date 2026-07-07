@@ -93,3 +93,61 @@ async fn schema_endpoint_returns_catalogue() {
     assert!(body["namespaces"].is_array());
     assert!(body["comparators"].is_array());
 }
+
+#[tokio::test]
+async fn explicit_null_clears_description_and_silence() {
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+
+    let (st, body) = app
+        .request(
+            "POST",
+            "/alerts",
+            Some(&token),
+            Some(serde_json::json!({
+                "name": "nullable",
+                "description": "temporary note",
+                "expression": "cpu.usage_percent > 80",
+                "severity": "warn",
+            })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::CREATED);
+    let id = body["id"].as_i64().unwrap();
+
+    let (st, _) = app
+        .request(
+            "POST",
+            &format!("/alerts/{id}/silence"),
+            Some(&token),
+            Some(serde_json::json!({"duration_secs": 600})),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK);
+
+    // Omitting a field leaves it alone…
+    let (st, body) = app
+        .request(
+            "PUT",
+            &format!("/alerts/{id}"),
+            Some(&token),
+            Some(serde_json::json!({"name": "nullable2"})),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(body["description"], "temporary note");
+    assert!(body["silenced_until"].is_i64());
+
+    // …an explicit null clears it.
+    let (st, body) = app
+        .request(
+            "PUT",
+            &format!("/alerts/{id}"),
+            Some(&token),
+            Some(serde_json::json!({"description": null, "silenced_until": null})),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(body["description"].is_null(), "null must clear description");
+    assert!(body["silenced_until"].is_null(), "null must clear silence");
+}

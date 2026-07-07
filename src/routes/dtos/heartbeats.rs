@@ -80,10 +80,8 @@ pub struct CreateHeartbeatRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpdateHeartbeatRequest {
     pub name: Option<String>,
-    /// Absent = leave as-is; explicit `null` = clear. Plain serde folds
-    /// JSON null into the outer `None`, so the field needs the
-    /// present-vs-absent deserializer to make `Some(None)` reachable.
-    #[serde(default, deserialize_with = "double_option")]
+    /// Absent = leave as-is; explicit `null` = clear.
+    #[serde(default, deserialize_with = "super::double_option")]
     pub description: Option<Option<String>>,
     pub period_secs: Option<i64>,
     pub grace_secs: Option<i64>,
@@ -145,15 +143,6 @@ impl From<HeartbeatPing> for HeartbeatPingDto {
 #[derive(Debug, Serialize)]
 pub struct ListHeartbeatPingsResponse {
     pub pings: Vec<HeartbeatPingDto>,
-}
-
-/// Present (even as null) → `Some(inner)`; absent → `None` via
-/// `#[serde(default)]`.
-fn double_option<'de, D>(de: D) -> Result<Option<Option<String>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Option::<String>::deserialize(de).map(Some)
 }
 
 fn default_true() -> bool {
