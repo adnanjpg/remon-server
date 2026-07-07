@@ -143,7 +143,15 @@ async fn apply_success(
     repo.record_success(check.id, now).await?;
     log_ping(
         &repo,
-        &log_row(check.id, now, PingKind::Success, None, source_ip, headers, None),
+        &log_row(
+            check.id,
+            now,
+            PingKind::Success,
+            None,
+            source_ip,
+            headers,
+            None,
+        ),
     )
     .await?;
     Ok(())
@@ -162,7 +170,15 @@ async fn apply_fail(
     repo.record_fail(check.id, now).await?;
     log_ping(
         &repo,
-        &log_row(check.id, now, PingKind::Fail, exit_code, source_ip, headers, body),
+        &log_row(
+            check.id,
+            now,
+            PingKind::Fail,
+            exit_code,
+            source_ip,
+            headers,
+            body,
+        ),
     )
     .await?;
     Ok(())

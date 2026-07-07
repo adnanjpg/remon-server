@@ -760,13 +760,17 @@ fn build_alerts_schema() -> AlertsSchemaResponse {
                     MetricSchemaDto {
                         name: "up",
                         unit: None,
-                        description: Some("0 when down or failed, 1 otherwise (incl. paused/disabled)"),
+                        description: Some(
+                            "0 when down or failed, 1 otherwise (incl. paused/disabled)",
+                        ),
                         value_type: "bool",
                     },
                     MetricSchemaDto {
                         name: "late",
                         unit: None,
-                        description: Some("1 from the grace boundary on; holds through down/failed — warn tier"),
+                        description: Some(
+                            "1 from the grace boundary on; holds through down/failed — warn tier",
+                        ),
                         value_type: "bool",
                     },
                 ],

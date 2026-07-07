@@ -289,7 +289,10 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
             "/heartbeats/{id}/rotate-slug",
             post(heartbeats::rotate_heartbeat_slug),
         )
-        .route("/heartbeats/{id}/pings", get(heartbeats::list_heartbeat_pings))
+        .route(
+            "/heartbeats/{id}/pings",
+            get(heartbeats::list_heartbeat_pings),
+        )
         // Notification channels
         .route(
             "/notifications/channels",

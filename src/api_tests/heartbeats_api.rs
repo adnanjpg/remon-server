@@ -6,7 +6,12 @@ use serde_json::json;
 
 use super::TestApp;
 
-async fn create_check(app: &TestApp, token: &str, name: &str, body_extra: serde_json::Value) -> (i64, String) {
+async fn create_check(
+    app: &TestApp,
+    token: &str,
+    name: &str,
+    body_extra: serde_json::Value,
+) -> (i64, String) {
     let mut body = json!({
         "name": name,
         "period_secs": 60,
@@ -42,13 +47,20 @@ async fn create_ping_lifecycle() {
     assert_eq!(check_state(&app, &token, id).await, "waiting");
 
     // Anonymous success ping flips it up.
-    let (st, body) = app.request("GET", &format!("/ping/{slug}"), None, None).await;
+    let (st, body) = app
+        .request("GET", &format!("/ping/{slug}"), None, None)
+        .await;
     assert_eq!(st, StatusCode::OK, "ping failed: {body}");
     assert_eq!(check_state(&app, &token, id).await, "up");
 
     // The ping is on the log, newest first.
     let (st, body) = app
-        .request("GET", &format!("/heartbeats/{id}/pings"), Some(&token), None)
+        .request(
+            "GET",
+            &format!("/heartbeats/{id}/pings"),
+            Some(&token),
+            None,
+        )
         .await;
     assert_eq!(st, StatusCode::OK);
     let pings = body["pings"].as_array().expect("pings");
@@ -72,7 +84,9 @@ async fn unknown_and_malformed_slugs_404_uniformly() {
         "ZZ112233445566778899AABBCCDDEEFF",
         "00112233445566778899aabbccddeeff0", // 33 chars
     ] {
-        let (st, _) = app.request("GET", &format!("/ping/{slug}"), None, None).await;
+        let (st, _) = app
+            .request("GET", &format!("/ping/{slug}"), None, None)
+            .await;
         assert_eq!(st, StatusCode::NOT_FOUND, "slug {slug:?} must 404");
     }
 }
@@ -97,7 +111,12 @@ async fn exit_code_path_and_fail_latch() {
 
     // Healthy window elapsing does not clear an explicit fail…
     let (st, body) = app
-        .request("GET", &format!("/heartbeats/{id}/pings"), Some(&token), None)
+        .request(
+            "GET",
+            &format!("/heartbeats/{id}/pings"),
+            Some(&token),
+            None,
+        )
         .await;
     assert_eq!(st, StatusCode::OK);
     let pings = body["pings"].as_array().unwrap();
@@ -109,12 +128,16 @@ async fn exit_code_path_and_fail_latch() {
     );
 
     // …but exit 0 (success spelling) does.
-    let (st, _) = app.request("GET", &format!("/ping/{slug}/0"), None, None).await;
+    let (st, _) = app
+        .request("GET", &format!("/ping/{slug}/0"), None, None)
+        .await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(check_state(&app, &token, id).await, "up");
 
     // /fail without body also latches.
-    let (st, _) = app.request("POST", &format!("/ping/{slug}/fail"), None, None).await;
+    let (st, _) = app
+        .request("POST", &format!("/ping/{slug}/fail"), None, None)
+        .await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(check_state(&app, &token, id).await, "failed");
 
@@ -153,7 +176,9 @@ async fn service_pause_window_and_resume() {
     assert_eq!(body["pause_reason"], "deploy");
 
     // A ping during a DECLARED window is recorded but does not resume.
-    let (st, _) = app.request("GET", &format!("/ping/{slug}"), None, None).await;
+    let (st, _) = app
+        .request("GET", &format!("/ping/{slug}"), None, None)
+        .await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(check_state(&app, &token, id).await, "paused");
 
@@ -216,7 +241,9 @@ async fn bare_service_pause_auto_resumes_on_ping() {
     assert_eq!(check_state(&app, &token, id).await, "paused");
 
     // "Quiet until I ping again" — the next success ping lifts it.
-    let (st, _) = app.request("GET", &format!("/ping/{slug}"), None, None).await;
+    let (st, _) = app
+        .request("GET", &format!("/ping/{slug}"), None, None)
+        .await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(check_state(&app, &token, id).await, "up");
 }
@@ -243,7 +270,12 @@ async fn operator_pause_beats_service() {
 
     // Service can neither pause over it nor resume it.
     let (st, _) = app
-        .request("POST", &format!("/ping/{slug}/pause?duration=1h"), None, None)
+        .request(
+            "POST",
+            &format!("/ping/{slug}/pause?duration=1h"),
+            None,
+            None,
+        )
         .await;
     assert_eq!(st, StatusCode::CONFLICT);
     let (st, _) = app
@@ -252,13 +284,20 @@ async fn operator_pause_beats_service() {
     assert_eq!(st, StatusCode::CONFLICT);
 
     // A success ping does not lift an operator pause either.
-    let (st, _) = app.request("GET", &format!("/ping/{slug}"), None, None).await;
+    let (st, _) = app
+        .request("GET", &format!("/ping/{slug}"), None, None)
+        .await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(check_state(&app, &token, id).await, "paused");
 
     // Operator resume: fresh window, not instant-down.
     let (st, _) = app
-        .request("DELETE", &format!("/heartbeats/{id}/pause"), Some(&token), None)
+        .request(
+            "DELETE",
+            &format!("/heartbeats/{id}/pause"),
+            Some(&token),
+            None,
+        )
         .await;
     assert_eq!(st, StatusCode::NO_CONTENT);
     assert_eq!(check_state(&app, &token, id).await, "up");
@@ -272,7 +311,7 @@ async fn operator_pause_validation() {
 
     for bad in [
         json!({"until": 100, "duration_secs": 100}),
-        json!({"until": 100}),          // in the past
+        json!({"until": 100}), // in the past
         json!({"duration_secs": 0}),
         json!({"duration_secs": 100 * 86_400}), // over the 30d ceiling
     ] {
@@ -295,7 +334,9 @@ async fn disabled_checks_404_and_reenable_grants_a_fresh_window() {
     let (id, slug) = create_check(&app, &token, "seasonal", json!({})).await;
 
     // Latch a failure, then disable with the ping clock deep in the past.
-    let (st, _) = app.request("POST", &format!("/ping/{slug}/fail"), None, None).await;
+    let (st, _) = app
+        .request("POST", &format!("/ping/{slug}/fail"), None, None)
+        .await;
     assert_eq!(st, StatusCode::OK);
     let past = chrono::Utc::now().timestamp() - 86_400;
     sqlx::query("UPDATE heartbeat_checks SET last_ping_at = ?, last_fail_at = ? WHERE id = ?")
@@ -348,7 +389,12 @@ async fn operator_pause_accepts_an_empty_body() {
 
     // No body at all — the documented indefinite form.
     let (st, body) = app
-        .request("POST", &format!("/heartbeats/{id}/pause"), Some(&token), None)
+        .request(
+            "POST",
+            &format!("/heartbeats/{id}/pause"),
+            Some(&token),
+            None,
+        )
         .await;
     assert_eq!(st, StatusCode::OK, "empty body must pause: {body}");
     assert_eq!(body["state"], "paused");
@@ -407,7 +453,12 @@ async fn oversized_fail_body_truncates_instead_of_413() {
     assert_eq!(check_state(&app, &token, id).await, "failed");
 
     let (_, body) = app
-        .request("GET", &format!("/heartbeats/{id}/pings"), Some(&token), None)
+        .request(
+            "GET",
+            &format!("/heartbeats/{id}/pings"),
+            Some(&token),
+            None,
+        )
         .await;
     let stored = body["pings"][0]["body"].as_str().expect("captured body");
     assert_eq!(stored.len(), 4096, "stored body must be capped at 4 KiB");
@@ -513,9 +564,13 @@ async fn rotate_slug_invalidates_the_old_url() {
     let new_slug = body["slug"].as_str().expect("new slug").to_string();
     assert_ne!(new_slug, old_slug);
 
-    let (st, _) = app.request("GET", &format!("/ping/{old_slug}"), None, None).await;
+    let (st, _) = app
+        .request("GET", &format!("/ping/{old_slug}"), None, None)
+        .await;
     assert_eq!(st, StatusCode::NOT_FOUND, "old slug must be dead");
-    let (st, _) = app.request("GET", &format!("/ping/{new_slug}"), None, None).await;
+    let (st, _) = app
+        .request("GET", &format!("/ping/{new_slug}"), None, None)
+        .await;
     assert_eq!(st, StatusCode::OK);
 }
 
@@ -565,7 +620,9 @@ async fn alert_fires_on_down_and_prune_resolves_on_delete() {
         .await;
     assert_eq!(st, StatusCode::CREATED, "rule create failed: {body}");
 
-    let (st, _) = app.request("GET", &format!("/ping/{slug}"), None, None).await;
+    let (st, _) = app
+        .request("GET", &format!("/ping/{slug}"), None, None)
+        .await;
     assert_eq!(st, StatusCode::OK);
 
     // Push the last ping deep into the past — deaf for an hour on a
@@ -583,8 +640,12 @@ async fn alert_fires_on_down_and_prune_resolves_on_delete() {
     let expr = expression::parse(&rule.expression).expect("parse");
 
     // Tick 1: ok → pending. Tick 2 (for=0): pending → firing.
-    evaluator::evaluate_once(&rule, &expr, &app.state).await.unwrap();
-    evaluator::evaluate_once(&rule, &expr, &app.state).await.unwrap();
+    evaluator::evaluate_once(&rule, &expr, &app.state)
+        .await
+        .unwrap();
+    evaluator::evaluate_once(&rule, &expr, &app.state)
+        .await
+        .unwrap();
     let states = repo.list_state_for_rule(rule.id).await.unwrap();
     assert_eq!(states.len(), 1);
     assert_eq!(states[0].label_set, r#"{"check":"watched"}"#);
@@ -602,7 +663,9 @@ async fn alert_fires_on_down_and_prune_resolves_on_delete() {
         .await;
     assert_eq!(st, StatusCode::NO_CONTENT);
 
-    evaluator::evaluate_once(&rule, &expr, &app.state).await.unwrap();
+    evaluator::evaluate_once(&rule, &expr, &app.state)
+        .await
+        .unwrap();
     let states = repo.list_state_for_rule(rule.id).await.unwrap();
     assert!(states.is_empty(), "firing row must be pruned, not stranded");
     let events = repo.events_for_rule(rule.id, 10, 0).await.unwrap();
@@ -649,8 +712,12 @@ async fn declaring_pause_resolves_a_firing_alert() {
     let repo = AlertRepository::new(app.state.db.clone());
     let rule = repo.list_enabled().await.unwrap().pop().unwrap();
     let expr = expression::parse(&rule.expression).unwrap();
-    evaluator::evaluate_once(&rule, &expr, &app.state).await.unwrap();
-    evaluator::evaluate_once(&rule, &expr, &app.state).await.unwrap();
+    evaluator::evaluate_once(&rule, &expr, &app.state)
+        .await
+        .unwrap();
+    evaluator::evaluate_once(&rule, &expr, &app.state)
+        .await
+        .unwrap();
     assert_eq!(
         repo.list_state_for_rule(rule.id).await.unwrap()[0].state,
         crate::models::alert::AlertLifecycle::Firing
@@ -666,7 +733,9 @@ async fn declaring_pause_resolves_a_firing_alert() {
         )
         .await;
     assert_eq!(st, StatusCode::OK);
-    evaluator::evaluate_once(&rule, &expr, &app.state).await.unwrap();
+    evaluator::evaluate_once(&rule, &expr, &app.state)
+        .await
+        .unwrap();
     assert_eq!(
         repo.list_state_for_rule(rule.id).await.unwrap()[0].state,
         crate::models::alert::AlertLifecycle::Ok

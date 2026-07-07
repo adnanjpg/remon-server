@@ -1171,12 +1171,9 @@ mod tests {
         assert_eq!(out[1].value, 1.0);
 
         // The graceful one is still up=1 while late.
-        let out = resolve(
-            &pool,
-            &metric("heartbeat", "up", &[("check", "graceful")]),
-        )
-        .await
-        .unwrap();
+        let out = resolve(&pool, &metric("heartbeat", "up", &[("check", "graceful")]))
+            .await
+            .unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].value, 1.0);
     }
