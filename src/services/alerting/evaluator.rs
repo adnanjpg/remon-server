@@ -78,7 +78,7 @@ async fn run_supervisor(state: Arc<AppState>) {
         let rules = match repo.list_enabled().await {
             Ok(r) => r,
             Err(e) => {
-                warn!("Alert supervisor: reload failed, will retry: {:?}", e);
+                warn!("alert supervisor: reload failed, will retry: {:?}", e);
                 continue;
             }
         };
@@ -93,7 +93,7 @@ async fn run_supervisor(state: Arc<AppState>) {
         for id in removed {
             if let Some((task, _)) = running.remove(&id) {
                 info!(
-                    "Alert supervisor: rule id={} removed or disabled, stopping task",
+                    "alert supervisor: rule id={} removed or disabled, stopping task",
                     id
                 );
                 task.abort();
@@ -112,13 +112,13 @@ async fn run_supervisor(state: Arc<AppState>) {
             if needs_start {
                 if let Some((task, _)) = running.remove(&rule.id) {
                     info!(
-                        "Alert supervisor: rule '{}' (id={}) changed, restarting task",
+                        "alert supervisor: rule '{}' (id={}) changed, restarting task",
                         rule.name, rule.id
                     );
                     task.abort();
                 } else {
                     info!(
-                        "Alert supervisor: rule '{}' (id={}) starting task",
+                        "alert supervisor: rule '{}' (id={}) starting task",
                         rule.name, rule.id
                     );
                 }
@@ -141,7 +141,7 @@ async fn run_rule_loop(rule: AlertRule, state: Arc<AppState>) {
         Ok(e) => e,
         Err(e) => {
             warn!(
-                "Alert rule '{}' expression invalid: {} — task exiting",
+                "alert rule '{}' expression invalid: {}, task exiting",
                 rule.name, e
             );
             return;
@@ -149,7 +149,7 @@ async fn run_rule_loop(rule: AlertRule, state: Arc<AppState>) {
     };
 
     info!(
-        "Alert rule '{}' (id={}, severity={}, every {}s, for {}s) running",
+        "alert rule '{}' (id={}, severity={}, every {}s, for {}s) running",
         rule.name,
         rule.id,
         rule.severity.as_str(),
@@ -167,7 +167,7 @@ async fn run_rule_loop(rule: AlertRule, state: Arc<AppState>) {
     loop {
         ticker.tick().await;
         if let Err(e) = evaluate_once(&rule, &parsed, &state).await {
-            warn!("Alert rule '{}' eval failed: {}", rule.name, e);
+            warn!("alert rule '{}' eval failed: {}", rule.name, e);
         }
     }
 }
@@ -213,7 +213,7 @@ pub(crate) async fn evaluate_once(
         // mistake it for a vanished target.
         if !sample.value.is_finite() {
             warn!(
-                "Alert rule '{}' label={}: non-finite sample ({}) skipped",
+                "alert rule '{}' label={}: non-finite sample ({}) skipped",
                 rule.name, sample.label_set, sample.value
             );
             continue;
@@ -257,7 +257,7 @@ pub(crate) async fn evaluate_once(
                     // next genuine fire after the window ends isn't also gated by
                     // cooldown. Event row still gets recorded with notified=false.
                     debug!(
-                        "Alert rule '{}' label={} fire suppressed by silence (until {})",
+                        "alert rule '{}' label={} fire suppressed by silence (until {})",
                         rule.name,
                         sample.label_set,
                         rule.silenced_until.unwrap_or(0)
@@ -265,7 +265,7 @@ pub(crate) async fn evaluate_once(
                     (Some(AlertEventType::Fired), false)
                 } else if cooled_in {
                     debug!(
-                        "Alert rule '{}' label={} fire suppressed by cooldown",
+                        "alert rule '{}' label={} fire suppressed by cooldown",
                         rule.name, sample.label_set
                     );
                     (Some(AlertEventType::Fired), false)

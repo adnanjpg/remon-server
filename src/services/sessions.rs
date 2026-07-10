@@ -32,7 +32,7 @@ async fn run(state: Arc<AppState>) {
 async fn sweep(repo: &DeviceRepository) {
     match repo.cleanup_expired_sessions().await {
         Ok(0) => {}
-        Ok(n) => debug!("Session cleanup: removed {} expired session(s)", n),
-        Err(e) => warn!("Session cleanup failed: {:?}", e),
+        Ok(n) => debug!("session cleanup: removed {} expired session(s)", n),
+        Err(e) => warn!("session cleanup failed: {:?}", e),
     }
 }

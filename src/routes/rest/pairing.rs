@@ -47,7 +47,7 @@ pub async fn initiate_pairing(
     // Audit trail: log that a window opened, but never the code itself —
     // logs may be shipped to centralized sinks that aren't trust-equivalent
     // to the host terminal.
-    info!("Pairing window opened (ttl_secs={})", ttl);
+    info!("pairing window opened (ttl_secs={})", ttl);
 
     // Terminal-only display (stdout, not the log pipeline). Possession of the
     // code requires physical/SSH access to the host running the server.
@@ -115,13 +115,13 @@ pub async fn complete_pairing(
         PairingOutcome::Success => {}
         PairingOutcome::WrongCode { remaining } => {
             warn!(
-                "Pairing complete failed: wrong code ({} attempts remaining)",
+                "pairing complete failed: wrong code ({} attempts remaining)",
                 remaining
             );
             return Err(AppError::PairingExpired);
         }
         PairingOutcome::AttemptsExhausted => {
-            warn!("Pairing complete failed: attempts exhausted, code invalidated");
+            warn!("pairing complete failed: attempts exhausted, code invalidated");
             return Err(AppError::PairingExpired);
         }
         PairingOutcome::NoActiveCode | PairingOutcome::Expired => {
@@ -159,12 +159,12 @@ pub async fn complete_pairing(
         && let Err(e) = device_repo.set_fcm_token(&device_id, Some(token)).await
     {
         warn!(
-            "Failed to register FCM token for newly paired device {}: {:?}",
+            "failed to register FCM token for newly paired device {}: {:?}",
             device_id, e
         );
     }
 
-    info!("New device paired: {} ({})", device_id, req.device_name);
+    info!("new device paired: {} ({})", device_id, req.device_name);
 
     Ok(Json(PairCompleteResponse {
         device_id,

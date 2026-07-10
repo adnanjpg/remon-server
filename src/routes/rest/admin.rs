@@ -110,7 +110,7 @@ pub async fn patch_config(
     }
 
     info!(
-        "Runtime config updated: stats={}ms processes={}ms rollup={}ms retention={}ms",
+        "runtime config updated: stats={}ms processes={}ms rollup={}ms retention={}ms",
         merged.collector_stats_interval_ms,
         merged.processes_cache_ttl_ms,
         merged.rollup_tick_interval_ms,

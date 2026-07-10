@@ -88,7 +88,7 @@ impl NotificationManager {
                 && let Err(e) = check_url(&url, &webhook_policy).await
             {
                 warn!(
-                    "Skipping {} channel '{}': {} — \
+                    "skipping {} channel '{}': {}; \
                      see CONFIG.md [notifications.webhook] for allow-list options",
                     row.r#type, row.name, e
                 );
@@ -112,7 +112,7 @@ impl NotificationManager {
                     min_severity: parse_severity(row.min_severity.as_deref()),
                     inner: Arc::from(ch),
                 }),
-                Err(e) => warn!("Skipping channel '{}' ({}): {}", row.name, row.r#type, e),
+                Err(e) => warn!("skipping channel '{}' ({}): {}", row.name, row.r#type, e),
             }
         }
         Ok(slots)
@@ -243,15 +243,15 @@ async fn send_with_retry(
     if channel.self_retries() {
         return match tokio::time::timeout(FANOUT_TIMEOUT, channel.send(notif)).await {
             Ok(Ok(n)) => {
-                debug!("Channel '{}' delivered {} notification(s)", name, n);
+                debug!("channel '{}' delivered {} notification(s)", name, n);
                 n
             }
             Ok(Err(e)) => {
-                warn!("Channel '{}' failed: {}", name, e);
+                warn!("channel '{}' failed: {}", name, e);
                 0
             }
             Err(_) => {
-                warn!("Channel '{}' timed out after {:?}", name, FANOUT_TIMEOUT);
+                warn!("channel '{}' timed out after {:?}", name, FANOUT_TIMEOUT);
                 0
             }
         };
@@ -267,26 +267,26 @@ async fn send_with_retry(
 
     match attempt_once().await {
         Ok(n) => {
-            debug!("Channel '{}' delivered {} notification(s)", name, n);
+            debug!("channel '{}' delivered {} notification(s)", name, n);
             n
         }
         Err(first_err) => {
             debug!(
-                "Channel '{}' first attempt failed ({}) — retrying after {:?}",
+                "channel '{}' first attempt failed ({}), retrying after {:?}",
                 name, first_err, RETRY_BACKOFF
             );
             tokio::time::sleep(RETRY_BACKOFF).await;
             match attempt_once().await {
                 Ok(n) => {
                     debug!(
-                        "Channel '{}' delivered {} notification(s) on retry",
+                        "channel '{}' delivered {} notification(s) on retry",
                         name, n
                     );
                     n
                 }
                 Err(second_err) => {
                     warn!(
-                        "Channel '{}' failed both attempts: {} / {}",
+                        "channel '{}' failed both attempts: {} / {}",
                         name, first_err, second_err
                     );
                     0

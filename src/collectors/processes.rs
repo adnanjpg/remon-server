@@ -57,7 +57,7 @@ pub async fn run(state: Arc<AppState>) {
         let process_list = process::get_processes(&sys);
         let compute_dur = t_compute.elapsed();
 
-        debug!("Processes collected: {} total", process_list.total_count);
+        debug!("processes collected: {} total", process_list.total_count);
 
         // ── Phase: publish ──────────────────────────────────────────────
         // Latest-snapshot cache for one-shot REST consumers; broadcast for

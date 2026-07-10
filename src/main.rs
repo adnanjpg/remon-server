@@ -225,7 +225,7 @@ async fn run(
         .parse()
         .unwrap_or_else(|_| {
             error!(
-                "Invalid server.host '{}', falling back to 0.0.0.0:{}",
+                "invalid server.host '{}', falling back to 0.0.0.0:{}",
                 config.server.host, config.server.port
             );
             SocketAddr::from(([0, 0, 0, 0], config.server.port))

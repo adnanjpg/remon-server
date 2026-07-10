@@ -185,7 +185,7 @@ pub async fn get_container_stats(
 /// POST /docker/containers/prune
 pub async fn prune_containers(_claims: Claims) -> AppResult<Json<PruneResult>> {
     let result = docker::prune_containers().await.map_err(|e| {
-        error!("Failed to prune containers: {}", e);
+        error!("failed to prune containers: {}", e);
         e
     })?;
     Ok(Json(result))
@@ -226,7 +226,7 @@ pub async fn delete_image(
 /// POST /docker/images/prune
 pub async fn prune_images(_claims: Claims) -> AppResult<Json<PruneResult>> {
     let result = docker::prune_images().await.map_err(|e| {
-        error!("Failed to prune images: {}", e);
+        error!("failed to prune images: {}", e);
         e
     })?;
     Ok(Json(result))

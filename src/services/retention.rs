@@ -34,7 +34,7 @@ async fn run(state: Arc<AppState>) {
         ticker.tick().await;
 
         if let Err(e) = run_once(&state).await {
-            warn!("Retention tick failed: {:?}", e);
+            warn!("retention tick failed: {:?}", e);
         }
 
         let new_interval_ms = state
@@ -70,20 +70,20 @@ async fn run_once(state: &AppState) -> anyhow::Result<()> {
                 total_deleted += n;
                 if n > 0 {
                     debug!(
-                        "Retention: resource={} resolution={} deleted={} cutoff={}",
+                        "retention: resource={} resolution={} deleted={} cutoff={}",
                         p.resource, p.resolution, n, cutoff
                     );
                 }
             }
             Err(e) => warn!(
-                "Retention DELETE failed for resource={} resolution={}: {:?}",
+                "retention DELETE failed for resource={} resolution={}: {:?}",
                 p.resource, p.resolution, e
             ),
         }
     }
 
     if total_deleted > 0 {
-        debug!("Retention tick: total rows deleted = {}", total_deleted);
+        debug!("retention tick: total rows deleted = {}", total_deleted);
     }
 
     Ok(())

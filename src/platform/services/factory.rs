@@ -44,7 +44,7 @@ pub async fn create(init: &InitSystem) -> Arc<dyn ServiceManager> {
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         let _ = init;
-        warn!("Service management not supported on this platform");
+        warn!("service management not supported on this platform");
         Arc::new(super::unsupported::UnsupportedManager)
     }
 }

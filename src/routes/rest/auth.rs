@@ -47,7 +47,7 @@ pub async fn login(
 
     persist_session_pair(&device_repo, &req.device_id, &tokens).await?;
 
-    info!("Device {} logged in from {}", req.device_id, client_ip);
+    info!("device {} logged in from {}", req.device_id, client_ip);
 
     Ok(Json(TokenResponse {
         access_token: tokens.access_token,
@@ -115,7 +115,7 @@ pub async fn logout(State(state): State<Arc<AppState>>, claims: Claims) -> AppRe
     device_repo.delete_session(&claims.jti).await?;
     state.session_cache.evict(&claims.jti);
     info!(
-        "Device {} logged out (jti={})",
+        "device {} logged out (jti={})",
         claims.device_id, claims.jti
     );
     Ok(StatusCode::NO_CONTENT)

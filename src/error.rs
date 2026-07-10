@@ -177,7 +177,7 @@ impl IntoResponse for AppError {
 
             // 500 Internal Server Error — never leak internal detail to client
             AppError::DatabaseError(msg) => {
-                log::error!("Database error: {}", msg);
+                log::error!("database error: {}", msg);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "DATABASE_ERROR",
@@ -185,7 +185,7 @@ impl IntoResponse for AppError {
                 )
             }
             AppError::Internal(msg) => {
-                log::error!("Internal error: {}", msg);
+                log::error!("internal error: {}", msg);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "INTERNAL_ERROR",

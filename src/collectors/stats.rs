@@ -211,7 +211,7 @@ pub async fn run(state: Arc<AppState>) {
             )
             .await
         {
-            warn!("Failed to persist raw stats tick: {:?}", e);
+            warn!("failed to persist raw stats tick: {:?}", e);
         }
         let db_write_dur = t_db.elapsed();
 

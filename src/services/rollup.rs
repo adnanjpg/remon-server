@@ -61,7 +61,7 @@ async fn run(state: Arc<AppState>) {
         ticker.tick().await;
 
         if let Err(e) = run_once(&state).await {
-            warn!("Rollup tick failed: {:?}", e);
+            warn!("rollup tick failed: {:?}", e);
         }
 
         let new_interval_ms = state
@@ -94,7 +94,7 @@ async fn run_once(state: &AppState) -> anyhow::Result<()> {
         for resource in ROLLUP_RESOURCES {
             if let Err(e) = rollup_resource(state, &cursor_repo, target, resource, now).await {
                 warn!(
-                    "Rollup failed for resource={} resolution={}: {:?}",
+                    "rollup failed for resource={} resolution={}: {:?}",
                     resource, target.name, e
                 );
             }
@@ -165,7 +165,7 @@ async fn rollup_resource(
                 // failed one and that bucket would never be retried. The
                 // next tick picks up here and retries.
                 warn!(
-                    "Rollup bucket failed: resource={} resolution={} bucket_start={}: {:?} \
+                    "rollup bucket failed: resource={} resolution={} bucket_start={}: {:?} \
                      (stopping for this resource; will retry next tick)",
                     resource, target.name, bucket_start, e
                 );
@@ -180,7 +180,7 @@ async fn rollup_resource(
             .set(resource, &target.name, last_written)
             .await?;
         debug!(
-            "Rollup committed: resource={} resolution={} last_bucket_ts={}",
+            "rollup committed: resource={} resolution={} last_bucket_ts={}",
             resource, target.name, last_written
         );
     }

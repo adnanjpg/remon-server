@@ -118,7 +118,7 @@ async fn handle_docker_exec(
     let docker = match crate::services::docker::new_docker() {
         Ok(d) => d,
         Err(e) => {
-            error!("Failed to connect to Docker: {}", e);
+            error!("failed to connect to Docker: {}", e);
             let _ = socket
                 .send(Message::Text(format!("Error: {}", e).into()))
                 .await;
@@ -139,7 +139,7 @@ async fn handle_docker_exec(
     let exec_id = match docker.create_exec(&container_id, exec_config).await {
         Ok(exec) => exec.id,
         Err(e) => {
-            error!("Failed to create exec: {}", e);
+            error!("failed to create exec: {}", e);
             let _ = socket
                 .send(Message::Text(format!("Error: {}", e).into()))
                 .await;
@@ -151,7 +151,7 @@ async fn handle_docker_exec(
     let start_exec = match docker.start_exec(&exec_id, None).await {
         Ok(exec) => exec,
         Err(e) => {
-            error!("Failed to start exec: {}", e);
+            error!("failed to start exec: {}", e);
             let _ = socket
                 .send(Message::Text(format!("Error starting exec: {}", e).into()))
                 .await;
@@ -165,7 +165,7 @@ async fn handle_docker_exec(
             mut output,
             mut input,
         } => {
-            debug!("Exec attached successfully");
+            debug!("exec attached successfully");
 
             let mut last_activity = Instant::now();
             let mut ping_tick = tokio::time::interval(PING_INTERVAL);
@@ -179,13 +179,13 @@ async fn handle_docker_exec(
                         match ws_msg {
                             Some(Ok(Message::Text(text))) => {
                                 if let Err(e) = input.write_all(text.as_bytes()).await {
-                                    warn!("Failed to write to exec stdin: {}", e);
+                                    warn!("failed to write to exec stdin: {}", e);
                                     break;
                                 }
                             }
                             Some(Ok(Message::Binary(data))) => {
                                 if let Err(e) = input.write_all(&data).await {
-                                    warn!("Failed to write to exec stdin: {}", e);
+                                    warn!("failed to write to exec stdin: {}", e);
                                     break;
                                 }
                             }
@@ -212,19 +212,19 @@ async fn handle_docker_exec(
                                 if !text.is_empty()
                                     && let Err(e) = socket.send(Message::Text(text.into())).await
                                 {
-                                    warn!("Failed to send to WebSocket: {}", e);
+                                    warn!("failed to send to WebSocket: {}", e);
                                     break;
                                 }
                             }
                             Some(Err(e)) => {
-                                error!("Exec output error: {}", e);
+                                error!("exec output error: {}", e);
                                 let _ = socket
                                     .send(Message::Text(format!("Error: {}", e).into()))
                                     .await;
                                 break;
                             }
                             None => {
-                                debug!("Exec completed");
+                                debug!("exec completed");
                                 break;
                             }
                         }
@@ -242,7 +242,7 @@ async fn handle_docker_exec(
                             .send(Message::Ping(axum::body::Bytes::new()))
                             .await
                         {
-                            warn!("Failed to send keepalive ping: {}", e);
+                            warn!("failed to send keepalive ping: {}", e);
                             break;
                         }
                     }
@@ -253,7 +253,7 @@ async fn handle_docker_exec(
             debug!("WebSocket exec session closed");
         }
         StartExecResults::Detached => {
-            warn!("Exec started in detached mode (unexpected)");
+            warn!("exec started in detached mode (unexpected)");
             let _ = socket
                 .send(Message::Text("Error: Exec detached unexpectedly".into()))
                 .await;

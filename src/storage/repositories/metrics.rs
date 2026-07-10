@@ -670,7 +670,7 @@ impl MetricsRepository {
                 // without a matching DELETE branch above. Silent no-op
                 // would let stale data accumulate forever.
                 warn!(
-                    "Retention DELETE skipped: unknown resource '{}' (resolution={}, cutoff={})",
+                    "retention DELETE skipped: unknown resource '{}' (resolution={}, cutoff={})",
                     other, resolution, cutoff_ts
                 );
                 return Ok(0);

@@ -185,6 +185,6 @@ pub async fn delete_process(
     }
     process::kill_process(pid, signal).map_err(AppError::ProcessKillFailed)?;
 
-    debug!("Process {} killed with signal {}", pid, signal);
+    debug!("process {} killed with signal {}", pid, signal);
     Ok(StatusCode::NO_CONTENT)
 }
