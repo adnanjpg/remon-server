@@ -738,6 +738,78 @@ fn build_alerts_schema() -> AlertsSchemaResponse {
                 }],
             },
             NamespaceSchemaDto {
+                name: "docker",
+                description: "Per-container resource stats from the Docker/Podman daemon. Empty when the daemon is unreachable or the server was built without the docker feature. Byte counters are cumulative since the container started.",
+                dynamic_metrics: false,
+                metrics: vec![
+                    MetricSchemaDto {
+                        name: "cpu_percent",
+                        unit: Some("%"),
+                        description: Some("share of total host CPU, summed across cores"),
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "memory_used_bytes",
+                        unit: Some("bytes"),
+                        description: Some("resident set minus reclaimable page cache"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "memory_limit_bytes",
+                        unit: Some("bytes"),
+                        description: Some("0 when the container is unlimited"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "memory_percent",
+                        unit: Some("%"),
+                        description: Some(
+                            "memory_used/limit*100; absent when the container is unlimited",
+                        ),
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "network_rx_bytes",
+                        unit: Some("bytes"),
+                        description: Some("cumulative received across all interfaces"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "network_tx_bytes",
+                        unit: Some("bytes"),
+                        description: Some("cumulative transmitted across all interfaces"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "block_read_bytes",
+                        unit: Some("bytes"),
+                        description: Some("cumulative block I/O read"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "block_write_bytes",
+                        unit: Some("bytes"),
+                        description: Some("cumulative block I/O written"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "pids",
+                        unit: None,
+                        description: Some("processes/threads in the container"),
+                        value_type: "int",
+                    },
+                ],
+                labels: vec![LabelSchemaDto {
+                    name: "container_id",
+                    required: false,
+                    values: None,
+                    source: Some(LabelSourceDto {
+                        endpoint: "/docker/containers",
+                        json_path: "containers[].names[]",
+                    }),
+                }],
+            },
+            NamespaceSchemaDto {
                 name: "probe",
                 description: "Metrics emitted by user-defined probe scripts. Metric name is whatever the script reported.",
                 dynamic_metrics: true,

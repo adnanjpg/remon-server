@@ -493,6 +493,40 @@ impl MetricsRepository {
         Ok(rows)
     }
 
+    pub async fn read_docker(
+        &self,
+        container: &str,
+        resolution: &str,
+        start: i64,
+        end: i64,
+        limit: u32,
+    ) -> AppResult<Vec<(i64, f64, i64, i64, i64, i64, i64, i64, i64)>> {
+        // One container → one row per timestamp, so a flat LIMIT keeps the
+        // live tail. ORDER BY DESC + reverse mirrors read_pressure.
+        let mut rows = sqlx::query_as::<_, (i64, f64, i64, i64, i64, i64, i64, i64, i64)>(
+            r#"
+            SELECT timestamp, cpu_percent,
+                   memory_used_bytes, memory_limit_bytes,
+                   network_rx_bytes, network_tx_bytes,
+                   block_read_bytes, block_write_bytes, pids
+              FROM metrics_docker
+             WHERE container_id = ? AND resolution = ?
+               AND timestamp >= ? AND timestamp <= ?
+             ORDER BY timestamp DESC
+             LIMIT ?
+            "#,
+        )
+        .bind(container)
+        .bind(resolution)
+        .bind(start)
+        .bind(end)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.reverse();
+        Ok(rows)
+    }
+
     pub async fn read_pressure(
         &self,
         resource: &str,

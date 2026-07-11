@@ -145,6 +145,29 @@ pub struct NetworkHistoryResponse {
     pub points: Vec<NetworkPoint>,
 }
 
+// ===== Docker containers =====
+
+#[derive(Debug, Serialize)]
+pub struct DockerPoint {
+    pub timestamp: i64,
+    pub cpu_percent: f64,
+    pub memory_used_bytes: i64,
+    /// 0 when the container has no memory limit.
+    pub memory_limit_bytes: i64,
+    /// Byte counters below are cumulative since the container started.
+    pub network_rx_bytes: i64,
+    pub network_tx_bytes: i64,
+    pub block_read_bytes: i64,
+    pub block_write_bytes: i64,
+    pub pids: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DockerHistoryResponse {
+    pub resolution: String,
+    pub points: Vec<DockerPoint>,
+}
+
 // ===== Pressure (PSI) =====
 
 #[derive(Debug, Serialize)]

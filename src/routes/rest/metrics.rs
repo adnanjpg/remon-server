@@ -10,8 +10,9 @@ use crate::error::{AppError, AppResult};
 use crate::routes::dtos::metrics::{
     BatchMetricsQuery, BatchMetricsResponse, BatchSeries, ComponentPoint,
     ComponentsHistoryResponse, CpuCorePoint, CpuCoresHistoryResponse, CpuHistoryResponse, CpuPoint,
-    DiskHistoryResponse, DiskPoint, MemoryHistoryResponse, MemoryPoint, MetricsRangeQuery,
-    NetworkHistoryResponse, NetworkPoint, PressureHistoryResponse, PressurePoint,
+    DiskHistoryResponse, DiskPoint, DockerHistoryResponse, DockerPoint, MemoryHistoryResponse,
+    MemoryPoint, MetricsRangeQuery, NetworkHistoryResponse, NetworkPoint, PressureHistoryResponse,
+    PressurePoint,
 };
 use crate::routes::extractors::{Claims, ValidatedQuery};
 use crate::state::AppState;
@@ -228,6 +229,38 @@ pub async fn network_history(
         .collect();
 
     Ok(Json(NetworkHistoryResponse { resolution, points }))
+}
+
+/// GET /metrics/docker/{container} — per-tick resource history for one
+/// container, keyed by name. Empty when the docker collector never ran.
+pub async fn docker_history(
+    _claims: Claims,
+    State(state): State<Arc<AppState>>,
+    Path(container): Path<String>,
+    ValidatedQuery(q): ValidatedQuery<MetricsRangeQuery>,
+) -> AppResult<Json<DockerHistoryResponse>> {
+    let (start, end, resolution, limit) = resolve_range(&q)?;
+    let repo = MetricsRepository::new(state.db.clone());
+    let rows = repo
+        .read_docker(&container, &resolution, start, end, limit)
+        .await?;
+
+    let points: Vec<DockerPoint> = rows
+        .into_iter()
+        .map(|(ts, cpu, mu, ml, rx, tx, br, bw, pids)| DockerPoint {
+            timestamp: ts,
+            cpu_percent: cpu,
+            memory_used_bytes: mu,
+            memory_limit_bytes: ml,
+            network_rx_bytes: rx,
+            network_tx_bytes: tx,
+            block_read_bytes: br,
+            block_write_bytes: bw,
+            pids,
+        })
+        .collect();
+
+    Ok(Json(DockerHistoryResponse { resolution, points }))
 }
 
 const VALID_PRESSURE_RESOURCES: &[&str] = &["cpu", "memory", "io"];
