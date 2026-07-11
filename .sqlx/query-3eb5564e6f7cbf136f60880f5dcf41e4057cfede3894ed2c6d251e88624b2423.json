@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO metrics_docker\n                   (resolution, timestamp, container_id, cpu_percent,\n                    memory_used_bytes, memory_limit_bytes,\n                    network_rx_bytes, network_tx_bytes,\n                    block_read_bytes, block_write_bytes, pids)\n                 VALUES ('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n                 ON CONFLICT(resolution, timestamp, container_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "3eb5564e6f7cbf136f60880f5dcf41e4057cfede3894ed2c6d251e88624b2423"
+}

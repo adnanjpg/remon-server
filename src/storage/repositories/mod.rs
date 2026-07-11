@@ -1,6 +1,8 @@
 mod alerts;
 mod config;
 mod devices;
+#[cfg(feature = "docker")]
+mod docker;
 mod heartbeats;
 pub mod logs;
 mod metrics;
@@ -14,6 +16,8 @@ mod smart;
 pub use alerts::{AlertRepository, UpsertAlertRule};
 pub use config::{ConfigRepository, RuntimeOverrides};
 pub use devices::DeviceRepository;
+#[cfg(feature = "docker")]
+pub use docker::{DockerMetricsRepository, DockerStatsRow};
 pub use heartbeats::{HeartbeatRepository, UpsertHeartbeatCheck};
 pub use logs::LogRepository;
 pub use metrics::MetricsRepository;

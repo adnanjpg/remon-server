@@ -108,6 +108,7 @@ impl TestApp {
             effective_config,
             2000,
             5000,
+            3000,
             #[cfg(feature = "docker")]
             false,
             hardware,

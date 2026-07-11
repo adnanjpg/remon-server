@@ -12,11 +12,8 @@ async fn get_config_returns_effective_state() {
     assert_eq!(st, StatusCode::OK);
     assert_eq!(body["server_name"], "test-server");
     assert_eq!(body["collector_stats_interval_ms"], 2000);
-    // The inert docker interval field was removed from the API surface.
-    assert!(
-        body.get("collector_docker_interval_ms").is_none(),
-        "collector_docker_interval_ms should no longer be exposed"
-    );
+    // The container-stats collector interval is now a live config field.
+    assert_eq!(body["collector_docker_interval_ms"], 3000);
 }
 
 #[tokio::test]

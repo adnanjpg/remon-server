@@ -164,6 +164,33 @@ const SMART_I64: &[&str] = &[
     "media_errors",
 ];
 
+const DOCKER_FIELDS: &[&str] = &[
+    "cpu_percent",
+    "memory_used_bytes",
+    "memory_limit_bytes",
+    "memory_percent",
+    "network_rx_bytes",
+    "network_tx_bytes",
+    "block_read_bytes",
+    "block_write_bytes",
+    "pids",
+];
+const DOCKER_I64: &[&str] = &[
+    "memory_used_bytes",
+    "memory_limit_bytes",
+    "network_rx_bytes",
+    "network_tx_bytes",
+    "block_read_bytes",
+    "block_write_bytes",
+    "pids",
+];
+// Synthetic: memory_used/limit*100; NULLIF makes an unlimited (0) limit
+// resolve to NULL so the latest-non-null fallback skips it.
+const DOCKER_COMPUTED: &[(&str, &str)] = &[(
+    "memory_percent",
+    "CAST(memory_used_bytes AS REAL) * 100.0 / NULLIF(memory_limit_bytes, 0)",
+)];
+
 // Live-check namespace; resolved via ServiceManager, not the DB.
 const SERVICE_FIELDS: &[&str] = &["up"];
 
@@ -257,6 +284,18 @@ async fn resolve_inner(
                 SMART_I64,
                 "device",
                 NO_COMPUTED,
+            )
+            .await
+        }
+        "docker" => {
+            resolve_keyed(
+                pool,
+                metric,
+                "metrics_docker",
+                DOCKER_FIELDS,
+                DOCKER_I64,
+                "container_id",
+                DOCKER_COMPUTED,
             )
             .await
         }
