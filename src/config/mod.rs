@@ -16,6 +16,8 @@ pub struct Config {
     pub cors: CorsConfig,
     #[serde(default)]
     pub smart: SmartConfig,
+    #[serde(default)]
+    pub assistant: AssistantConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -195,6 +197,69 @@ pub struct CorsConfig {
     pub allow_any_origin: bool,
     #[serde(default)]
     pub allowed_origins: Vec<String>,
+}
+
+/// Read-only operator assistant. An OpenAI-compatible chat endpoint (Gemini's
+/// compat surface by default; also Groq, Ollama, OpenRouter, ...) is given
+/// read-only tools over this host's own telemetry and answers operator
+/// questions in plain language. Bring-your-own key; it never leaves the server.
+///
+/// Disabled until an `api_key` is set. The defaults target Google AI Studio's
+/// free tier — create a key at aistudio.google.com and drop it in
+/// `REMON__ASSISTANT__API_KEY` (or config) to switch it on.
+#[derive(Debug, Deserialize, Clone)]
+pub struct AssistantConfig {
+    /// Master switch. Even when true the assistant stays inert without an
+    /// `api_key`, so this defaults to true and the key is the real gate.
+    #[serde(default = "default_assistant_enabled")]
+    pub enabled: bool,
+    /// OpenAI-compatible base URL. `/chat/completions` is appended to it.
+    #[serde(default = "default_assistant_base_url")]
+    pub base_url: String,
+    /// Bearer API key. Empty (default) keeps the assistant off.
+    #[serde(default)]
+    pub api_key: String,
+    /// Model id passed through to the provider.
+    #[serde(default = "default_assistant_model")]
+    pub model: String,
+    /// Response token ceiling per model turn.
+    #[serde(default = "default_assistant_max_tokens")]
+    pub max_tokens: u32,
+    /// Base URL of a Prometheus server the assistant may query with PromQL
+    /// (e.g. "http://localhost:9090"). Empty (default) hides the
+    /// `prometheus_query` tool. Read-only: only the instant/range query APIs
+    /// are ever called.
+    #[serde(default)]
+    pub prometheus_url: String,
+}
+
+impl Default for AssistantConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_assistant_enabled(),
+            base_url: default_assistant_base_url(),
+            api_key: String::new(),
+            model: default_assistant_model(),
+            max_tokens: default_assistant_max_tokens(),
+            prometheus_url: String::new(),
+        }
+    }
+}
+
+fn default_assistant_enabled() -> bool {
+    true
+}
+
+fn default_assistant_base_url() -> String {
+    "https://generativelanguage.googleapis.com/v1beta/openai".to_string()
+}
+
+fn default_assistant_model() -> String {
+    "gemini-2.5-flash".to_string()
+}
+
+fn default_assistant_max_tokens() -> u32 {
+    2048
 }
 
 impl Config {

@@ -82,3 +82,34 @@ smartctl_path = ""
 # issues real commands to every disk, so keep this lazy.
 # Env: REMON__SMART__INTERVAL_SECS
 interval_secs = 1800
+
+[assistant]
+# Read-only operator assistant. Answers plain-language questions ("why is my
+# server slow?") by calling read-only tools over this host's own telemetry.
+# Provider-abstracted over any OpenAI-compatible chat endpoint; the api_key
+# stays server-side and never reaches a client.
+#
+# Off until an api_key is set. Defaults target Google AI Studio's free tier:
+# create a key at aistudio.google.com and set REMON__ASSISTANT__API_KEY.
+# Env: REMON__ASSISTANT__ENABLED
+enabled = true
+# OpenAI-compatible base URL; "/chat/completions" is appended.
+# Gemini:     https://generativelanguage.googleapis.com/v1beta/openai
+# Groq:       https://api.groq.com/openai/v1
+# Ollama:     http://localhost:11434/v1
+# OpenRouter: https://openrouter.ai/api/v1   (reaches Claude/GPT/etc. via one key)
+# Env: REMON__ASSISTANT__BASE_URL
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+# Env: REMON__ASSISTANT__API_KEY
+api_key = ""
+# Model id. gemini-2.5-flash is fast and free-tier; for deeper diagnosis use a
+# stronger reasoner on the same endpoint (model = "gemini-2.5-pro") or point
+# base_url at OpenRouter and set e.g. "anthropic/claude-opus-4-8".
+# Env: REMON__ASSISTANT__MODEL
+model = "gemini-2.5-flash"
+# Response token ceiling per model turn.
+# Env: REMON__ASSISTANT__MAX_TOKENS
+max_tokens = 2048
+# Optional Prometheus server for the prometheus_query tool. Empty hides it.
+# Env: REMON__ASSISTANT__PROMETHEUS_URL
+prometheus_url = ""
