@@ -10,6 +10,8 @@
 //! unit tests cover pure logic (parsing, expressions, filters) underneath.
 
 mod alerts_api;
+mod assistant_api;
+mod assistant_tools;
 mod auth_flow;
 mod config_api;
 mod heartbeats_api;
@@ -65,6 +67,14 @@ impl TestApp {
     /// `max_connections = 1` keeps the whole `:memory:` database on a single
     /// connection so migrations and every subsequent query see the same data.
     pub async fn spawn() -> TestApp {
+        Self::spawn_with_assistant(crate::config::AssistantConfig::default()).await
+    }
+
+    /// Same as [`spawn`], but with an explicit assistant config. The live
+    /// assistant smoke test (`assistant_api`, `#[ignore]`) uses this to inject
+    /// a real provider key from the environment; every other test takes the
+    /// default (no key → the endpoint is inert).
+    pub async fn spawn_with_assistant(assistant_config: crate::config::AssistantConfig) -> TestApp {
         let db = crate::storage::Database::connect("sqlite::memory:", 1)
             .await
             .expect("connect in-memory sqlite");
@@ -104,6 +114,7 @@ impl TestApp {
         let state = Arc::new(AppState::new(
             db.pool().clone(),
             auth_config,
+            assistant_config,
             false,
             effective_config,
             2000,
