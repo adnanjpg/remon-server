@@ -693,6 +693,215 @@ fn canonical_labels(labels: &BTreeMap<String, String>) -> String {
     serde_json::to_string(labels).unwrap_or_else(|_| "{}".to_string())
 }
 
+// ===== History summaries (assistant `metric_history`) =====
+
+/// Rollup resolutions the history summary accepts. `raw` is the live tick;
+/// `1m`/`5m`/`1h` are produced by the rollup worker.
+pub const HISTORY_RESOLUTIONS: &[&str] = &["raw", "1m", "5m", "1h"];
+
+/// One field's aggregate over a time window, per natural key. `last` is the
+/// current value taken from the same "latest per key" path the evaluator uses,
+/// so a summary and a live gauge never disagree. `last` is `NaN` when the key
+/// has no current sample.
+#[derive(Debug, Clone)]
+pub struct FieldSummary {
+    pub label_set: String,
+    pub count: i64,
+    pub min: f64,
+    pub max: f64,
+    pub avg: f64,
+    pub last: f64,
+}
+
+/// History-capable numeric namespaces → `(table, valid_fields, computed,
+/// label_column)`. Deliberately a subset of the resolver's namespaces: the
+/// special ones (probe/heartbeat/service) and slow-moving smart/components are
+/// excluded — history is about performance trends. Field *names* still validate
+/// against the same whitelists the evaluator uses, keeping this injection-safe.
+#[allow(clippy::type_complexity)]
+fn history_descriptor(
+    namespace: &str,
+) -> Option<(
+    &'static str,
+    &'static [&'static str],
+    &'static [(&'static str, &'static str)],
+    Option<&'static str>,
+)> {
+    match namespace {
+        "cpu" => Some(("metrics_cpu", CPU_FIELDS, NO_COMPUTED, None)),
+        "memory" => Some(("metrics_memory", MEMORY_FIELDS, NO_COMPUTED, None)),
+        "disk" => Some((
+            "metrics_disk",
+            DISK_FIELDS,
+            DISK_COMPUTED,
+            Some("mount_point"),
+        )),
+        "network" => Some((
+            "metrics_network",
+            NETWORK_FIELDS,
+            NO_COMPUTED,
+            Some("interface_name"),
+        )),
+        "pressure" => Some((
+            "metrics_pressure",
+            PRESSURE_FIELDS,
+            NO_COMPUTED,
+            Some("resource"),
+        )),
+        "docker" => Some((
+            "metrics_docker",
+            DOCKER_FIELDS,
+            DOCKER_COMPUTED,
+            Some("container_id"),
+        )),
+        _ => None,
+    }
+}
+
+/// Aggregate a single metric field over `[start, end]` at `resolution`,
+/// returning one summary per natural key (or a single summary for the unkeyed
+/// namespaces). The `last` value is merged in from [`resolve_with_state`].
+pub async fn history_summary(
+    state: &crate::state::AppState,
+    metric: &MetricRef,
+    resolution: &str,
+    start: i64,
+    end: i64,
+) -> Result<Vec<FieldSummary>, ResolveError> {
+    let (table, fields, computed, label_col) =
+        history_descriptor(&metric.namespace).ok_or_else(|| {
+            ResolveError::msg(format!(
+                "history is not available for namespace '{}'",
+                metric.namespace
+            ))
+        })?;
+
+    if !HISTORY_RESOLUTIONS.contains(&resolution) {
+        return Err(ResolveError::msg(format!(
+            "unknown resolution '{resolution}'; expected one of {HISTORY_RESOLUTIONS:?}"
+        )));
+    }
+
+    let column = check_field(metric, fields)?;
+    // Computed fields (e.g. disk.used_percent) aggregate over their SQL
+    // expression; plain fields over their own column. CAST(... AS REAL) makes
+    // MIN/MAX decode uniformly whether the column is INTEGER or REAL.
+    let expr: &str = computed
+        .iter()
+        .find_map(|(name, e)| (*name == column).then_some(*e))
+        .unwrap_or(column);
+
+    // Current value(s) per key, straight from the evaluator's own path.
+    let last_by_label: BTreeMap<String, f64> = resolve_with_state(state, metric)
+        .await?
+        .into_iter()
+        .map(|s| (s.label_set, s.value))
+        .collect();
+
+    let pool = &state.db;
+    let mut out = Vec::new();
+
+    if let Some(keycol) = label_col {
+        let mut filter_value: Option<&str> = None;
+        for (k, v) in &metric.labels {
+            if k == keycol {
+                filter_value = Some(v.as_str());
+            } else {
+                return Err(ResolveError::msg(format!(
+                    "namespace '{}' supports only the '{}' label, got '{}'",
+                    metric.namespace, keycol, k
+                )));
+            }
+        }
+        let where_label = if filter_value.is_some() {
+            format!("AND {keycol} = ?")
+        } else {
+            String::new()
+        };
+        let sql = format!(
+            "SELECT {keycol},
+                    COUNT({expr}),
+                    CAST(MIN({expr}) AS REAL),
+                    CAST(MAX({expr}) AS REAL),
+                    AVG({expr})
+               FROM {table}
+              WHERE resolution = ? AND {expr} IS NOT NULL
+                AND timestamp >= ? AND timestamp <= ? {where_label}
+              GROUP BY {keycol}"
+        );
+        let mut q = sqlx::query_as::<_, (String, i64, Option<f64>, Option<f64>, Option<f64>)>(
+            sqlx::AssertSqlSafe(sql.as_str()),
+        )
+        .bind(resolution)
+        .bind(start)
+        .bind(end);
+        if let Some(v) = filter_value {
+            q = q.bind(v);
+        }
+        let rows = q
+            .fetch_all(pool)
+            .await
+            .map_err(|e| ResolveError::msg(e.to_string()))?;
+        for (keyval, count, min, max, avg) in rows {
+            if count == 0 {
+                continue;
+            }
+            let mut labels = BTreeMap::new();
+            labels.insert(keycol.to_string(), keyval);
+            let label_set = canonical_labels(&labels);
+            let last = last_by_label.get(&label_set).copied().unwrap_or(f64::NAN);
+            out.push(FieldSummary {
+                label_set,
+                count,
+                min: min.unwrap_or(f64::NAN),
+                max: max.unwrap_or(f64::NAN),
+                avg: avg.unwrap_or(f64::NAN),
+                last,
+            });
+        }
+    } else {
+        if !metric.labels.is_empty() {
+            return Err(ResolveError::msg(format!(
+                "namespace '{}' has no label dimensions; remove the label set",
+                metric.namespace
+            )));
+        }
+        let sql = format!(
+            "SELECT COUNT({expr}),
+                    CAST(MIN({expr}) AS REAL),
+                    CAST(MAX({expr}) AS REAL),
+                    AVG({expr})
+               FROM {table}
+              WHERE resolution = ? AND {expr} IS NOT NULL
+                AND timestamp >= ? AND timestamp <= ?"
+        );
+        let row: (i64, Option<f64>, Option<f64>, Option<f64>) =
+            sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, Option<f64>)>(sqlx::AssertSqlSafe(
+                sql.as_str(),
+            ))
+            .bind(resolution)
+            .bind(start)
+            .bind(end)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| ResolveError::msg(e.to_string()))?;
+        let (count, min, max, avg) = row;
+        if count > 0 {
+            let last = last_by_label.get("{}").copied().unwrap_or(f64::NAN);
+            out.push(FieldSummary {
+                label_set: "{}".to_string(),
+                count,
+                min: min.unwrap_or(f64::NAN),
+                max: max.unwrap_or(f64::NAN),
+                avg: avg.unwrap_or(f64::NAN),
+                last,
+            });
+        }
+    }
+
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
