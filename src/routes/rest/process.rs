@@ -122,7 +122,7 @@ pub async fn get_processes(
     })
 }
 
-async fn get_or_refresh_processes(state: &AppState) -> Arc<ProcessList> {
+pub(crate) async fn get_or_refresh_processes(state: &AppState) -> Arc<ProcessList> {
     if let Some(cached) = fresh_cached_processes(state).await {
         return cached;
     }

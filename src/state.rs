@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use tokio::sync::{Mutex, RwLock, broadcast};
 
 use crate::auth::session_cache::SessionCache;
-use crate::config::AuthConfig;
+use crate::config::{AssistantConfig, AuthConfig};
 use crate::models::process::ProcessList;
 use crate::models::stats::{AllStats, StatsEvent};
 use crate::models::system::HardwareInfo;
@@ -48,6 +48,11 @@ pub struct EffectiveConfig {
 pub struct AppState {
     pub db: SqlitePool,
     pub auth_config: AuthConfig,
+
+    /// Read-only operator assistant config (provider/base_url/model/key).
+    /// Cloned into a fresh [`crate::assistant::Assistant`] per request; the
+    /// api_key stays server-side and is never handed to a client.
+    pub assistant_config: AssistantConfig,
 
     /// When true, audit and rate-limit code reads the client IP from
     /// `X-Forwarded-For` instead of the TCP peer. Mirrors
@@ -137,6 +142,7 @@ impl AppState {
     pub fn new(
         db: SqlitePool,
         auth_config: AuthConfig,
+        assistant_config: AssistantConfig,
         trusted_proxy: bool,
         effective_config: EffectiveConfig,
         collector_stats_interval_ms: u64,
@@ -155,6 +161,7 @@ impl AppState {
         Self {
             db,
             auth_config,
+            assistant_config,
             trusted_proxy,
             pairing_state: RwLock::new(None),
             session_cache: SessionCache::new(),

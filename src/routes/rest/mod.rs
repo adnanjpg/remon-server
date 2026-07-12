@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod alerts;
+pub mod assistant;
 pub mod auth;
 pub mod cron;
 #[cfg(feature = "docker")]
@@ -206,6 +207,9 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         // One-call host overview — fleet/multi-server clients poll this
         // once per daemon instead of fanning out to info/metrics/alerts.
         .route("/summary", get(system::get_summary))
+        // Read-only operator assistant — natural-language questions answered
+        // from this host's telemetry via a provider-abstracted tool-use loop.
+        .route("/assistant", post(assistant::ask))
         // Runtime configuration
         .route("/config", get(admin::get_config).patch(admin::patch_config))
         // Alert engine: rule CRUD + active-state + event log

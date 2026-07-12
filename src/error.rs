@@ -73,6 +73,12 @@ pub enum AppError {
     #[error("Forbidden: {0}")]
     Forbidden(String),
 
+    /// A feature is switched off or not yet configured (e.g. the operator
+    /// assistant with no api_key). The message is client-safe — it explains
+    /// what to enable, not an internal fault.
+    #[error("{0}")]
+    ServiceUnavailable(String),
+
     // ===== Generic =====
     #[error("Internal error")]
     Internal(String),
@@ -162,6 +168,14 @@ impl IntoResponse for AppError {
                 StatusCode::NOT_IMPLEMENTED,
                 "NOT_SUPPORTED",
                 "Not supported on this platform".to_string(),
+            ),
+
+            // 503 Service Unavailable — feature off / not configured. The
+            // message is client-safe and tells the operator what to enable.
+            AppError::ServiceUnavailable(msg) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "SERVICE_UNAVAILABLE",
+                msg.clone(),
             ),
 
             // 503 Service Unavailable

@@ -12,6 +12,7 @@ mod notify;
 mod routes;
 mod state;
 
+mod assistant;
 mod auth;
 
 #[cfg(test)]
@@ -186,6 +187,7 @@ async fn run(
     let app_state = Arc::new(state::AppState::new(
         db.pool().clone(),
         config.auth.clone(),
+        config.assistant.clone(),
         config.server.trusted_proxy,
         effective_config,
         overrides.collector_stats_interval_ms,
