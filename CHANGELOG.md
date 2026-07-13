@@ -3,6 +3,20 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.0] - 2026-07-13
+
+### Added
+
+- **Assistant: native Anthropic provider** — when `[assistant] base_url` points at `api.anthropic.com`, the assistant speaks the native Messages API instead of OpenAI-compat: same tool loop, plus prompt caching (`cache_control` breakpoints on the system+tools prefix and the growing conversation, so tool-loop round trips re-read context at ~0.1x input price) and per-turn usage logging (`in/out/cache_write/cache_read`) at debug level.
+- **Assistant: `list_processes` grew real diagnostic depth** (driven by the assistant's own tool-gap review, gathered via dev mode): per-process `cmdline`, `parent_pid`, `uptime_seconds`, `threads`; `min_cpu_percent` / `min_memory_percent` / `name_contains` filters; docker container short-id from the pid's cgroup (Linux); and — when `[assistant] process_history = true` (default) — a `history` block per process (avg/max cpu, avg memory, disk read/write B/s over up to 15 minutes) so spike-vs-sustained is answerable before proposing a kill/restart. The previously dormant processes collector now runs continuously behind that flag, feeding an in-memory rolling window (and keeping GET /processes warm as a side effect).
+- **Assistant: `list_probes` tool + probe metrics** — the assistant can now see custom probes (name, description, schedule, last-run status/message, latest emitted metrics) via `list_probes`, and read probe metric values/trends through `query_metric` / `metric_history` under the `probe` namespace (label `probe_name`). Previously it had no visibility into the probe engine at all.
+- **Assistant: longer request timeout** — the `/assistant` endpoint now has its own 150s request timeout (the rest of the REST API keeps 30s). A multi-step tool-use loop — especially at higher effort or with dev `max_steps` raised — legitimately runs past 30s; it was being cut off with a 408. Web client timeout raised to match.
+- **Assistant: `read_service_logs` tool** — one-shot `journalctl -u <unit>` tail (Linux), the read-only sibling of the SSE follow stream: bounded lines (10-200), optional `since_minutes`, 10s hard timeout, newest-lines-first size clamp, and the same unit-name charset validation as the SSE handler. The assistant can now diagnose any systemd service from its journal, not just docker containers.
+- **Assistant dev mode: per-ask `model` override** — try a different model on the same provider (e.g. claude-haiku-4-5 vs claude-sonnet-5 on one question) without touching config; the trace's model turns name the model that ran.
+- **Assistant: conversation memory** — `POST /assistant` accepts a client-replayed `history` of prior question/answer turns (the daemon stays stateless; capped at 12 turns, answers clipped), so follow-ups like "do all of those" resolve against the previous answer.
+- **Assistant: dev mode** — with `[assistant] dev = true`, an ask may carry per-request overrides for developing the assistant itself: `system` (prompt iteration without a rebuild), `max_steps`/`max_tokens` (bounded ceilings), `no_tools` (bare-model chat), and `trace` (per-turn model usage/latency + per-tool args/result-preview/latency returned with the answer). Overrides are rejected with 403 while the flag is off; device auth and the read-only/propose-only tool contract apply regardless.
+- **Assistant: transient-failure retry** — provider round trips retry on 429/5xx/network errors with bounded backoff (1s → 3s, `Retry-After` honored with a 10s cap) before surfacing an error. Applies to every provider, not just Anthropic.
+
 ## [0.10.0] - 2026-07-05
 
 ### Breaking
