@@ -85,6 +85,10 @@ pub struct AppState {
     /// Serializes on-demand process refreshes so a burst of `/processes`
     /// requests cannot all pay the full sysinfo scan at once.
     pub processes_refresh_lock: Arc<Mutex<()>>,
+    /// Rolling per-process history (pid → recent samples) fed by the
+    /// processes collector when `[assistant] process_history` is on.
+    pub process_history:
+        Arc<RwLock<std::collections::HashMap<u32, crate::models::process::ProcessHistory>>>,
 
     pub effective_config: Arc<RwLock<EffectiveConfig>>,
 
@@ -170,6 +174,7 @@ impl AppState {
             stats_latest: Arc::new(RwLock::new(None)),
             processes_latest: Arc::new(RwLock::new(None)),
             processes_refresh_lock: Arc::new(Mutex::new(())),
+            process_history: Arc::new(RwLock::new(std::collections::HashMap::new())),
             effective_config: Arc::new(RwLock::new(effective_config)),
             collector_stats_interval_ms: Arc::new(AtomicU64::new(collector_stats_interval_ms)),
             processes_cache_ttl_ms: Arc::new(AtomicU64::new(processes_cache_ttl_ms)),

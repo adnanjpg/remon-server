@@ -1,5 +1,6 @@
 #[cfg(feature = "docker")]
 mod docker;
+mod processes;
 pub mod smart;
 mod stats;
 
@@ -16,8 +17,14 @@ pub fn spawn_all(state: Arc<AppState>) {
     #[cfg(feature = "docker")]
     docker::spawn(Arc::clone(&state));
 
-    // Process inventory is refreshed on demand by GET /processes. Keeping a
-    // continuous process collector running is wasteful on hosts with very
-    // large process tables and there is no process SSE route today.
+    // Continuous process collector: keeps the process cache warm and feeds
+    // the rolling per-process history behind the assistant's time context.
+    // Config-gated because a full process refresh per tick is real work on
+    // hosts with very large process tables; off, GET /processes falls back
+    // to on-demand refresh with TTL caching.
+    if state.assistant_config.process_history {
+        tokio::spawn(processes::run(Arc::clone(&state)));
+    }
+
     info!("collectors started");
 }

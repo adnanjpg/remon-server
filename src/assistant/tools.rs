@@ -63,7 +63,12 @@ pub fn definitions(state: &AppState) -> Value {
             "function": {
                 "name": "list_processes",
                 "description": "Top processes by resource use — the direct answer to \
-        'what is eating CPU/memory'. Returns pid, name, cpu percent, memory bytes/percent and user.",
+        'what is eating CPU/memory'. Per process: pid, name, cmdline, parent_pid, user, state, \
+        uptime_seconds, cpu/memory now, and (when sampling is on) `history` with avg/max cpu, \
+        avg memory and disk read/write bytes-per-sec over up to the last 15 minutes — use it to \
+        tell a momentary spike from a sustained problem before proposing kill/restart. On Linux, \
+        `container` carries the docker container short-id when the process runs in one \
+        (cross-check with list_containers).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -75,6 +80,18 @@ pub fn definitions(state: &AppState) -> Value {
                         "limit": {
                             "type": "integer",
                             "description": "How many to return (1-50). Default 10."
+                        },
+                        "min_cpu_percent": {
+                            "type": "number",
+                            "description": "Only processes at or above this current CPU percent."
+                        },
+                        "min_memory_percent": {
+                            "type": "number",
+                            "description": "Only processes at or above this current memory percent."
+                        },
+                        "name_contains": {
+                            "type": "string",
+                            "description": "Only processes whose name contains this (case-insensitive)."
                         }
                     }
                 }
@@ -107,11 +124,12 @@ pub fn definitions(state: &AppState) -> Value {
         - docker (label container_id = container name): cpu_percent, memory_percent, memory_used_bytes\n\
         - service (label name): up (1 = running, 0 = not)\n\
         - heartbeat (label slug): up\n\
+        - probe (label probe_name = the probe's name): field is a metric_name the probe emits (see list_probes)\n\
         If a field is invalid the tool returns an error naming the namespace so you can retry.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "namespace": { "type": "string", "description": "e.g. cpu, memory, disk, network, pressure, components, smart, docker, service, heartbeat." },
+                        "namespace": { "type": "string", "description": "e.g. cpu, memory, disk, network, pressure, components, smart, docker, service, heartbeat, probe." },
                         "field": { "type": "string", "description": "Metric field within the namespace, e.g. used_percent." },
                         "labels": { "type": "object", "description": "Optional label filter, e.g. {\"mount_point\": \"/\"}." }
                     },
@@ -286,6 +304,50 @@ Read-only.",
         }));
     }
 
+    tools.push(json!({
+        "type": "function",
+        "function": {
+            "name": "list_probes",
+            "description": "Custom probes registered on this host — user-defined scripts the daemon runs on a schedule (e.g. ClickHouse storage, DEBE freshness, entries-gap, fail2ban). Per probe: name, description, enabled, schedule, last run time / status / message, and its latest emitted metrics (name, value, unit, labels). Use this when asked about a probe by name, about scraper/pipeline/domain-specific health the built-in metrics don't cover, or \"what probes are configured\". For a probe metric's trend over time, follow up with metric_history (namespace 'probe').",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Optional: only this probe (exact name). Omit to list all." }
+                }
+            }
+        }
+    }));
+
+    if cfg!(target_os = "linux") {
+        tools.push(json!({
+            "type": "function",
+            "function": {
+                "name": "read_service_logs",
+                "description": "Tail a systemd unit's journal (one-shot journalctl) — the real \
+logs of any service on this host (nginx, a scraper, a database...), for diagnosing why a unit \
+is failing or what it did recently. Use list_services first if unsure of the unit name.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "service": {
+                            "type": "string",
+                            "description": "Unit name, with or without the .service suffix (see list_services)."
+                        },
+                        "lines": {
+                            "type": "integer",
+                            "description": "How many recent lines (10-200). Default 50."
+                        },
+                        "since_minutes": {
+                            "type": "integer",
+                            "description": "Only entries from the last N minutes (optional)."
+                        }
+                    },
+                    "required": ["service"]
+                }
+            }
+        }));
+    }
+
     #[cfg(feature = "docker")]
     {
         tools.push(json!({
@@ -361,6 +423,8 @@ pub async fn dispatch_collecting(
         "list_containers" => list_containers().await,
         #[cfg(feature = "docker")]
         "read_container_logs" => read_container_logs(args).await,
+        "read_service_logs" => read_service_logs(args).await,
+        "list_probes" => list_probes(state, args).await,
         // ----- propose-only (never mutate; drafted for operator confirm) -----
         "propose_alert_rule" => propose_alert_rule(args, proposals),
         "propose_silence_alert" => propose_silence_alert(state, args, proposals).await,
@@ -475,35 +539,294 @@ async fn list_processes(state: &Arc<AppState>, args: &Value) -> Result<Value, St
         .and_then(Value::as_u64)
         .unwrap_or(10)
         .clamp(1, 50) as usize;
+    let min_cpu = args.get("min_cpu_percent").and_then(Value::as_f64);
+    let min_mem = args.get("min_memory_percent").and_then(Value::as_f64);
+    let name_needle = args
+        .get("name_contains")
+        .and_then(Value::as_str)
+        .map(str::to_lowercase);
 
     let list = crate::routes::rest::process::get_or_refresh_processes(state).await;
-    let mut procs: Vec<_> = list.processes.iter().collect();
+    let mut procs: Vec<_> = list
+        .processes
+        .iter()
+        .filter(|p| {
+            min_cpu.is_none_or(|t| p.cpu_percent >= t)
+                && min_mem.is_none_or(|t| p.memory_percent >= t)
+                && name_needle
+                    .as_deref()
+                    .is_none_or(|n| p.name.to_lowercase().contains(n))
+        })
+        .collect();
+    let matched = procs.len();
     match sort_by {
         "memory" => procs.sort_by_key(|p| std::cmp::Reverse(p.memory_bytes)),
         _ => procs.sort_by(|a, b| b.cpu_percent.total_cmp(&a.cpu_percent)),
     }
 
+    let now = chrono::Utc::now().timestamp();
+    let history = state.process_history.read().await;
     let top: Vec<Value> = procs
         .into_iter()
         .take(limit)
         .map(|p| {
-            json!({
+            let mut row = json!({
                 "pid": p.pid,
                 "name": p.name,
+                "cmdline": clipped_cmdline(&p.cmd),
+                "parent_pid": p.parent_pid,
                 "cpu_percent": p.cpu_percent,
                 "memory_bytes": p.memory_bytes,
                 "memory_percent": p.memory_percent,
                 "user": p.user,
                 "state": process_state_str(&p.state),
-            })
+                "uptime_seconds": p.started_at.map(|t| (now - t).max(0)),
+                "threads": p.threads,
+            });
+            // Sampled short history: lets the model separate "spiking right
+            // now" from "hot for the last N minutes". Present only when the
+            // process collector runs and has ≥2 samples for this pid.
+            if let Some(h) = history.get(&p.pid).filter(|h| h.samples.len() >= 2) {
+                let n = h.samples.len() as f64;
+                let (mut cpu_sum, mut cpu_max, mut mem_sum) = (0.0f64, 0.0f64, 0.0f64);
+                let (mut rd_sum, mut wr_sum) = (0.0f64, 0.0f64);
+                for s in &h.samples {
+                    cpu_sum += s.cpu_percent as f64;
+                    cpu_max = cpu_max.max(s.cpu_percent as f64);
+                    mem_sum += s.memory_bytes as f64;
+                    rd_sum += s.disk_read_bps as f64;
+                    wr_sum += s.disk_write_bps as f64;
+                }
+                let span = h
+                    .samples
+                    .back()
+                    .zip(h.samples.front())
+                    .map(|(b, f)| b.ts - f.ts)
+                    .unwrap_or(0);
+                row["history"] = json!({
+                    "window_seconds": span,
+                    "cpu_avg_percent": round1(cpu_sum / n),
+                    "cpu_max_percent": round1(cpu_max),
+                    "memory_avg_bytes": (mem_sum / n) as u64,
+                    "disk_read_bps_avg": (rd_sum / n) as u64,
+                    "disk_write_bps_avg": (wr_sum / n) as u64,
+                });
+            }
+            if let Some(c) = container_of(p.pid) {
+                row["container"] = json!(c);
+            }
+            row
         })
         .collect();
 
     Ok(json!({
         "total": list.total_count,
+        "matched": matched,
         "sorted_by": if sort_by == "memory" { "memory" } else { "cpu" },
         "processes": top,
     }))
+}
+
+/// Command line, joined and clipped: enough to tell two `python3`s apart
+/// without letting a pathological argv blow up the model context.
+fn clipped_cmdline(cmd: &[String]) -> String {
+    let joined = cmd.join(" ");
+    if joined.chars().count() <= 160 {
+        return joined;
+    }
+    let clipped: String = joined.chars().take(160).collect();
+    format!("{clipped}…")
+}
+
+fn round1(v: f64) -> f64 {
+    (v * 10.0).round() / 10.0
+}
+
+/// Docker container short-id for a pid, read from its cgroup (Linux only) —
+/// best effort, `None` for host processes or on any read/parse failure.
+/// Covers both cgroup v2 systemd scopes (`…/docker-<id>.scope`) and the
+/// legacy `/docker/<id>` layout.
+#[cfg(target_os = "linux")]
+fn container_of(pid: u32) -> Option<String> {
+    let cgroup = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).ok()?;
+    for line in cgroup.lines() {
+        let id = line
+            .rsplit_once("docker-")
+            .map(|(_, rest)| rest.trim_end_matches(".scope"))
+            .or_else(|| line.rsplit_once("/docker/").map(|(_, rest)| rest));
+        if let Some(id) = id
+            && id.len() >= 12
+            && id.chars().take(12).all(|c| c.is_ascii_hexdigit())
+        {
+            return Some(id.chars().take(12).collect());
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+fn container_of(_pid: u32) -> Option<String> {
+    None
+}
+
+/// Custom probes from the in-memory registry: definition, last-run meta and
+/// latest emitted metrics — the same view `GET /probes` serves. Optional
+/// `name` narrows to one probe; an unknown name is an error naming what does
+/// exist so the model can retry.
+async fn list_probes(state: &Arc<AppState>, args: &Value) -> Result<Value, String> {
+    let filter = args.get("name").and_then(Value::as_str);
+    let reg = state.probe_registry.read().await;
+
+    if let Some(name) = filter
+        && !reg.probes.contains_key(name)
+    {
+        let mut known: Vec<&str> = reg.probes.keys().map(String::as_str).collect();
+        known.sort_unstable();
+        return Err(format!(
+            "no probe named '{name}'. Registered probes: {}",
+            known.join(", ")
+        ));
+    }
+
+    let mut probes: Vec<Value> = reg
+        .probes
+        .values()
+        .filter(|e| filter.is_none_or(|n| e.manifest.name == n))
+        .map(|e| {
+            let metrics: Vec<Value> = e
+                .last_metrics
+                .iter()
+                .map(|m| {
+                    json!({
+                        "name": m.name,
+                        "value": m.value,
+                        "unit": m.unit,
+                        "labels": m.labels,
+                    })
+                })
+                .collect();
+            json!({
+                "name": e.manifest.name,
+                "description": e.manifest.description,
+                "enabled": e.manifest.enabled,
+                "schedule": e.manifest.schedule.as_db_string(),
+                "last_run_at": e.last_run.as_ref().map(|r| r.timestamp),
+                "last_run_ok": e.last_run.as_ref().map(|r| r.parse_ok),
+                "last_message": e.last_run.as_ref().and_then(|r| r.message.clone()),
+                "latest_metrics": metrics,
+            })
+        })
+        .collect();
+    probes.sort_by(|a, b| {
+        a["name"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["name"].as_str().unwrap_or(""))
+    });
+
+    Ok(json!({ "count": probes.len(), "probes": probes }))
+}
+
+/// One-shot `journalctl -u <unit>` tail for the assistant — the read-only
+/// sibling of the SSE follow stream in `routes::sse::services`. Same charset
+/// validation and unit normalization; bounded lines, optional look-back
+/// window, hard timeout, and a total-size clamp so a chatty unit can't blow
+/// up the model context.
+async fn read_service_logs(args: &Value) -> Result<Value, String> {
+    let Some(service) = args.get("service").and_then(Value::as_str) else {
+        return Err("missing required arg: service".to_string());
+    };
+    if service.is_empty()
+        || service.len() > 256
+        || !service
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '@' | ':'))
+    {
+        return Err("service name may only contain alphanumerics and `._-@:`".to_string());
+    }
+    let lines = args
+        .get("lines")
+        .and_then(Value::as_u64)
+        .unwrap_or(50)
+        .clamp(10, 200)
+        .to_string();
+    let since_minutes = args
+        .get("since_minutes")
+        .and_then(Value::as_u64)
+        .filter(|m| *m > 0);
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (lines, since_minutes);
+        Err("service logs are only available on Linux hosts with journald".to_string())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use crate::platform::services::normalize_unit_name;
+
+        let unit = normalize_unit_name(service, "service");
+        let mut cmd = tokio::process::Command::new("journalctl");
+        cmd.args([
+            "-u",
+            &unit,
+            "--output=short-precise",
+            "--no-pager",
+            "-n",
+            &lines,
+        ]);
+        let since = since_minutes.map(|m| format!("-{m}min"));
+        if let Some(since) = &since {
+            cmd.args(["--since", since]);
+        }
+        cmd.stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+
+        let output = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            cmd.spawn()
+                .map_err(|e| format!("journalctl spawn failed: {e}"))?
+                .wait_with_output()
+                .await
+                .map_err(|e| format!("journalctl failed: {e}"))
+        })
+        .await
+        .map_err(|_| "journalctl timed out after 10s".to_string())??;
+
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "journalctl exited with {}: {}",
+                output.status,
+                err.chars().take(300).collect::<String>()
+            ));
+        }
+
+        // Clamp total size, keeping the NEWEST lines — the tail is where the
+        // diagnosis usually lives.
+        const MAX_CHARS: usize = 12_000;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut kept: Vec<&str> = Vec::new();
+        let mut total = 0usize;
+        for line in text.lines().rev() {
+            total += line.chars().count() + 1;
+            if total > MAX_CHARS {
+                break;
+            }
+            kept.push(line);
+        }
+        kept.reverse();
+        let truncated = total > MAX_CHARS;
+
+        Ok(json!({
+            "unit": unit,
+            "requested_lines": lines.parse::<u64>().unwrap_or(0),
+            "returned_lines": kept.len(),
+            "truncated_to_fit": truncated,
+            "since": since,
+            "log": kept.join("\n"),
+        }))
+    }
 }
 
 /// Mirrors `GET /alerts/state`: the (rule, label_set) pairs currently pending

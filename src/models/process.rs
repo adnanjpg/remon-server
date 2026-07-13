@@ -51,3 +51,24 @@ pub struct ProcessList {
     pub total_count: usize,
     pub timestamp: i64,
 }
+
+/// Rolling in-memory history for one pid, fed by the processes collector
+/// (see `collectors::processes`). Powers the assistant's "spike or steady
+/// state?" answers; never persisted, bounded by the collector's window.
+#[derive(Debug, Clone, Default)]
+pub struct ProcessHistory {
+    /// Process name at sampling time; a name change on the same pid means
+    /// pid reuse, and the collector resets the sample run.
+    pub name: String,
+    pub samples: std::collections::VecDeque<ProcessSample>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProcessSample {
+    pub ts: i64,
+    pub cpu_percent: f32,
+    pub memory_bytes: u64,
+    /// Disk throughput over the sampling interval (bytes/sec).
+    pub disk_read_bps: u64,
+    pub disk_write_bps: u64,
+}
