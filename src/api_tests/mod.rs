@@ -129,7 +129,15 @@ impl TestApp {
             vapid,
         ));
 
-        let router = crate::routes::rest::create_routes(state.clone()).with_state(state.clone());
+        // Mirror `build_app`: the assistant lives outside `create_routes`
+        // (it gets a longer timeout there), so mount it here too — with the
+        // same auth middleware — or the `/assistant` route tests 404.
+        let assistant = crate::routes::rest::create_assistant_routes().layer(
+            axum::middleware::from_fn_with_state(state.clone(), crate::middleware::auth_middleware),
+        );
+        let router = crate::routes::rest::create_routes(state.clone())
+            .merge(assistant)
+            .with_state(state.clone());
         TestApp { router, state }
     }
 

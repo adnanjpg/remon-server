@@ -44,6 +44,8 @@ async fn assistant_live() {
             .unwrap_or_else(|_| "gemini-2.5-flash".into()),
         max_tokens: 2048,
         prometheus_url: std::env::var("REMON__ASSISTANT__PROMETHEUS_URL").unwrap_or_default(),
+        dev: false,
+        process_history: false,
     };
 
     let app = TestApp::spawn_with_assistant(cfg).await;
