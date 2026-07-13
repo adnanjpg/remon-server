@@ -63,6 +63,14 @@ fn ping_routes() -> Router<Arc<AppState>> {
         )
 }
 
+/// The operator-assistant route, kept separate from `create_routes` so
+/// `build_app` can give it a longer request timeout: a multi-step tool-use
+/// loop legitimately runs past the 30s cap that fits ordinary REST calls.
+/// Still auth-gated — it's merged inside the protected router in `build_app`.
+pub fn create_assistant_routes() -> Router<Arc<AppState>> {
+    Router::new().route("/assistant", post(assistant::ask))
+}
+
 /// Build the REST router. Public routes are merged with protected routes; the
 /// latter run through `auth_middleware` (which needs `AppState` for the
 /// session/jti revocation check, hence the explicit `state` argument).
@@ -207,9 +215,6 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         // One-call host overview — fleet/multi-server clients poll this
         // once per daemon instead of fanning out to info/metrics/alerts.
         .route("/summary", get(system::get_summary))
-        // Read-only operator assistant — natural-language questions answered
-        // from this host's telemetry via a provider-abstracted tool-use loop.
-        .route("/assistant", post(assistant::ask))
         // Runtime configuration
         .route("/config", get(admin::get_config).patch(admin::patch_config))
         // Alert engine: rule CRUD + active-state + event log

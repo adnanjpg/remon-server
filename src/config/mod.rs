@@ -231,6 +231,22 @@ pub struct AssistantConfig {
     /// are ever called.
     #[serde(default)]
     pub prometheus_url: String,
+    /// Dev mode: lets an authenticated client pass per-ask overrides (system
+    /// prompt, step/token limits, bare-model chat, loop trace) for iterating
+    /// on the assistant itself. Off (default), such requests are rejected.
+    /// Auth and the read-only tool contract apply regardless.
+    #[serde(default)]
+    pub dev: bool,
+    /// Run the continuous process collector so `list_processes` can report
+    /// short per-process history (avg/max over the last 15 minutes) instead
+    /// of a bare snapshot. Costs one full process refresh per tick; turn off
+    /// on hosts with very large process tables.
+    #[serde(default = "default_assistant_process_history")]
+    pub process_history: bool,
+}
+
+fn default_assistant_process_history() -> bool {
+    true
 }
 
 impl Default for AssistantConfig {
@@ -242,6 +258,8 @@ impl Default for AssistantConfig {
             model: default_assistant_model(),
             max_tokens: default_assistant_max_tokens(),
             prometheus_url: String::new(),
+            dev: false,
+            process_history: true,
         }
     }
 }

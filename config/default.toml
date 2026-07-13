@@ -98,6 +98,8 @@ enabled = true
 # Groq:       https://api.groq.com/openai/v1
 # Ollama:     http://localhost:11434/v1
 # OpenRouter: https://openrouter.ai/api/v1   (reaches Claude/GPT/etc. via one key)
+# Anthropic:  https://api.anthropic.com/v1   (auto-switches to the native
+#             Messages API with prompt caching; model = "claude-haiku-4-5")
 # Env: REMON__ASSISTANT__BASE_URL
 base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
 # Env: REMON__ASSISTANT__API_KEY
@@ -113,3 +115,14 @@ max_tokens = 2048
 # Optional Prometheus server for the prometheus_query tool. Empty hides it.
 # Env: REMON__ASSISTANT__PROMETHEUS_URL
 prometheus_url = ""
+# Dev mode: allow per-ask overrides (system prompt, step/token limits,
+# bare-model chat, loop trace) from authenticated clients — for developing
+# the assistant itself. Requests carrying overrides are rejected while this
+# is off. Keep off in normal operation.
+# Env: REMON__ASSISTANT__DEV
+dev = false
+# Continuous process sampling for list_processes time context (15-minute
+# per-process avg/max). One full process refresh per tick; disable on hosts
+# with very large process tables.
+# Env: REMON__ASSISTANT__PROCESS_HISTORY
+process_history = true

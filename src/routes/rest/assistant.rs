@@ -8,7 +8,7 @@ use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::assistant::{Assistant, ProposedAction};
+use crate::assistant::{AskParams, Assistant, DevOverrides, HistoryTurn, ProposedAction};
 use crate::error::{AppError, AppResult};
 use crate::routes::extractors::Claims;
 use crate::state::AppState;
@@ -20,6 +20,14 @@ const MAX_QUESTION_LEN: usize = 2000;
 #[derive(Debug, Deserialize)]
 pub struct AskRequest {
     pub question: String,
+    /// Prior turns of this conversation, oldest first. The daemon is
+    /// stateless; the client replays what it wants remembered (capped and
+    /// clipped server-side).
+    #[serde(default)]
+    pub history: Vec<HistoryTurn>,
+    /// Per-ask dev overrides — rejected unless `[assistant] dev = true`.
+    #[serde(default)]
+    pub dev: Option<DevOverrides>,
 }
 
 #[derive(Debug, Serialize)]
@@ -29,6 +37,10 @@ pub struct AskResponse {
     /// client renders each for confirmation and only then calls its `method`
     /// `path`; the daemon performs nothing here.
     pub proposals: Vec<ProposedAction>,
+    /// Loop trace (model turns + tool calls) — present only when dev mode
+    /// requested it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace: Option<Vec<serde_json::Value>>,
 }
 
 /// POST /assistant — ask a plain-language question about this host.
@@ -50,18 +62,32 @@ pub async fn ask(
         )));
     }
 
+    // Dev overrides are a config-gated capability: without the flag the
+    // request is refused outright rather than silently stripped, so a client
+    // never mistakes a locked-down answer for a dev-mode one.
+    if req.dev.is_some() && !state.assistant_config.dev {
+        return Err(AppError::Forbidden(
+            "assistant dev mode is disabled ([assistant] dev = false)".to_string(),
+        ));
+    }
+
     // A disabled or key-less assistant is a 503 with a client-safe hint, not a
     // 500 — the operator can act on it.
     let assistant = Assistant::new(state.assistant_config.clone(), state.clone())
         .map_err(|e| AppError::ServiceUnavailable(e.to_string()))?;
 
     let outcome = assistant
-        .ask(question)
+        .ask(AskParams {
+            question: question.to_string(),
+            history: req.history,
+            dev: req.dev,
+        })
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
     Ok(Json(AskResponse {
         answer: outcome.answer,
         proposals: outcome.proposals,
+        trace: outcome.trace,
     }))
 }

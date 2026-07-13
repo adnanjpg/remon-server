@@ -2,6 +2,10 @@
 //!
 //! Runs an agentic tool-use loop against an OpenAI-compatible chat endpoint
 //! (Gemini's compat surface by default; also Groq, Ollama, OpenRouter, ...).
+//! Anthropic hosts are detected from `base_url` and speak the native Messages
+//! API instead (see `anthropic.rs`) — same loop, plus prompt caching and
+//! richer error semantics. Transient provider failures (429/5xx/network)
+//! retry with bounded backoff before surfacing.
 //! The model is handed read-only tools over this host's own telemetry and
 //! answers operator questions in plain language. It cannot change anything on
 //! the host; every tool is a read.
@@ -15,12 +19,14 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use log::{debug, warn};
 use reqwest::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::time::Instant;
 
 use crate::config::AssistantConfig;
 use crate::state::AppState;
 
+mod anthropic;
 pub(crate) mod tools;
 
 /// A write-action the assistant drafted but did **not** perform. The daemon
@@ -43,12 +49,75 @@ pub struct ProposedAction {
 }
 
 /// Result of one `ask`: the natural-language answer plus any actions the model
-/// drafted for operator confirmation.
+/// drafted for operator confirmation. `trace` is populated only when dev mode
+/// asked for it: one entry per model turn (usage, latency) and per tool call
+/// (args, result preview, latency), for iterating on prompts and tools.
 #[derive(Debug, Clone)]
 pub struct AskOutcome {
     pub answer: String,
     pub proposals: Vec<ProposedAction>,
+    pub trace: Option<Vec<Value>>,
 }
+
+/// One prior question/answer pair replayed for conversational context. The
+/// client owns the conversation (the daemon stays stateless); it sends back
+/// what it wants remembered.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HistoryTurn {
+    pub question: String,
+    pub answer: String,
+}
+
+/// Dev-mode overrides for a single ask. Only honored when `[assistant]
+/// dev = true`; the handler rejects them otherwise. Auth and the read-only /
+/// propose-only tool contract still apply — this loosens the frame (persona,
+/// limits), never the safety model.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct DevOverrides {
+    /// Replace the built-in system prompt for this ask (prompt iteration
+    /// without a rebuild). Empty/absent keeps the default.
+    #[serde(default)]
+    pub system: Option<String>,
+    /// Use a different model for this ask (same provider/base_url) — for
+    /// side-by-side quality/cost comparisons, e.g. claude-haiku-4-5 vs
+    /// claude-sonnet-5 on the same question.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Raise the tool-loop cap (still bounded server-side).
+    #[serde(default)]
+    pub max_steps: Option<usize>,
+    /// Raise the per-turn output ceiling (still bounded server-side).
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    /// Talk to the bare model: no tools advertised at all.
+    #[serde(default)]
+    pub no_tools: bool,
+    /// Return the loop trace (model turns + tool calls) with the answer.
+    #[serde(default)]
+    pub trace: bool,
+}
+
+/// Everything one `ask` needs. `history` is capped and replayed as plain
+/// user/assistant turns ahead of the new question.
+#[derive(Debug, Clone, Default)]
+pub struct AskParams {
+    pub question: String,
+    pub history: Vec<HistoryTurn>,
+    pub dev: Option<DevOverrides>,
+}
+
+/// Replayed history is bounded so a chatty client can't grow the prompt
+/// without limit: at most this many most-recent turns...
+const MAX_HISTORY_TURNS: usize = 12;
+/// ...and each replayed answer is clipped to this many chars.
+const MAX_HISTORY_ANSWER_CHARS: usize = 4000;
+
+/// Dev mode can raise limits, but never unbounded.
+const DEV_MAX_STEPS_CEILING: usize = 50;
+const DEV_MAX_TOKENS_CEILING: u32 = 32_768;
+
+/// Chars of each tool result echoed into the trace.
+const TRACE_RESULT_PREVIEW_CHARS: usize = 600;
 
 /// Hard cap on model/tool round trips per question. A read-only diagnostic
 /// answer needs a handful of tool calls at most; the cap bounds cost and
@@ -64,7 +133,7 @@ Answer the operator's question by calling the provided tools to read this \
 server's live telemetry. Tools: get_summary (host overview), list_processes \
 (top CPU/memory consumers), active_alerts (what is alarming now), \
 recent_alert_events (fire/resolve timeline — when things started), read_logs \
-(this daemon's recent errors), query_metric (current value of any metric), \
+(this daemon's recent errors), read_service_logs (any systemd unit's journal tail), query_metric (current value of any metric), \
 metric_history (min/max/avg/trend of a metric over a window), list_services \
 (and list_containers / read_container_logs where present), and prometheus_query \
 where a Prometheus server is configured.\n\
@@ -114,17 +183,63 @@ impl Assistant {
 
     /// Run the tool-use loop for one operator question. Returns the model's
     /// final answer plus any write-actions it drafted for confirmation.
-    pub async fn ask(&self, question: &str) -> Result<AskOutcome> {
-        let mut messages = vec![
-            json!({ "role": "system", "content": SYSTEM_PROMPT }),
-            json!({ "role": "user", "content": question }),
-        ];
+    /// Prior turns arrive as `history` (client-owned conversation, replayed
+    /// as plain text) so follow-ups like "do all of those" resolve.
+    pub async fn ask(&self, params: AskParams) -> Result<AskOutcome> {
+        let dev = params.dev.unwrap_or_default();
+        let system = dev
+            .system
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(SYSTEM_PROMPT);
+        let model = dev
+            .model
+            .as_deref()
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or(&self.cfg.model);
+        let max_steps = dev
+            .max_steps
+            .unwrap_or(MAX_STEPS)
+            .min(DEV_MAX_STEPS_CEILING);
+        let max_tokens = dev
+            .max_tokens
+            .unwrap_or(self.cfg.max_tokens)
+            .min(DEV_MAX_TOKENS_CEILING);
+        let with_tools = !dev.no_tools;
+
+        let mut messages = vec![json!({ "role": "system", "content": system })];
+        let skip = params.history.len().saturating_sub(MAX_HISTORY_TURNS);
+        for turn in params.history.iter().skip(skip) {
+            let mut answer = turn.answer.as_str();
+            if answer.len() > MAX_HISTORY_ANSWER_CHARS {
+                let mut end = MAX_HISTORY_ANSWER_CHARS;
+                while !answer.is_char_boundary(end) {
+                    end -= 1;
+                }
+                answer = &answer[..end];
+            }
+            messages.push(json!({ "role": "user", "content": turn.question }));
+            messages.push(json!({ "role": "assistant", "content": answer }));
+        }
+        messages.push(json!({ "role": "user", "content": params.question }));
+
         // Write-actions the model drafts via `propose_*` tools accumulate here
         // and ride back on the outcome; the loop itself never mutates state.
         let mut proposals: Vec<ProposedAction> = Vec::new();
+        let mut trace: Vec<Value> = Vec::new();
 
-        for step in 0..MAX_STEPS {
-            let message = self.chat(&messages).await?;
+        for step in 0..max_steps {
+            let turn_started = Instant::now();
+            let (message, usage) = self.chat(&messages, model, max_tokens, with_tools).await?;
+            if dev.trace {
+                trace.push(json!({
+                    "type": "model",
+                    "step": step,
+                    "model": model,
+                    "ms": turn_started.elapsed().as_millis() as u64,
+                    "usage": usage,
+                }));
+            }
 
             let tool_calls = message.get("tool_calls").and_then(Value::as_array).cloned();
             if let Some(calls) = tool_calls
@@ -146,8 +261,21 @@ impl Assistant {
                         .and_then(|s| serde_json::from_str::<Value>(s).ok())
                         .unwrap_or_else(|| json!({}));
                     debug!("assistant tool call: {name} {args}");
+                    let tool_started = Instant::now();
                     let result =
                         tools::dispatch_collecting(&self.state, name, &args, &mut proposals).await;
+                    if dev.trace {
+                        let preview: String =
+                            result.chars().take(TRACE_RESULT_PREVIEW_CHARS).collect();
+                        trace.push(json!({
+                            "type": "tool",
+                            "step": step,
+                            "name": name,
+                            "args": args,
+                            "result_preview": preview,
+                            "ms": tool_started.elapsed().as_millis() as u64,
+                        }));
+                    }
                     messages.push(json!({
                         "role": "tool",
                         "tool_call_id": id,
@@ -168,53 +296,154 @@ impl Assistant {
                 warn!("assistant returned an empty answer at step {step}");
                 bail!("assistant returned an empty answer");
             }
-            return Ok(AskOutcome { answer, proposals });
+            return Ok(AskOutcome {
+                answer,
+                proposals,
+                trace: dev.trace.then_some(trace),
+            });
         }
 
-        bail!("assistant exceeded {MAX_STEPS} tool-use steps without answering");
+        bail!("assistant exceeded {max_steps} tool-use steps without answering");
     }
 
-    /// One round trip to `{base_url}/chat/completions`; returns the assistant
-    /// message object (`choices[0].message`). The response is navigated as
-    /// untyped JSON so provider-specific extra fields pass through unharmed.
-    async fn chat(&self, messages: &[Value]) -> Result<Value> {
-        let url = format!(
-            "{}/chat/completions",
-            self.cfg.base_url.trim_end_matches('/')
-        );
-        let body = json!({
-            "model": self.cfg.model,
-            "max_tokens": self.cfg.max_tokens,
-            "messages": messages,
-            "tools": tools::definitions(&self.state),
-        });
+    /// One provider round trip; returns the assistant message in OpenAI shape
+    /// (plus the provider's `usage` object, when present) regardless of the
+    /// wire format underneath. Anthropic hosts get the native Messages API
+    /// (for prompt caching); everything else speaks OpenAI-compat. Responses
+    /// are navigated as untyped JSON so provider-specific extra fields pass
+    /// through unharmed.
+    async fn chat(
+        &self,
+        messages: &[Value],
+        model: &str,
+        max_tokens: u32,
+        with_tools: bool,
+    ) -> Result<(Value, Option<Value>)> {
+        let base = self.cfg.base_url.trim_end_matches('/');
 
-        let resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.cfg.api_key)
-            .json(&body)
-            .send()
-            .await
-            .context("assistant request failed")?;
-
-        let status = resp.status();
-        let payload: Value = resp
-            .json()
-            .await
-            .context("assistant response was not valid json")?;
-
-        if !status.is_success() {
-            let detail = payload
-                .pointer("/error/message")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown provider error");
-            bail!("assistant provider error ({status}): {detail}");
+        if anthropic::is_native(base) {
+            let url = format!("{base}/messages");
+            let tools = if with_tools {
+                tools::definitions(&self.state)
+            } else {
+                json!([])
+            };
+            let body = anthropic::build_body(model, max_tokens, messages, &tools);
+            let payload = self
+                .send_with_retry(|| {
+                    self.http
+                        .post(&url)
+                        .header("x-api-key", &self.cfg.api_key)
+                        .header("anthropic-version", anthropic::API_VERSION)
+                        .json(&body)
+                })
+                .await?;
+            let usage = payload.get("usage").cloned();
+            if let Some(usage) = &usage {
+                log::info!(
+                    "assistant usage: in={} out={} cache_write={} cache_read={}",
+                    usage
+                        .get("input_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    usage
+                        .get("output_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    usage
+                        .get("cache_creation_input_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    usage
+                        .get("cache_read_input_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                );
+            }
+            return Ok((anthropic::to_openai_message(&payload)?, usage));
         }
 
-        payload
+        let url = format!("{base}/chat/completions");
+        let mut body = json!({
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": messages,
+        });
+        if with_tools {
+            body["tools"] = tools::definitions(&self.state);
+        }
+        let payload = self
+            .send_with_retry(|| {
+                self.http
+                    .post(&url)
+                    .bearer_auth(&self.cfg.api_key)
+                    .json(&body)
+            })
+            .await?;
+
+        let message = payload
             .pointer("/choices/0/message")
             .cloned()
-            .context("assistant response had no choices[0].message")
+            .context("assistant response had no choices[0].message")?;
+        Ok((message, payload.get("usage").cloned()))
+    }
+
+    /// Send a provider request with bounded retries on transient failures:
+    /// network errors, 429 (rate limit) and 5xx (incl. Anthropic's 529
+    /// overloaded). Waits honor Retry-After when present (capped so a hostile
+    /// header can't stall the loop), otherwise back off 1s → 3s. Anything else
+    /// — or exhausted retries — surfaces as the usual provider error.
+    async fn send_with_retry(&self, build: impl Fn() -> reqwest::RequestBuilder) -> Result<Value> {
+        const BACKOFFS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
+        const MAX_RETRY_AFTER: Duration = Duration::from_secs(10);
+
+        let mut attempt = 0;
+        loop {
+            let resp = match build().send().await {
+                Ok(resp) => resp,
+                Err(e) if attempt < BACKOFFS.len() => {
+                    warn!("assistant request failed ({e}), retrying");
+                    tokio::time::sleep(BACKOFFS[attempt]).await;
+                    attempt += 1;
+                    continue;
+                }
+                Err(e) => return Err(e).context("assistant request failed"),
+            };
+
+            let status = resp.status();
+            if (status.as_u16() == 429 || status.is_server_error()) && attempt < BACKOFFS.len() {
+                let wait = resp
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .map(Duration::from_secs)
+                    .unwrap_or(BACKOFFS[attempt])
+                    .min(MAX_RETRY_AFTER);
+                warn!(
+                    "assistant provider {status}, retrying in {}s (attempt {}/{})",
+                    wait.as_secs(),
+                    attempt + 1,
+                    BACKOFFS.len()
+                );
+                tokio::time::sleep(wait).await;
+                attempt += 1;
+                continue;
+            }
+
+            let payload: Value = resp
+                .json()
+                .await
+                .context("assistant response was not valid json")?;
+
+            if !status.is_success() {
+                let detail = payload
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown provider error");
+                bail!("assistant provider error ({status}): {detail}");
+            }
+            return Ok(payload);
+        }
     }
 }

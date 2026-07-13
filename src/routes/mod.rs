@@ -29,16 +29,31 @@ use crate::state::AppState;
 pub fn build_app(app_state: Arc<AppState>, config: &Config) -> anyhow::Result<Router> {
     let cors_layer = cors::build_cors_layer(&config.cors)?;
 
-    // REST gets request timeouts; SSE/WS streams stay long-lived.
+    // REST gets a 30s request timeout; SSE/WS streams stay long-lived.
     let rest_router = rest::create_routes(app_state.clone()).layer(TimeoutLayer::with_status_code(
         StatusCode::REQUEST_TIMEOUT,
         Duration::from_secs(30),
     ));
+
+    // The assistant runs a multi-step tool-use loop that legitimately exceeds
+    // 30s (several provider round trips, each up to its own 60s cap), so it
+    // gets its own longer timeout. Auth-gated the same way — auth_middleware
+    // is applied here since it lives outside create_routes' protected group.
+    let assistant_router = rest::create_assistant_routes()
+        .layer(axum::middleware::from_fn_with_state(
+            app_state.clone(),
+            crate::middleware::auth_middleware,
+        ))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(150),
+        ));
     let compression = CompressionLayer::new()
         .compress_when(DefaultPredicate::new().and(NotForContentType::new("text/event-stream")));
 
     let app = Router::new()
         .merge(rest_router)
+        .merge(assistant_router)
         .nest("/sse", sse::create_routes(app_state.clone()))
         .nest("/ws", ws::create_routes(app_state.clone()))
         .with_state(app_state)
