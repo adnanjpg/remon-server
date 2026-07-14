@@ -320,6 +320,26 @@ async fn propose_service_action_builds_path() {
 }
 
 #[tokio::test]
+async fn propose_service_action_rejects_path_smuggling_names() {
+    let app = TestApp::spawn().await;
+    // A name that injects a separator, query, or fragment would make the
+    // confirmed request differ from the summary the operator approved.
+    for name in ["nginx/stop", "nginx?x=1", "nginx#frag", "..", "a b"] {
+        let (out, proposals) = propose(
+            &app,
+            "propose_service_action",
+            json!({ "name": name, "action": "restart" }),
+        )
+        .await;
+        assert!(
+            out["error"].as_str().is_some(),
+            "name {name:?} should be rejected, got: {out}"
+        );
+        assert!(proposals.is_empty(), "name {name:?} produced a proposal");
+    }
+}
+
+#[tokio::test]
 async fn propose_silence_alert_unknown_rule_errors() {
     let app = TestApp::spawn().await;
     let (out, proposals) = propose(

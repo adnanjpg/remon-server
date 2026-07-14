@@ -1196,6 +1196,28 @@ fn proposed(summary: &str) -> Result<Value, String> {
     Ok(json!({ "proposed": summary, "status": "awaiting operator confirmation" }))
 }
 
+/// Guard for model-supplied values interpolated into a proposal path. The
+/// operator confirms `method path` verbatim, so a value must not be able to
+/// smuggle a different endpoint (`/`, `..`), a query (`?`), or a fragment
+/// (`#`) into the request that the confirm actually issues.
+fn safe_path_segment<'a>(value: &'a str, what: &str) -> Result<&'a str, String> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Err(format!("'{what}' must not be empty"));
+    }
+    if v == "." || v == ".." {
+        return Err(format!("'{what}' must be a name, not a path"));
+    }
+    if v.contains(['/', '\\', '?', '#', '%'])
+        || v.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(format!(
+            "'{what}' contains characters that are not allowed in a path segment"
+        ));
+    }
+    Ok(v)
+}
+
 /// Draft a new alert rule (POST /alerts). The expression is validated up front
 /// so the model can't propose something the create endpoint would reject.
 fn propose_alert_rule(args: &Value, proposals: &mut Vec<ProposedAction>) -> Result<Value, String> {
@@ -1295,11 +1317,12 @@ fn propose_service_action(
     args: &Value,
     proposals: &mut Vec<ProposedAction>,
 ) -> Result<Value, String> {
-    let name = args
-        .get("name")
-        .and_then(Value::as_str)
-        .ok_or("missing service 'name'")?
-        .trim();
+    let name = safe_path_segment(
+        args.get("name")
+            .and_then(Value::as_str)
+            .ok_or("missing service 'name'")?,
+        "name",
+    )?;
     let action = args
         .get("action")
         .and_then(Value::as_str)
@@ -1360,11 +1383,12 @@ fn propose_container_action(
     args: &Value,
     proposals: &mut Vec<ProposedAction>,
 ) -> Result<Value, String> {
-    let container = args
-        .get("container")
-        .and_then(Value::as_str)
-        .ok_or("missing 'container'")?
-        .trim();
+    let container = safe_path_segment(
+        args.get("container")
+            .and_then(Value::as_str)
+            .ok_or("missing 'container'")?,
+        "container",
+    )?;
     let action = args
         .get("action")
         .and_then(Value::as_str)
