@@ -92,6 +92,31 @@ async fn schema_endpoint_returns_catalogue() {
     assert_eq!(st, StatusCode::OK);
     assert!(body["namespaces"].is_array());
     assert!(body["comparators"].is_array());
+
+    // The catalogue mirrors the resolver whitelists (resolver.rs) — a
+    // namespace the evaluator accepts must be offered to the rule editor.
+    let names: Vec<&str> = body["namespaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|n| n["name"].as_str())
+        .collect();
+    for expected in [
+        "cpu",
+        "memory",
+        "disk",
+        "network",
+        "pressure",
+        "components",
+        "smart",
+        "docker",
+        "process",
+        "probe",
+        "heartbeat",
+        "service",
+    ] {
+        assert!(names.contains(&expected), "schema is missing '{expected}'");
+    }
 }
 
 #[tokio::test]

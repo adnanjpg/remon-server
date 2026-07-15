@@ -810,6 +810,54 @@ fn build_alerts_schema() -> AlertsSchemaResponse {
                 }],
             },
             NamespaceSchemaDto {
+                name: "process",
+                description: "Name-grouped process series (all PIDs sharing an executable name, e.g. every nginx worker). Only the top-K groups by cpu and by memory are stored each minute ([assistant] process_series_top_k, default 20), so a rule matches a process while it is hot; quiet processes have no samples.",
+                dynamic_metrics: false,
+                metrics: vec![
+                    MetricSchemaDto {
+                        name: "cpu_percent",
+                        unit: Some("%"),
+                        description: Some(
+                            "summed across the group; can exceed 100 on multi-core hosts",
+                        ),
+                        value_type: "float",
+                    },
+                    MetricSchemaDto {
+                        name: "memory_bytes",
+                        unit: Some("bytes"),
+                        description: Some("resident memory summed across the group"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "pid_count",
+                        unit: None,
+                        description: Some("processes in the group"),
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "disk_read_bps",
+                        unit: Some("bytes/s"),
+                        description: None,
+                        value_type: "int",
+                    },
+                    MetricSchemaDto {
+                        name: "disk_write_bps",
+                        unit: Some("bytes/s"),
+                        description: None,
+                        value_type: "int",
+                    },
+                ],
+                labels: vec![LabelSchemaDto {
+                    name: "name",
+                    required: false,
+                    values: None,
+                    source: Some(LabelSourceDto {
+                        endpoint: "/processes",
+                        json_path: "processes[].name",
+                    }),
+                }],
+            },
+            NamespaceSchemaDto {
                 name: "probe",
                 description: "Metrics emitted by user-defined probe scripts. Metric name is whatever the script reported.",
                 dynamic_metrics: true,
