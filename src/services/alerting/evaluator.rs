@@ -178,7 +178,7 @@ async fn run_rule_loop(rule: AlertRule, state: Arc<AppState>) {
 pub(crate) async fn evaluate_once(
     rule: &AlertRule,
     expr: &Expression,
-    state: &AppState,
+    state: &Arc<AppState>,
 ) -> Result<(), String> {
     let repo = AlertRepository::new(state.db.clone());
 
@@ -316,6 +316,25 @@ pub(crate) async fn evaluate_once(
                 rule.name, sample.label_set, e
             );
             continue;
+        }
+
+        // Flight recorder: the first threshold crossing (ok→pending) freezes
+        // the box's context while the incident is still live; the →firing arm
+        // covers states restored mid-incident. Spawned + cooldown-deduped in
+        // the incidents service, so this never touches eval latency.
+        if matches!(
+            (prior_state, next.state),
+            (AlertLifecycle::Ok, AlertLifecycle::Pending)
+                | (AlertLifecycle::Pending, AlertLifecycle::Firing)
+        ) {
+            crate::services::incidents::spawn_capture_for_alert(
+                Arc::clone(state),
+                rule.id,
+                rule.name.clone(),
+                sample.label_set.clone(),
+                expr.metric.namespace.clone(),
+                sample.value,
+            );
         }
 
         // State is durable. Now the best-effort side effects.
