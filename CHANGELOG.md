@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.12.0] - 2026-07-14
+
+### Added
+
+- **Incident flight recorder** — the moment an alert first crosses its threshold (ok→pending), the daemon freezes a bounded context bundle: host vitals cross-section, top processes by cpu/memory with their recent in-memory history (spike vs steady state), the daemon's recent errors, system-level error events (journald; OOM kills, segfaults), co-active alerts and failed units — plus a T+60s follow-up sample. Captures are spawned and cooldown-deduped (15 min per rule+label), so rule evaluation latency is untouched and flapping can't spam. The core is trigger-agnostic: `POST /incidents/capture {reason, category}` lets an operator or an external detector (fail2ban action, IDS hook) anchor a snapshot on demand. Snapshots age out with the standard retention engine (30 days).
+- **Assistant: incident tools** — `list_incidents` + `incident_detail` answer "what caused that alert at 03:12" from the frozen bundle instead of reconstructing; `capture_incident` freezes the current moment when the assistant notices something anomalous no alert covers (observability-only write — it never touches the host).
+- **Assistant: `read_system_events` tool** — OS-level error/warning events: journald on Linux, the System+Application event logs on Windows (PowerShell `Get-WinEvent`). Bounded lines, look-back window, 10s hard timeout.
+- **Persistent process series (`metrics_process`)** — once a minute the processes collector folds its per-pid pass into name groups and stores the top-K by cpu and by memory (union; `[assistant] process_series_top_k`, default 20, 0 disables). Bounded by K, never by the host's process table — the same trade prometheus' process-exporter makes. Rolled up raw→1m→5m→1h and aged out like every other metric.
+- **`process` metric namespace** — `process.cpu_percent{name="clickhouse-server"} > 90` now works as an alert expression; `metric_history` answers "which process was eating cpu at 3am"; `query_metric` reads the latest per-group values. Quiet processes may have no samples (top-K caveat, documented in the tool description).
+
 ## [0.11.0] - 2026-07-13
 
 ### Added
