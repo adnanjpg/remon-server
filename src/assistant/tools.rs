@@ -217,6 +217,80 @@ pub fn definitions(state: &AppState) -> Value {
         json!({
             "type": "function",
             "function": {
+                "name": "list_incidents",
+                "description": "Flight-recorder snapshots: whenever an alert first crossed its \
+        threshold (or someone asked), the daemon froze the box's context. Returns id, time, \
+        trigger, category, rule and value per snapshot, newest first. Follow up with \
+        incident_detail for the bundle.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": { "type": "integer", "description": "Max snapshots (1-50). Default 10." }
+                    }
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "incident_detail",
+                "description": "One incident snapshot's full context bundle: host vitals at \
+        capture time, top processes with their recent in-memory history (spike vs steady), the \
+        daemon's recent errors, system-level errors (OOM kills etc., Linux), co-active alerts and \
+        failed units — plus a follow-up sample from ~60s later. THE tool for 'what caused that \
+        alert at 03:12'.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "integer", "description": "Snapshot id from list_incidents." }
+                    },
+                    "required": ["id"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "capture_incident",
+                "description": "Freeze the current host context into a persistent incident \
+        snapshot (same bundle as alert-triggered ones, follow-up sample included). Use it when \
+        you notice something anomalous that no alert covers, so the moment stays diagnosable \
+        later. Writes only to the monitoring database — it does not touch the host.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reason": { "type": "string", "description": "Why this moment is worth recording." },
+                        "category": {
+                            "type": "string",
+                            "enum": ["resource", "availability", "security", "custom"],
+                            "description": "Default custom."
+                        }
+                    },
+                    "required": ["reason"]
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "read_system_events",
+                "description": "System-level error/warning events — journald on Linux (OOM \
+        kills, segfaults, disk errors, service crashes), the System+Application event logs on \
+        Windows. This is the OS's view; read_logs is the daemon's own log and read_service_logs \
+        is one unit's journal.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "level": { "type": "string", "enum": ["err", "warn"], "description": "Minimum severity. Default err." },
+                        "lines": { "type": "integer", "description": "Max events (10-200). Default 50." },
+                        "since_minutes": { "type": "integer", "description": "Look-back window. Default 60." }
+                    }
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
                 "name": "propose_alert_rule",
                 "description": "Draft a new alert rule for the operator to confirm (it is NOT \
         created until they do). The expression is 'metric.field [labels] <op> number', e.g. \
@@ -423,6 +497,12 @@ pub async fn dispatch_collecting(
         "recent_alert_events" => recent_alert_events(state, args).await,
         "list_services" => list_services(state, args).await,
         "prometheus_query" => prometheus_query(state, args).await,
+        "list_incidents" => list_incidents(state, args).await,
+        "incident_detail" => incident_detail(state, args).await,
+        "read_system_events" => read_system_events(args).await,
+        // Writes observability data into remon's own DB only — the host
+        // itself stays untouched, so no propose/confirm round trip.
+        "capture_incident" => capture_incident(state, args).await,
         #[cfg(feature = "docker")]
         "list_containers" => list_containers().await,
         #[cfg(feature = "docker")]
@@ -729,6 +809,107 @@ async fn list_probes(state: &Arc<AppState>, args: &Value) -> Result<Value, Strin
     });
 
     Ok(json!({ "count": probes.len(), "probes": probes }))
+}
+
+/// Newest-first incident snapshots, summaries only.
+async fn list_incidents(state: &Arc<AppState>, args: &Value) -> Result<Value, String> {
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(10)
+        .clamp(1, 50) as u32;
+    let rows = crate::storage::repositories::IncidentRepository::new(state.db.clone())
+        .list(limit)
+        .await
+        .map_err(|e| e.to_string())?;
+    let out: Vec<Value> = rows
+        .into_iter()
+        .map(|r| {
+            json!({
+                "id": r.id,
+                "captured_at": r.created_at,
+                "trigger": r.trigger_kind,
+                "category": r.category,
+                "rule_name": r.rule_name,
+                "label_set": r.label_set,
+                "metric_value": r.metric_value,
+                "reason": r.reason,
+                "has_after": r.has_after,
+            })
+        })
+        .collect();
+    Ok(json!({ "count": out.len(), "incidents": out }))
+}
+
+/// One snapshot's full bundle (+ the T+60s follow-up when present). Bundles
+/// are bounded at capture time, so returning them whole is safe.
+async fn incident_detail(state: &Arc<AppState>, args: &Value) -> Result<Value, String> {
+    let id = args
+        .get("id")
+        .and_then(Value::as_i64)
+        .ok_or("missing 'id'")?;
+    let row = crate::storage::repositories::IncidentRepository::new(state.db.clone())
+        .get(id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("no incident snapshot with id {id}"))?;
+
+    let bundle: Value = serde_json::from_str(&row.bundle).unwrap_or(Value::Null);
+    let after: Value = row
+        .after_bundle
+        .as_deref()
+        .map(|s| serde_json::from_str(s).unwrap_or(Value::Null))
+        .unwrap_or(Value::Null);
+    Ok(json!({
+        "id": row.id,
+        "captured_at": row.created_at,
+        "trigger": row.trigger_kind,
+        "category": row.category,
+        "rule_name": row.rule_name,
+        "label_set": row.label_set,
+        "metric_value": row.metric_value,
+        "reason": row.reason,
+        "bundle": bundle,
+        "after": after,
+    }))
+}
+
+/// On-demand flight-recorder capture. Deliberately NOT a propose_* tool: it
+/// only appends observability data to remon's own DB.
+async fn capture_incident(state: &Arc<AppState>, args: &Value) -> Result<Value, String> {
+    let reason = args
+        .get("reason")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .ok_or("missing 'reason'")?;
+    let category = args
+        .get("category")
+        .and_then(Value::as_str)
+        .unwrap_or("custom");
+    if !matches!(
+        category,
+        "resource" | "availability" | "security" | "custom"
+    ) {
+        return Err("category must be resource|availability|security|custom".to_string());
+    }
+    let id = crate::services::incidents::capture_manual(state, reason, category)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(json!({
+        "captured": true,
+        "id": id,
+        "note": "context bundle stored; a follow-up sample lands in ~60s",
+    }))
+}
+
+/// OS-level error/warning events (journald / Windows event log), one bounded
+/// one-shot read. Implementation shared with the incident bundle builder.
+async fn read_system_events(args: &Value) -> Result<Value, String> {
+    let level = args.get("level").and_then(Value::as_str).unwrap_or("err");
+    let lines = args.get("lines").and_then(Value::as_u64).unwrap_or(50);
+    let since_minutes = args.get("since_minutes").and_then(Value::as_u64);
+    crate::services::incidents::system_events(level, lines, since_minutes).await
 }
 
 /// One-shot `journalctl -u <unit>` tail for the assistant — the read-only

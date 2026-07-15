@@ -6,6 +6,7 @@ pub mod cron;
 #[cfg(feature = "docker")]
 pub mod docker;
 pub mod heartbeats;
+pub mod incidents;
 pub mod logs;
 pub mod me;
 pub mod metrics;
@@ -236,6 +237,9 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
             "/alerts/{id}/silence",
             post(alerts::silence_alert).delete(alerts::unsilence_alert),
         )
+        // Incident flight recorder — manual/external capture trigger.
+        // Alert transitions capture on their own (services::incidents).
+        .route("/incidents/capture", post(incidents::capture))
         // Time-series history
         .route("/metrics/cpu", get(metrics::cpu_history))
         .route("/metrics/cpu/cores", get(metrics::cpu_cores_history))
