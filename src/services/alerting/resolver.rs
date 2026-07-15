@@ -191,6 +191,24 @@ const DOCKER_COMPUTED: &[(&str, &str)] = &[(
     "CAST(memory_used_bytes AS REAL) * 100.0 / NULLIF(memory_limit_bytes, 0)",
 )];
 
+// Name-grouped process series written by the processes collector. Only the
+// top-K groups per write tick exist here, so a rule on a quiet process
+// resolves to no samples until that process becomes hot — document rules
+// against processes you expect to stay in the top set (or raise K).
+const PROCESS_FIELDS: &[&str] = &[
+    "cpu_percent",
+    "memory_bytes",
+    "pid_count",
+    "disk_read_bps",
+    "disk_write_bps",
+];
+const PROCESS_I64: &[&str] = &[
+    "memory_bytes",
+    "pid_count",
+    "disk_read_bps",
+    "disk_write_bps",
+];
+
 // Live-check namespace; resolved via ServiceManager, not the DB.
 const SERVICE_FIELDS: &[&str] = &["up"];
 
@@ -296,6 +314,18 @@ async fn resolve_inner(
                 DOCKER_I64,
                 "container_id",
                 DOCKER_COMPUTED,
+            )
+            .await
+        }
+        "process" => {
+            resolve_keyed(
+                pool,
+                metric,
+                "metrics_process",
+                PROCESS_FIELDS,
+                PROCESS_I64,
+                "name",
+                NO_COMPUTED,
             )
             .await
         }
@@ -754,6 +784,7 @@ fn history_descriptor(
             DOCKER_COMPUTED,
             Some("container_id"),
         )),
+        "process" => Some(("metrics_process", PROCESS_FIELDS, NO_COMPUTED, Some("name"))),
         _ => None,
     }
 }

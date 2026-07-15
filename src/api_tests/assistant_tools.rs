@@ -356,3 +356,100 @@ async fn propose_silence_alert_unknown_rule_errors() {
     );
     assert!(proposals.is_empty());
 }
+
+// ===== process namespace (persistent name-grouped series) =====
+
+#[tokio::test]
+async fn query_metric_reads_process_series() {
+    use crate::storage::repositories::{ProcessGroupRow, ProcessMetricsRepository};
+
+    let app = TestApp::spawn().await;
+    let now = chrono::Utc::now().timestamp();
+    ProcessMetricsRepository::new(app.state.db.clone())
+        .insert_tick(
+            now,
+            &[
+                ProcessGroupRow {
+                    name: "clickhouse-server".to_string(),
+                    pid_count: 3,
+                    cpu_percent: 187.5,
+                    memory_bytes: 4_000_000_000,
+                    disk_read_bps: 1024,
+                    disk_write_bps: 2048,
+                },
+                ProcessGroupRow {
+                    name: "nginx".to_string(),
+                    pid_count: 5,
+                    cpu_percent: 2.5,
+                    memory_bytes: 90_000_000,
+                    disk_read_bps: 0,
+                    disk_write_bps: 0,
+                },
+            ],
+        )
+        .await
+        .expect("seed process rows");
+
+    // Unfiltered: one sample per name group.
+    let out = call(
+        dispatch(
+            &app.state,
+            "query_metric",
+            &json!({ "namespace": "process", "field": "cpu_percent" }),
+        )
+        .await,
+    );
+    assert_eq!(out["count"], 2, "got: {out}");
+
+    // Narrowed by name label: exactly the seeded value.
+    let out = call(
+        dispatch(
+            &app.state,
+            "query_metric",
+            &json!({ "namespace": "process", "field": "cpu_percent",
+                     "labels": { "name": "clickhouse-server" } }),
+        )
+        .await,
+    );
+    assert_eq!(out["count"], 1, "got: {out}");
+    assert_eq!(out["samples"][0]["value"], 187.5);
+}
+
+#[tokio::test]
+async fn metric_history_covers_process_namespace() {
+    use crate::storage::repositories::{ProcessGroupRow, ProcessMetricsRepository};
+
+    let app = TestApp::spawn().await;
+    let now = chrono::Utc::now().timestamp();
+    let repo = ProcessMetricsRepository::new(app.state.db.clone());
+    for (offset, cpu) in [(120i64, 10.0f64), (60, 50.0), (0, 90.0)] {
+        repo.insert_tick(
+            now - offset,
+            &[ProcessGroupRow {
+                name: "stress".to_string(),
+                pid_count: 1,
+                cpu_percent: cpu,
+                memory_bytes: 1_000,
+                disk_read_bps: 0,
+                disk_write_bps: 0,
+            }],
+        )
+        .await
+        .expect("seed");
+    }
+
+    let out = call(
+        dispatch(
+            &app.state,
+            "metric_history",
+            &json!({ "namespace": "process", "field": "cpu_percent",
+                     "labels": { "name": "stress" },
+                     "window_secs": 600, "resolution": "raw" }),
+        )
+        .await,
+    );
+    let series = out["series"].as_array().expect("series array");
+    assert_eq!(series.len(), 1, "got: {out}");
+    assert_eq!(series[0]["max"], 90.0);
+    assert_eq!(series[0]["min"], 10.0);
+}

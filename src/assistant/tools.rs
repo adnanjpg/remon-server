@@ -122,6 +122,9 @@ pub fn definitions(state: &AppState) -> Value {
         - components (label label): temperature_c, max_c, critical_c\n\
         - smart (label device): health_passed, temperature_c, percentage_used\n\
         - docker (label container_id = container name): cpu_percent, memory_percent, memory_used_bytes\n\
+        - process (label name = process name, pids grouped): cpu_percent, memory_bytes, pid_count, \
+        disk_read_bps, disk_write_bps — only the top consumers are recorded each minute, so a quiet \
+        process may have no samples\n\
         - service (label name): up (1 = running, 0 = not)\n\
         - heartbeat (label slug): up\n\
         - probe (label probe_name = the probe's name): field is a metric_name the probe emits (see list_probes)\n\
@@ -129,7 +132,7 @@ pub fn definitions(state: &AppState) -> Value {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "namespace": { "type": "string", "description": "e.g. cpu, memory, disk, network, pressure, components, smart, docker, service, heartbeat, probe." },
+                        "namespace": { "type": "string", "description": "e.g. cpu, memory, disk, network, pressure, components, smart, docker, process, service, heartbeat, probe." },
                         "field": { "type": "string", "description": "Metric field within the namespace, e.g. used_percent." },
                         "labels": { "type": "object", "description": "Optional label filter, e.g. {\"mount_point\": \"/\"}." }
                     },
@@ -166,12 +169,13 @@ pub fn definitions(state: &AppState) -> Value {
         'is it climbing', 'was there a spike', 'what's normal'. Returns count, min, max, avg, the \
         current value and a trend (rising/falling/flat) per key. Same namespaces/fields as \
         query_metric, limited to the performance ones: cpu, memory, disk (mount_point), network \
-        (interface_name), pressure (resource), docker (container_id). Pair with active_alerts to \
-        place an incident in time.",
+        (interface_name), pressure (resource), docker (container_id), process (name — answers \
+        'which process was eating cpu at 3am'; only per-minute top consumers are recorded). Pair \
+        with active_alerts to place an incident in time.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "namespace": { "type": "string", "description": "cpu, memory, disk, network, pressure or docker." },
+                        "namespace": { "type": "string", "description": "cpu, memory, disk, network, pressure, docker or process." },
                         "field": { "type": "string", "description": "Metric field, e.g. usage_percent, used_percent." },
                         "labels": { "type": "object", "description": "Optional label filter, e.g. {\"mount_point\": \"/\"}." },
                         "window_secs": { "type": "integer", "description": "Look-back window in seconds. Default 3600 (1h)." },
