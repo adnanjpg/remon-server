@@ -83,7 +83,19 @@ pub async fn ask(
             dev: req.dev,
         })
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(|e| {
+            // Provider rate limits are a caller-actionable condition (wait,
+            // re-ask) — answer 503 with a plain hint instead of an opaque 500.
+            if e.downcast_ref::<crate::assistant::ProviderRateLimited>()
+                .is_some()
+            {
+                AppError::ServiceUnavailable(
+                    "assistant provider is rate-limited; try again in a minute".to_string(),
+                )
+            } else {
+                AppError::Internal(e.to_string())
+            }
+        })?;
 
     Ok(Json(AskResponse {
         answer: outcome.answer,

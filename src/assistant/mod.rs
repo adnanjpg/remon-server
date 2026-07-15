@@ -68,6 +68,15 @@ pub struct HistoryTurn {
     pub answer: String,
 }
 
+/// Marker error: the provider refused with 429 even after the bounded
+/// retries. Unlike a genuine provider fault this is actionable by the caller
+/// (wait a moment, ask again), so the REST layer downcasts it into a
+/// client-safe 503 instead of an opaque 500. anyhow preserves the type
+/// through added context, so the downcast survives the `ask` pipeline.
+#[derive(Debug, thiserror::Error)]
+#[error("assistant provider is rate-limited: {0}")]
+pub struct ProviderRateLimited(pub String);
+
 /// Dev-mode overrides for a single ask. Only honored when `[assistant]
 /// dev = true`; the handler rejects them otherwise. Auth and the read-only /
 /// propose-only tool contract still apply — this loosens the frame (persona,
@@ -447,9 +456,29 @@ impl Assistant {
                     .pointer("/error/message")
                     .and_then(Value::as_str)
                     .unwrap_or("unknown provider error");
+                // A 429 that survived the retries is a state the CALLER can
+                // act on (wait and re-ask), unlike a genuine provider fault —
+                // surface it typed so the REST layer can answer 503, not 500.
+                if status.as_u16() == 429 {
+                    return Err(anyhow::Error::new(ProviderRateLimited(detail.to_string())));
+                }
                 bail!("assistant provider error ({status}): {detail}");
             }
             return Ok(payload);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The REST layer's 503 mapping depends on downcasting the typed marker
+    /// out of an anyhow chain — verify context wrapping doesn't bury it.
+    #[test]
+    fn rate_limited_marker_survives_context_layers() {
+        let err = anyhow::Error::new(ProviderRateLimited("quota exceeded".into()))
+            .context("assistant request failed");
+        assert!(err.downcast_ref::<ProviderRateLimited>().is_some());
     }
 }
