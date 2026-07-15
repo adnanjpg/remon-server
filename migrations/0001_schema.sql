@@ -118,6 +118,10 @@ INSERT INTO retention_policy (resource, resolution, keep_seconds) VALUES
     ('docker',       '1m',  604800),
     ('docker',       '5m',  2592000),
     ('docker',       '1h',  31536000),
+    ('process',      'raw', 86400),
+    ('process',      '1m',  604800),
+    ('process',      '5m',  2592000),
+    ('process',      '1h',  31536000),
     ('pressure',     'raw', 86400),
     ('pressure',     '1m',  604800),
     ('pressure',     '5m',  2592000),
@@ -229,6 +233,28 @@ CREATE TABLE metrics_docker (
     pids               INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (resolution, timestamp, container_id)
 ) WITHOUT ROWID;
+
+-- Name-grouped process series — the persistent, bounded complement of the
+-- in-memory per-pid ring (state.process_history). The collector aggregates
+-- the live snapshot by process name once a minute and stores only the top-K
+-- groups by cpu and by memory (union), so cardinality is bounded by config,
+-- not by the host's process table — the same trade prometheus'
+-- process-exporter makes (group, never per-pid). Feeds the `process`
+-- alert/history namespace: process.cpu_percent{name="clickhouse-server"}.
+CREATE TABLE metrics_process (
+    resolution     TEXT    NOT NULL REFERENCES resolutions(name),
+    timestamp      INTEGER NOT NULL,
+    name           TEXT    NOT NULL,
+    -- Live pids aggregated into this row (name group size at sample time).
+    pid_count      INTEGER NOT NULL,
+    cpu_percent    REAL    NOT NULL,
+    memory_bytes   INTEGER NOT NULL,
+    disk_read_bps  INTEGER NOT NULL DEFAULT 0,
+    disk_write_bps INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (resolution, timestamp, name)
+) WITHOUT ROWID;
+
+CREATE INDEX idx_metrics_process_name_ts ON metrics_process(name, resolution, timestamp DESC);
 
 CREATE TABLE metrics_components (
     resolution    TEXT    NOT NULL REFERENCES resolutions(name),

@@ -243,10 +243,21 @@ pub struct AssistantConfig {
     /// on hosts with very large process tables.
     #[serde(default = "default_assistant_process_history")]
     pub process_history: bool,
+    /// Persistent name-grouped process series: once a minute the collector
+    /// stores the top-K process groups by cpu and by memory (union) into
+    /// `metrics_process`, opening the `process` namespace to alert rules and
+    /// history queries. Bounded by K, not by the host's process table. 0
+    /// disables the series; requires `process_history` (the collector).
+    #[serde(default = "default_assistant_process_series_top_k")]
+    pub process_series_top_k: u32,
 }
 
 fn default_assistant_process_history() -> bool {
     true
+}
+
+fn default_assistant_process_series_top_k() -> u32 {
+    20
 }
 
 impl Default for AssistantConfig {
@@ -260,6 +271,7 @@ impl Default for AssistantConfig {
             prometheus_url: String::new(),
             dev: false,
             process_history: true,
+            process_series_top_k: default_assistant_process_series_top_k(),
         }
     }
 }

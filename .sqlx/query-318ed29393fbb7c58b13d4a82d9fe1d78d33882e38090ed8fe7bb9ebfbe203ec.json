@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO metrics_process\n                   (resolution, timestamp, name, pid_count,\n                    cpu_percent, memory_bytes, disk_read_bps, disk_write_bps)\n                 VALUES ('raw', ?, ?, ?, ?, ?, ?, ?)\n                 ON CONFLICT(resolution, timestamp, name) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "318ed29393fbb7c58b13d4a82d9fe1d78d33882e38090ed8fe7bb9ebfbe203ec"
+}

@@ -46,6 +46,7 @@ async fn assistant_live() {
         prometheus_url: std::env::var("REMON__ASSISTANT__PROMETHEUS_URL").unwrap_or_default(),
         dev: false,
         process_history: false,
+        process_series_top_k: 0,
     };
 
     let app = TestApp::spawn_with_assistant(cfg).await;

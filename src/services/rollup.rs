@@ -36,6 +36,7 @@ const ROLLUP_RESOURCES: &[&str] = &[
     "disk",
     "network",
     "docker",
+    "process",
     "pressure",
     "components",
     "probe",
@@ -301,6 +302,22 @@ async fn aggregate_one_bucket(
               FROM metrics_docker
              WHERE resolution = ? AND timestamp >= ? AND timestamp < ?
              GROUP BY container_id
+            "#
+        }
+        "process" => {
+            r#"
+            INSERT OR REPLACE INTO metrics_process
+              (resolution, timestamp, name,
+               pid_count, cpu_percent, memory_bytes, disk_read_bps, disk_write_bps)
+            SELECT ?, ?, name,
+                   CAST(AVG(pid_count) AS INTEGER),
+                   AVG(cpu_percent),
+                   CAST(AVG(memory_bytes)   AS INTEGER),
+                   CAST(AVG(disk_read_bps)  AS INTEGER),
+                   CAST(AVG(disk_write_bps) AS INTEGER)
+              FROM metrics_process
+             WHERE resolution = ? AND timestamp >= ? AND timestamp < ?
+             GROUP BY name
             "#
         }
         "pressure" => {

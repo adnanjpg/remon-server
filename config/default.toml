@@ -126,3 +126,9 @@ dev = false
 # with very large process tables.
 # Env: REMON__ASSISTANT__PROCESS_HISTORY
 process_history = true
+# Persistent name-grouped process series: every minute the top-K process
+# groups by cpu and by memory (union) land in metrics_process, enabling
+# process.cpu_percent{name="..."} alert rules and history queries. Bounded
+# by K, never by the host's process count. 0 disables; needs process_history.
+# Env: REMON__ASSISTANT__PROCESS_SERIES_TOP_K
+process_series_top_k = 20
