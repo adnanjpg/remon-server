@@ -15,6 +15,7 @@ mod assistant_tools;
 mod auth_flow;
 mod config_api;
 mod heartbeats_api;
+mod incidents_api;
 mod logs_api;
 mod probes_api;
 mod process_api;
