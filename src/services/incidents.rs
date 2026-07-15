@@ -134,19 +134,29 @@ fn spawn_after_capture(state: Arc<AppState>, id: i64) {
 
 /// The full capture bundle. Every slice is best-effort: a failed slice
 /// becomes `null` (or `{"error": ...}`) rather than sinking the capture.
+///
+/// Shell-out slices (journal, init-system state) are skipped in the test
+/// profile: hermetic tests must not depend on the host's journald/systemd
+/// state, and their multi-second best-effort timeouts would turn every
+/// spawned-capture assertion into a timing lottery (bit CI on Linux).
 async fn build_bundle(state: &Arc<AppState>) -> Value {
+    let shell_out_slices = !cfg!(test);
     let mut bundle = json!({
         "captured_at": chrono::Utc::now().timestamp(),
         "vitals": vitals_slice(state).await,
         "top_processes": processes_slice(state).await,
         "recent_daemon_errors": daemon_errors_slice(state).await,
         "co_active_alerts": co_active_alerts_slice(state).await,
-        "failed_services": failed_services_slice(state).await,
+        "failed_services": if shell_out_slices {
+            failed_services_slice(state).await
+        } else {
+            Value::Null
+        },
     });
     // System-level error events (OOM kills, segfaults, disk errors) are the
     // slice that answers "did the kernel do something" — Linux journal only;
     // other platforms simply omit it.
-    if cfg!(target_os = "linux") {
+    if cfg!(target_os = "linux") && shell_out_slices {
         bundle["system_errors"] = match system_events("err", 20, Some(15)).await {
             Ok(v) => v,
             Err(e) => json!({ "error": e }),
