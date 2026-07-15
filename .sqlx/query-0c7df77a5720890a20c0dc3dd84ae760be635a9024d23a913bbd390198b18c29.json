@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE incident_snapshots SET after_bundle = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "0c7df77a5720890a20c0dc3dd84ae760be635a9024d23a913bbd390198b18c29"
+}

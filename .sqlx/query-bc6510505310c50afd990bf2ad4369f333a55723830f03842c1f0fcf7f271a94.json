@@ -1,0 +1,117 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!\", created_at as \"created_at!\",\n                      trigger_kind as \"trigger_kind!\", category as \"category!\",\n                      rule_name, label_set, metric_value, reason,\n                      (after_bundle IS NOT NULL) as \"has_after!: bool\"\n               FROM incident_snapshots\n              ORDER BY created_at DESC, id DESC\n              LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "trigger_kind!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "trigger_kind"
+          }
+        }
+      },
+      {
+        "name": "category!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "category"
+          }
+        }
+      },
+      {
+        "name": "rule_name",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "rule_name"
+          }
+        }
+      },
+      {
+        "name": "label_set",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "label_set"
+          }
+        }
+      },
+      {
+        "name": "metric_value",
+        "ordinal": 6,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "metric_value"
+          }
+        }
+      },
+      {
+        "name": "reason",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "name": "has_after!: bool",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "bc6510505310c50afd990bf2ad4369f333a55723830f03842c1f0fcf7f271a94"
+}

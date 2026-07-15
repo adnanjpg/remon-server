@@ -133,6 +133,7 @@ INSERT INTO retention_policy (resource, resolution, keep_seconds) VALUES
     ('logs',            'raw', 2592000),
     ('probe_runs',      'raw', 2592000),
     ('heartbeat_pings', 'raw', 2592000),
+    ('incident_snapshots', 'raw', 2592000),
     ('probe',        'raw', 86400),
     ('probe',        '1m',  604800),
     ('probe',        '5m',  2592000),
@@ -480,6 +481,35 @@ CREATE TABLE alert_events (
 );
 CREATE INDEX idx_alert_events_rule ON alert_events(rule_id, occurred_at DESC);
 CREATE INDEX idx_alert_events_ts   ON alert_events(occurred_at DESC);
+
+-- ─── INCIDENT SNAPSHOTS ─────────────────────────────────────────────────────
+-- Flight-recorder captures: when an alert first crosses its threshold (or an
+-- operator/external system asks), the daemon freezes a compact context
+-- bundle — host vitals, top processes with their recent in-memory history,
+-- recent error logs, co-active alerts, failed units. The capture core is
+-- trigger-agnostic; `trigger_kind` says who pulled the handle. `bundle` is
+-- bounded JSON assembled from data already in RAM/DB, so a capture never
+-- adds load during the incident itself. `after_bundle` lands ~60s later to
+-- show how the situation evolved.
+CREATE TABLE incident_snapshots (
+    id           INTEGER PRIMARY KEY,
+    created_at   INTEGER NOT NULL DEFAULT (unixepoch()),
+    trigger_kind TEXT    NOT NULL CHECK (trigger_kind IN ('alert','manual')),
+    category     TEXT    NOT NULL DEFAULT 'resource'
+                   CHECK (category IN ('resource','availability','security','custom')),
+    -- Alert-driven captures; NULL on manual ones. Rule deletion keeps the
+    -- snapshot (the record outlives the rule) but drops the join.
+    rule_id      INTEGER REFERENCES alert_rules(id) ON DELETE SET NULL,
+    rule_name    TEXT,
+    label_set    TEXT,
+    metric_value REAL,
+    -- Manual captures; the caller's stated reason.
+    reason       TEXT,
+    bundle       TEXT    NOT NULL,
+    after_bundle TEXT
+);
+CREATE INDEX idx_incident_snapshots_ts   ON incident_snapshots(created_at DESC);
+CREATE INDEX idx_incident_snapshots_rule ON incident_snapshots(rule_id, created_at DESC);
 
 -- ─── NOTIFICATION CHANNELS ──────────────────────────────────────────────────
 -- Credentials live in server config / env vars — never here.

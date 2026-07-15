@@ -686,6 +686,17 @@ impl MetricsRepository {
                     .execute(&self.pool)
                     .await?
             }
+            "incident_snapshots" => {
+                if resolution != "raw" {
+                    return Ok(0);
+                }
+                sqlx::query!(
+                    "DELETE FROM incident_snapshots WHERE created_at < ?",
+                    cutoff_ts
+                )
+                .execute(&self.pool)
+                .await?
+            }
             "cpu" | "memory" | "disk" | "network" | "docker" | "pressure" | "components"
             | "probe" | "process" | "smart" => {
                 let table = format!("metrics_{}", resource);

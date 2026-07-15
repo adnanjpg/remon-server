@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT MAX(created_at) as \"ts: i64\" FROM incident_snapshots\n               WHERE rule_id = ? AND label_set = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "ts: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "106b41609219fe08a4b22a70cbd638b40b0551d19c23d34f3f053f5148e1a181"
+}

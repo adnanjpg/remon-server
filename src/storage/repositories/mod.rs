@@ -4,6 +4,7 @@ mod devices;
 #[cfg(feature = "docker")]
 mod docker;
 mod heartbeats;
+mod incidents;
 pub mod logs;
 mod metrics;
 mod notifications;
@@ -20,6 +21,7 @@ pub use devices::DeviceRepository;
 #[cfg(feature = "docker")]
 pub use docker::{DockerMetricsRepository, DockerStatsRow};
 pub use heartbeats::{HeartbeatRepository, UpsertHeartbeatCheck};
+pub use incidents::{IncidentRepository, NewIncident};
 pub use logs::LogRepository;
 pub use metrics::MetricsRepository;
 pub use notifications::{NotificationChannelRepository, NotificationChannelRow};

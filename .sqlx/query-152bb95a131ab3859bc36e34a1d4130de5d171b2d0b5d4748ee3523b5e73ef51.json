@@ -1,0 +1,134 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!\", created_at as \"created_at!\",\n                      trigger_kind as \"trigger_kind!\", category as \"category!\",\n                      rule_name, label_set, metric_value, reason,\n                      bundle as \"bundle!\", after_bundle\n               FROM incident_snapshots WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "trigger_kind!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "trigger_kind"
+          }
+        }
+      },
+      {
+        "name": "category!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "category"
+          }
+        }
+      },
+      {
+        "name": "rule_name",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "rule_name"
+          }
+        }
+      },
+      {
+        "name": "label_set",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "label_set"
+          }
+        }
+      },
+      {
+        "name": "metric_value",
+        "ordinal": 6,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "metric_value"
+          }
+        }
+      },
+      {
+        "name": "reason",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "name": "bundle!",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "bundle"
+          }
+        }
+      },
+      {
+        "name": "after_bundle",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incident_snapshots",
+            "name": "after_bundle"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "152bb95a131ab3859bc36e34a1d4130de5d171b2d0b5d4748ee3523b5e73ef51"
+}
