@@ -105,6 +105,14 @@ pub async fn run(state: Arc<AppState>) {
         {
             let mut hist = state.process_history.write().await;
             for (pid, proc_) in sys.processes() {
+                // Skip threads, matching `services::process::get_processes`:
+                // sysinfo lists Linux threads as processes, each reporting the
+                // whole process's shared RSS. Summing them into name groups
+                // (and keeping per-thread ring entries) would inflate memory
+                // N-fold and skew the top-K series' memory ranking.
+                if proc_.thread_kind().is_some() {
+                    continue;
+                }
                 let name = proc_.name().to_string_lossy().into_owned();
                 let du = proc_.disk_usage();
                 let disk_read_bps = (du.read_bytes as f64 / interval_secs) as u64;
