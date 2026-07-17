@@ -10,6 +10,12 @@ pub fn get_processes(sys: &System) -> ProcessList {
     let processes: Vec<ProcessInfo> = sys
         .processes()
         .iter()
+        // sysinfo lists threads (tasks) as processes on Linux: a many-threaded
+        // program (Java, node, ...) shows one row per thread, each reporting
+        // the whole process's shared RSS — which inflates the list and breaks
+        // the memory ranking. Keep only real processes (thread group leaders);
+        // `thread_kind()` is `Some(_)` for a thread, `None` for a process.
+        .filter(|(_, process)| process.thread_kind().is_none())
         .map(|(pid, process)| {
             let memory_bytes = process.memory();
             let memory_percent = if total_memory > 0 {
@@ -28,13 +34,16 @@ pub fn get_processes(sys: &System) -> ProcessList {
                     .map(|s| s.to_string_lossy().to_string())
                     .collect(),
                 exe: process.exe().map(|p| p.to_string_lossy().to_string()),
+                cwd: process.cwd().map(|p| p.to_string_lossy().to_string()),
                 user: process.user_id().map(|u| u.to_string()),
                 cpu_percent: process.cpu_usage() as f64,
                 memory_bytes,
                 memory_percent,
                 state: process_state(process.status()),
                 started_at: Some(process.start_time() as i64),
-                threads: None, // sysinfo doesn't expose this directly
+                // Now that threads are filtered out of the list, report how
+                // many each real process has: its own task set plus itself.
+                threads: process.tasks().map(|t| t.len() as u32 + 1),
             }
         })
         .collect();

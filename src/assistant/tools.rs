@@ -63,7 +63,8 @@ pub fn definitions(state: &AppState) -> Value {
             "function": {
                 "name": "list_processes",
                 "description": "Top processes by resource use — the direct answer to \
-        'what is eating CPU/memory'. Per process: pid, name, cmdline, parent_pid, user, state, \
+        'what is eating CPU/memory'. Per process: pid, name, cmdline, exe (binary path), \
+        cwd (working dir — tells same-named processes apart), parent_pid, user, state, \
         uptime_seconds, cpu/memory now, and (when sampling is on) `history` with avg/max cpu, \
         avg memory and disk read/write bytes-per-sec over up to the last 15 minutes — use it to \
         tell a momentary spike from a sustained problem before proposing kill/restart. On Linux, \
@@ -658,6 +659,8 @@ async fn list_processes(state: &Arc<AppState>, args: &Value) -> Result<Value, St
                 "pid": p.pid,
                 "name": p.name,
                 "cmdline": clipped_cmdline(&p.cmd),
+                "exe": p.exe,
+                "cwd": p.cwd,
                 "parent_pid": p.parent_pid,
                 "cpu_percent": p.cpu_percent,
                 "memory_bytes": p.memory_bytes,

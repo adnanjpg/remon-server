@@ -11,6 +11,10 @@ pub struct ProcessInfo {
     pub name: String,
     pub cmd: Vec<String>,
     pub exe: Option<String>,
+    /// Current working directory. Disambiguates same-named processes (which of
+    /// three `python3`s is which) when the cmdline alone isn't enough. `None`
+    /// for kernel threads or when unreadable (permissions).
+    pub cwd: Option<String>,
     pub user: Option<String>,
     pub cpu_percent: f64,
     pub memory_bytes: u64,
