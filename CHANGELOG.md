@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.14.0] - 2026-07-18
+
+### Added
+
+- **`POST /assistant/stream`** — the assistant ask, streamed as SSE. Progress frames as the loop works: `step` (a model turn or tool call starting — the client can show *which* tool is running), `delta` (answer text as the provider generates it — native Anthropic hosts only; OpenAI-compat providers get steps and the answer arrives whole), then exactly one terminal `done` (full answer + proposals + optional trace, authoritative) or `error`. Pre-loop failures (bad request, disabled assistant, missing key) stay plain HTTP errors so clients can tell "can't start" from "died mid-answer". A disconnected client aborts the loop on its next frame — no tokens burn for a listener that left. The buffered `POST /assistant` is unchanged; older clients keep working.
+
 ## [0.13.0] - 2026-07-18
 
 ### Breaking
