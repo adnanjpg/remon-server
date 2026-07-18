@@ -69,7 +69,9 @@ fn ping_routes() -> Router<Arc<AppState>> {
 /// loop legitimately runs past the 30s cap that fits ordinary REST calls.
 /// Still auth-gated — it's merged inside the protected router in `build_app`.
 pub fn create_assistant_routes() -> Router<Arc<AppState>> {
-    Router::new().route("/assistant", post(assistant::ask))
+    Router::new()
+        .route("/assistant", post(assistant::ask))
+        .route("/assistant/stream", post(assistant::ask_stream))
 }
 
 /// Build the REST router. Public routes are merged with protected routes; the

@@ -209,6 +209,160 @@ pub(super) fn to_openai_message(payload: &Value) -> Result<Value> {
     Ok(message)
 }
 
+/// Read a Messages API SSE response (`"stream": true`) and reconstruct the
+/// same payload shape the non-streaming endpoint returns, so
+/// `to_openai_message` works identically on both paths. Text deltas are
+/// forwarded to `sink` as they arrive; a dropped sink (client gone) aborts
+/// the read so provider tokens stop burning.
+pub(super) async fn read_stream(
+    resp: reqwest::Response,
+    sink: Option<&super::EventSink>,
+) -> Result<Value> {
+    use futures_util::StreamExt;
+
+    let mut assembler = StreamAssembler::default();
+    // Byte buffer split at b'\n': a multi-byte UTF-8 char never spans an SSE
+    // line break, so per-line lossy decoding is safe across chunk boundaries.
+    let mut buf: Vec<u8> = Vec::new();
+    let mut event_name = String::new();
+    let mut data_buf = String::new();
+    let mut stream = resp.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("assistant stream read failed")?;
+        buf.extend_from_slice(&chunk);
+        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+            let line_bytes: Vec<u8> = buf.drain(..=pos).collect();
+            let line_owned = String::from_utf8_lossy(&line_bytes);
+            let line = line_owned.trim_end_matches(['\n', '\r']);
+            if line.is_empty() {
+                if !event_name.is_empty() || !data_buf.is_empty() {
+                    let text = assembler.apply(&event_name, &data_buf)?;
+                    if let (Some(sink), Some(text)) = (sink, text)
+                        && sink.send(super::StreamEvent::Delta { text }).await.is_err()
+                    {
+                        anyhow::bail!("assistant stream client disconnected");
+                    }
+                }
+                event_name.clear();
+                data_buf.clear();
+            } else if let Some(rest) = line.strip_prefix("event:") {
+                event_name = rest.trim_start().to_string();
+            } else if let Some(rest) = line.strip_prefix("data:") {
+                if !data_buf.is_empty() {
+                    data_buf.push('\n');
+                }
+                data_buf.push_str(rest.trim_start());
+            }
+            // ':' comments and other SSE fields are ignored.
+        }
+    }
+    assembler.finish()
+}
+
+/// Incremental assembler for the Messages API streaming frames
+/// (`message_start` → `content_block_*` → `message_delta` → `message_stop`).
+/// `apply` returns the text of a `text_delta` frame so the caller can forward
+/// it; every other frame returns `None`.
+#[derive(Default)]
+struct StreamAssembler {
+    blocks: Vec<Value>,
+    /// Accumulated `input_json_delta` fragments per tool_use block index.
+    partial_json: std::collections::HashMap<usize, String>,
+    usage: Value,
+}
+
+impl StreamAssembler {
+    fn apply(&mut self, event: &str, data: &str) -> Result<Option<String>> {
+        let v: Value = serde_json::from_str(data).unwrap_or(Value::Null);
+        match event {
+            "message_start" => {
+                if let Some(u) = v.pointer("/message/usage") {
+                    self.usage = u.clone();
+                }
+            }
+            "content_block_start" => {
+                let index = v.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let block = v.get("content_block").cloned().unwrap_or(Value::Null);
+                while self.blocks.len() <= index {
+                    self.blocks.push(Value::Null);
+                }
+                if block.get("type").and_then(Value::as_str) == Some("tool_use") {
+                    self.partial_json.insert(index, String::new());
+                }
+                self.blocks[index] = block;
+            }
+            "content_block_delta" => {
+                let index = v.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                match v.pointer("/delta/type").and_then(Value::as_str) {
+                    Some("text_delta") => {
+                        let text = v
+                            .pointer("/delta/text")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        if let Some(block) = self.blocks.get_mut(index)
+                            && let Some(Value::String(cur)) = block.get_mut("text")
+                        {
+                            cur.push_str(&text);
+                        }
+                        return Ok(Some(text));
+                    }
+                    Some("input_json_delta") => {
+                        let part = v
+                            .pointer("/delta/partial_json")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        self.partial_json.entry(index).or_default().push_str(part);
+                    }
+                    _ => {}
+                }
+            }
+            "content_block_stop" => {
+                let index = v.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                if let Some(acc) = self.partial_json.remove(&index) {
+                    // Empty accumulation means a no-arg tool call.
+                    let input: Value = if acc.trim().is_empty() {
+                        json!({})
+                    } else {
+                        serde_json::from_str(&acc)
+                            .with_context(|| format!("tool_use input was not valid json: {acc}"))?
+                    };
+                    if let Some(block) = self.blocks.get_mut(index) {
+                        block["input"] = input;
+                    }
+                }
+            }
+            "message_delta" => {
+                if let Some(out) = v.pointer("/usage/output_tokens").cloned()
+                    && let Some(usage) = self.usage.as_object_mut()
+                {
+                    usage.insert("output_tokens".into(), out);
+                }
+            }
+            "error" => {
+                let msg = v
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown provider stream error");
+                anyhow::bail!("assistant provider stream error: {msg}");
+            }
+            // ping / message_stop / unknown frames carry nothing to keep.
+            _ => {}
+        }
+        Ok(None)
+    }
+
+    /// Produce the non-streaming-shaped payload: `{ content, usage }`.
+    fn finish(self) -> Result<Value> {
+        let blocks: Vec<Value> = self.blocks.into_iter().filter(|b| !b.is_null()).collect();
+        if blocks.is_empty() {
+            anyhow::bail!("assistant stream ended without content blocks");
+        }
+        Ok(json!({ "content": blocks, "usage": self.usage }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,5 +440,83 @@ mod tests {
         assert_eq!(args["window"], "1h");
         // Native blocks preserved for echo-back.
         assert_eq!(msg["_anthropic_content"][1]["type"], "tool_use");
+    }
+
+    /// The assembler must rebuild exactly what the non-streaming endpoint
+    /// would have returned: text concatenated, tool_use input parsed from
+    /// accumulated fragments, usage merged from start + delta frames.
+    #[test]
+    fn stream_assembler_rebuilds_payload() {
+        let mut a = StreamAssembler::default();
+        let frames: Vec<(&str, String)> = vec![
+            (
+                "message_start",
+                json!({ "message": { "usage": { "input_tokens": 100, "cache_read_input_tokens": 90, "output_tokens": 1 } } }).to_string(),
+            ),
+            (
+                "content_block_start",
+                json!({ "index": 0, "content_block": { "type": "text", "text": "" } }).to_string(),
+            ),
+            (
+                "content_block_delta",
+                json!({ "index": 0, "delta": { "type": "text_delta", "text": "cpu is " } }).to_string(),
+            ),
+            (
+                "content_block_delta",
+                json!({ "index": 0, "delta": { "type": "text_delta", "text": "fine" } }).to_string(),
+            ),
+            ("content_block_stop", json!({ "index": 0 }).to_string()),
+            (
+                "content_block_start",
+                json!({ "index": 1, "content_block": { "type": "tool_use", "id": "toolu_9", "name": "query_metric", "input": {} } }).to_string(),
+            ),
+            (
+                "content_block_delta",
+                json!({ "index": 1, "delta": { "type": "input_json_delta", "partial_json": "{\"name\":" } }).to_string(),
+            ),
+            (
+                "content_block_delta",
+                json!({ "index": 1, "delta": { "type": "input_json_delta", "partial_json": "\"cpu.usage\"}" } }).to_string(),
+            ),
+            ("content_block_stop", json!({ "index": 1 }).to_string()),
+            (
+                "message_delta",
+                json!({ "delta": { "stop_reason": "tool_use" }, "usage": { "output_tokens": 42 } }).to_string(),
+            ),
+            ("message_stop", json!({}).to_string()),
+        ];
+
+        let mut texts: Vec<String> = Vec::new();
+        for (event, data) in frames {
+            if let Some(t) = a.apply(event, &data).unwrap() {
+                texts.push(t);
+            }
+        }
+        assert_eq!(texts, vec!["cpu is ".to_string(), "fine".to_string()]);
+
+        let payload = a.finish().unwrap();
+        assert_eq!(payload["content"][0]["text"], "cpu is fine");
+        assert_eq!(payload["content"][1]["type"], "tool_use");
+        assert_eq!(payload["content"][1]["input"]["name"], "cpu.usage");
+        assert_eq!(payload["usage"]["input_tokens"], 100);
+        assert_eq!(payload["usage"]["output_tokens"], 42);
+
+        // And the rebuilt payload must satisfy the existing converter.
+        let msg = to_openai_message(&payload).unwrap();
+        assert_eq!(msg["content"], "cpu is fine");
+        assert_eq!(msg["tool_calls"][0]["function"]["name"], "query_metric");
+    }
+
+    #[test]
+    fn stream_assembler_surfaces_provider_error() {
+        let mut a = StreamAssembler::default();
+        let err = a
+            .apply(
+                "error",
+                &json!({ "error": { "type": "overloaded_error", "message": "overloaded" } })
+                    .to_string(),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("overloaded"));
     }
 }

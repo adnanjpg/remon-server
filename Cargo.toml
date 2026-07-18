@@ -24,6 +24,7 @@ reqwest = { version = "0.13", default-features = false, features = [
     "rustls",
     "json",
     "form",
+    "stream",
 ] }
 ring = "0.17"
 serde = { version = "1.0", features = ["derive"] }

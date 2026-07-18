@@ -68,6 +68,50 @@ pub struct HistoryTurn {
     pub answer: String,
 }
 
+/// Progress frames emitted while an ask streams. `Model`/`Tool` mark loop
+/// activity (tier 1: perceived latency), `Delta` carries answer text as the
+/// provider generates it (tier 2: native Anthropic only — OpenAI-compat
+/// providers get tier 1 and the answer arrives whole in `Done`). `Done` and
+/// `Failed` are terminal and appended by the REST layer, never by the loop.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StreamEvent {
+    Model {
+        step: usize,
+    },
+    Tool {
+        step: usize,
+        name: String,
+    },
+    Delta {
+        text: String,
+    },
+    Done {
+        answer: String,
+        proposals: Vec<ProposedAction>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        trace: Option<Vec<Value>>,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+/// Where a streaming ask reports progress. A dropped receiver (client gone)
+/// makes the next send fail, which aborts the loop — no tokens burn for a
+/// listener that left.
+pub type EventSink = tokio::sync::mpsc::Sender<StreamEvent>;
+
+/// Send one progress frame, translating a closed channel into an abort.
+async fn emit(sink: Option<&EventSink>, ev: StreamEvent) -> Result<()> {
+    if let Some(sink) = sink
+        && sink.send(ev).await.is_err()
+    {
+        bail!("assistant stream client disconnected");
+    }
+    Ok(())
+}
+
 /// Marker error: the provider refused with 429 even after the bounded
 /// retries. Unlike a genuine provider fault this is actionable by the caller
 /// (wait a moment, ask again), so the REST layer downcasts it into a
@@ -204,6 +248,18 @@ impl Assistant {
     /// Prior turns arrive as `history` (client-owned conversation, replayed
     /// as plain text) so follow-ups like "do all of those" resolve.
     pub async fn ask(&self, params: AskParams) -> Result<AskOutcome> {
+        self.ask_with_events(params, None).await
+    }
+
+    /// Same loop, reporting progress into `sink` as it goes: a frame per model
+    /// turn and tool call, plus answer-text deltas on native Anthropic hosts.
+    /// The final outcome still returns from the function — the sink carries
+    /// progress only, so `ask` and the streaming route share one code path.
+    pub async fn ask_with_events(
+        &self,
+        params: AskParams,
+        sink: Option<&EventSink>,
+    ) -> Result<AskOutcome> {
         let dev = params.dev.unwrap_or_default();
         let system = dev
             .system
@@ -247,8 +303,11 @@ impl Assistant {
         let mut trace: Vec<Value> = Vec::new();
 
         for step in 0..max_steps {
+            emit(sink, StreamEvent::Model { step }).await?;
             let turn_started = Instant::now();
-            let (message, usage) = self.chat(&messages, model, max_tokens, with_tools).await?;
+            let (message, usage) = self
+                .chat(&messages, model, max_tokens, with_tools, sink)
+                .await?;
             if dev.trace {
                 trace.push(json!({
                     "type": "model",
@@ -279,6 +338,14 @@ impl Assistant {
                         .and_then(|s| serde_json::from_str::<Value>(s).ok())
                         .unwrap_or_else(|| json!({}));
                     debug!("assistant tool call: {name} {args}");
+                    emit(
+                        sink,
+                        StreamEvent::Tool {
+                            step,
+                            name: name.to_string(),
+                        },
+                    )
+                    .await?;
                     let tool_started = Instant::now();
                     let result =
                         tools::dispatch_collecting(&self.state, name, &args, &mut proposals).await;
@@ -329,13 +396,15 @@ impl Assistant {
     /// wire format underneath. Anthropic hosts get the native Messages API
     /// (for prompt caching); everything else speaks OpenAI-compat. Responses
     /// are navigated as untyped JSON so provider-specific extra fields pass
-    /// through unharmed.
+    /// through unharmed. With a `sink`, native hosts stream the turn and
+    /// forward text deltas; compat hosts keep the buffered round trip.
     async fn chat(
         &self,
         messages: &[Value],
         model: &str,
         max_tokens: u32,
         with_tools: bool,
+        sink: Option<&EventSink>,
     ) -> Result<(Value, Option<Value>)> {
         let base = self.cfg.base_url.trim_end_matches('/');
 
@@ -346,16 +415,23 @@ impl Assistant {
             } else {
                 json!([])
             };
-            let body = anthropic::build_body(model, max_tokens, messages, &tools);
-            let payload = self
-                .send_with_retry(|| {
-                    self.http
-                        .post(&url)
-                        .header("x-api-key", &self.cfg.api_key)
-                        .header("anthropic-version", anthropic::API_VERSION)
-                        .json(&body)
-                })
-                .await?;
+            let mut body = anthropic::build_body(model, max_tokens, messages, &tools);
+            if sink.is_some() {
+                body["stream"] = json!(true);
+            }
+            let request = || {
+                self.http
+                    .post(&url)
+                    .header("x-api-key", &self.cfg.api_key)
+                    .header("anthropic-version", anthropic::API_VERSION)
+                    .json(&body)
+            };
+            let payload = if sink.is_some() {
+                let resp = self.send_checked_with_retry(request).await?;
+                anthropic::read_stream(resp, sink).await?
+            } else {
+                self.send_with_retry(request).await?
+            };
             let usage = payload.get("usage").cloned();
             if let Some(usage) = &usage {
                 log::info!(
@@ -406,12 +482,25 @@ impl Assistant {
         Ok((message, payload.get("usage").cloned()))
     }
 
+    /// `send_checked_with_retry` + JSON body parse, for buffered round trips.
+    async fn send_with_retry(&self, build: impl Fn() -> reqwest::RequestBuilder) -> Result<Value> {
+        self.send_checked_with_retry(build)
+            .await?
+            .json()
+            .await
+            .context("assistant response was not valid json")
+    }
+
     /// Send a provider request with bounded retries on transient failures:
     /// network errors, 429 (rate limit) and 5xx (incl. Anthropic's 529
     /// overloaded). Waits honor Retry-After when present (capped so a hostile
     /// header can't stall the loop), otherwise back off 1s → 3s. Anything else
-    /// — or exhausted retries — surfaces as the usual provider error.
-    async fn send_with_retry(&self, build: impl Fn() -> reqwest::RequestBuilder) -> Result<Value> {
+    /// — or exhausted retries — surfaces as the usual provider error. Returns
+    /// the raw success response so streaming callers can read the body as SSE.
+    async fn send_checked_with_retry(
+        &self,
+        build: impl Fn() -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response> {
         const BACKOFFS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
         const MAX_RETRY_AFTER: Duration = Duration::from_secs(10);
 
@@ -449,12 +538,11 @@ impl Assistant {
                 continue;
             }
 
-            let payload: Value = resp
-                .json()
-                .await
-                .context("assistant response was not valid json")?;
-
             if !status.is_success() {
+                let payload: Value = resp
+                    .json()
+                    .await
+                    .context("assistant response was not valid json")?;
                 let detail = payload
                     .pointer("/error/message")
                     .and_then(Value::as_str)
@@ -467,7 +555,7 @@ impl Assistant {
                 }
                 bail!("assistant provider error ({status}): {detail}");
             }
-            return Ok(payload);
+            return Ok(resp);
         }
     }
 }

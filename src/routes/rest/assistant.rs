@@ -4,11 +4,19 @@
 //! The provider api_key lives in server config and never reaches the client;
 //! the browser only ever sends a question and receives an answer.
 
-use axum::{Json, extract::State};
+use axum::{
+    Json,
+    extract::State,
+    response::sse::{Event, KeepAlive, Sse},
+};
+use futures_util::stream::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc, time::Duration};
+use tokio_stream::wrappers::ReceiverStream;
 
-use crate::assistant::{AskParams, Assistant, DevOverrides, HistoryTurn, ProposedAction};
+use crate::assistant::{
+    AskParams, Assistant, DevOverrides, HistoryTurn, ProposedAction, StreamEvent,
+};
 use crate::error::{AppError, AppResult};
 use crate::routes::extractors::Claims;
 use crate::state::AppState;
@@ -43,12 +51,9 @@ pub struct AskResponse {
     pub trace: Option<Vec<serde_json::Value>>,
 }
 
-/// POST /assistant — ask a plain-language question about this host.
-pub async fn ask(
-    _claims: Claims,
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<AskRequest>,
-) -> AppResult<Json<AskResponse>> {
+/// Shared request gate for both ask variants: question bounds and the
+/// dev-override config check. Returns the loop-ready params.
+fn validate(state: &AppState, req: AskRequest) -> Result<AskParams, AppError> {
     let question = req.question.trim();
     if question.is_empty() {
         return Err(AppError::BadRequest(
@@ -71,35 +76,106 @@ pub async fn ask(
         ));
     }
 
+    Ok(AskParams {
+        question: question.to_string(),
+        history: req.history,
+        dev: req.dev,
+    })
+}
+
+/// POST /assistant — ask a plain-language question about this host.
+pub async fn ask(
+    _claims: Claims,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AskRequest>,
+) -> AppResult<Json<AskResponse>> {
+    let params = validate(&state, req)?;
+
     // A disabled or key-less assistant is a 503 with a client-safe hint, not a
     // 500 — the operator can act on it.
     let assistant = Assistant::new(state.assistant_config.clone(), state.clone())
         .map_err(|e| AppError::ServiceUnavailable(e.to_string()))?;
 
-    let outcome = assistant
-        .ask(AskParams {
-            question: question.to_string(),
-            history: req.history,
-            dev: req.dev,
-        })
-        .await
-        .map_err(|e| {
-            // Provider rate limits are a caller-actionable condition (wait,
-            // re-ask) — answer 503 with a plain hint instead of an opaque 500.
-            if e.downcast_ref::<crate::assistant::ProviderRateLimited>()
-                .is_some()
-            {
-                AppError::ServiceUnavailable(
-                    "assistant provider is rate-limited; try again in a minute".to_string(),
-                )
-            } else {
-                AppError::Internal(e.to_string())
-            }
-        })?;
+    let outcome = assistant.ask(params).await.map_err(|e| {
+        // Provider rate limits are a caller-actionable condition (wait,
+        // re-ask) — answer 503 with a plain hint instead of an opaque 500.
+        if e.downcast_ref::<crate::assistant::ProviderRateLimited>()
+            .is_some()
+        {
+            AppError::ServiceUnavailable(
+                "assistant provider is rate-limited; try again in a minute".to_string(),
+            )
+        } else {
+            AppError::Internal(e.to_string())
+        }
+    })?;
 
     Ok(Json(AskResponse {
         answer: outcome.answer,
         proposals: outcome.proposals,
         trace: outcome.trace,
     }))
+}
+
+/// POST /assistant/stream — the same ask, streamed as SSE.
+///
+/// Events: `step` (model turn / tool call starting), `delta` (answer text as
+/// the provider generates it — native Anthropic hosts only), then exactly one
+/// terminal `done` (full `AskResponse`, authoritative — clients replace any
+/// accumulated deltas with it) or `error`. Pre-loop failures (bad request,
+/// disabled assistant) stay plain HTTP errors so clients can distinguish
+/// "can't start" from "died mid-answer". A closed connection aborts the loop
+/// on its next frame.
+pub async fn ask_stream(
+    _claims: Claims,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AskRequest>,
+) -> AppResult<Sse<impl Stream<Item = Result<Event, Infallible>>>> {
+    let params = validate(&state, req)?;
+    let assistant = Assistant::new(state.assistant_config.clone(), state.clone())
+        .map_err(|e| AppError::ServiceUnavailable(e.to_string()))?;
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(256);
+    tokio::spawn(async move {
+        let terminal = match assistant.ask_with_events(params, Some(&tx)).await {
+            Ok(outcome) => StreamEvent::Done {
+                answer: outcome.answer,
+                proposals: outcome.proposals,
+                trace: outcome.trace,
+            },
+            Err(e) => {
+                let message = if e
+                    .downcast_ref::<crate::assistant::ProviderRateLimited>()
+                    .is_some()
+                {
+                    "assistant provider is rate-limited; try again in a minute".to_string()
+                } else {
+                    // Parity with the non-streaming 500: log the detail, hand
+                    // the client a generic message.
+                    log::error!("assistant stream failed: {e:#}");
+                    "assistant failed — check the server logs".to_string()
+                };
+                StreamEvent::Failed { message }
+            }
+        };
+        // A send failure just means the client already left.
+        let _ = tx.send(terminal).await;
+    });
+
+    let stream = ReceiverStream::new(rx).map(|ev| {
+        let name = match &ev {
+            StreamEvent::Model { .. } | StreamEvent::Tool { .. } => "step",
+            StreamEvent::Delta { .. } => "delta",
+            StreamEvent::Done { .. } => "done",
+            StreamEvent::Failed { .. } => "error",
+        };
+        let data = serde_json::to_string(&ev).unwrap_or_else(|_| "{}".to_string());
+        Ok(Event::default().event(name).data(data))
+    });
+
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
 }
