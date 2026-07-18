@@ -58,6 +58,9 @@ pub struct HardwareInfoDto {
 
 #[derive(Debug, Serialize)]
 pub struct SystemInfoResponse {
+    /// Canonical name from runtime config (`server_config.server_name`) —
+    /// the label clients should prefer over any locally-stored alias.
+    pub server_name: String,
     pub description: SystemDescriptionDto,
     pub hardware: HardwareInfoDto,
 }

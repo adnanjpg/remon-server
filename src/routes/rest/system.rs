@@ -21,8 +21,10 @@ pub async fn get_system_info(
 ) -> AppResult<Json<SystemInfoResponse>> {
     let desc = system_svc::get_description();
     let hardware = state.hardware_info.as_ref();
+    let server_name = state.effective_config.read().await.server_name.clone();
 
     Ok(Json(SystemInfoResponse {
+        server_name,
         description: SystemDescriptionDto {
             hostname: desc.hostname,
             os: desc.os,
