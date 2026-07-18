@@ -78,10 +78,8 @@ enabled = true
 # Explicit binary path; empty = resolve "smartctl" from PATH.
 # Env: REMON__SMART__SMARTCTL_PATH
 smartctl_path = ""
-# Poll interval in seconds (floor 60). SMART moves slowly; each poll
-# issues real commands to every disk, so keep this lazy.
-# Env: REMON__SMART__INTERVAL_SECS
-interval_secs = 1800
+# Poll interval is runtime config: PATCH /config { collector_smart_interval_ms }
+# (default 30 min, floor 60 s). See CONFIG.md.
 
 [assistant]
 # Read-only operator assistant. Answers plain-language questions ("why is my

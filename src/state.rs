@@ -98,6 +98,9 @@ pub struct AppState {
     /// Poll interval for the container-stats collector (mirrors the
     /// `collector_docker_interval_ms` DB column). Re-read each tick.
     pub collector_docker_interval_ms: Arc<AtomicU64>,
+    /// Poll interval for the SMART collector (mirrors the
+    /// `collector_smart_interval_ms` DB column). Re-read each tick.
+    pub collector_smart_interval_ms: Arc<AtomicU64>,
 
     /// Master kill-switch for the WS Docker exec endpoint. Loaded from
     /// `docker.exec_enabled` at boot; `Arc<AtomicBool>` so a future
@@ -152,6 +155,7 @@ impl AppState {
         collector_stats_interval_ms: u64,
         processes_cache_ttl_ms: u64,
         collector_docker_interval_ms: u64,
+        collector_smart_interval_ms: u64,
         #[cfg(feature = "docker")] docker_exec_enabled: bool,
         hardware_info: Arc<HardwareInfo>,
         service_manager: Arc<dyn ServiceManager>,
@@ -179,6 +183,7 @@ impl AppState {
             collector_stats_interval_ms: Arc::new(AtomicU64::new(collector_stats_interval_ms)),
             processes_cache_ttl_ms: Arc::new(AtomicU64::new(processes_cache_ttl_ms)),
             collector_docker_interval_ms: Arc::new(AtomicU64::new(collector_docker_interval_ms)),
+            collector_smart_interval_ms: Arc::new(AtomicU64::new(collector_smart_interval_ms)),
             #[cfg(feature = "docker")]
             docker_exec_enabled: Arc::new(AtomicBool::new(docker_exec_enabled)),
             smart_available: AtomicBool::new(false),

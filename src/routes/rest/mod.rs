@@ -218,6 +218,15 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/summary", get(system::get_summary))
         // Runtime configuration
         .route("/config", get(admin::get_config).patch(admin::patch_config))
+        .route(
+            "/config/retention",
+            get(admin::get_retention).patch(admin::patch_retention),
+        )
+        .route("/config/resolutions", get(admin::get_resolutions))
+        .route(
+            "/config/resolutions/{name}",
+            axum::routing::patch(admin::patch_resolution),
+        )
         // Alert engine: rule CRUD + active-state + event log
         .route(
             "/alerts",

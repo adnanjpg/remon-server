@@ -44,4 +44,16 @@ impl ResolutionRepository {
             .filter(|r| r.enabled && r.rollup_from.is_some())
             .collect())
     }
+
+    /// Flip a resolution on/off. Returns false when the name doesn't exist.
+    pub async fn set_enabled(&self, name: &str, enabled: bool) -> AppResult<bool> {
+        let result = sqlx::query!(
+            "UPDATE resolutions SET enabled = ? WHERE name = ?",
+            enabled,
+            name
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
 }

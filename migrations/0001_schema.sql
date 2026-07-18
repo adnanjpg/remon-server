@@ -68,6 +68,7 @@ CREATE TABLE server_config (
     collector_stats_interval_ms     INTEGER NOT NULL DEFAULT 2000,
     collector_processes_interval_ms INTEGER NOT NULL DEFAULT 5000,
     collector_docker_interval_ms    INTEGER NOT NULL DEFAULT 3000,
+    collector_smart_interval_ms     INTEGER NOT NULL DEFAULT 1800000,
     rollup_tick_interval_ms         INTEGER NOT NULL DEFAULT 60000,
     retention_tick_interval_ms      INTEGER NOT NULL DEFAULT 3600000,
     updated_at                      INTEGER NOT NULL DEFAULT (unixepoch())

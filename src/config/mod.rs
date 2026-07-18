@@ -160,10 +160,6 @@ pub struct SmartConfig {
     /// Explicit path to smartctl. Empty (default) = resolve from PATH.
     #[serde(default)]
     pub smartctl_path: String,
-    /// Poll interval in seconds. Default 1800 (30 min) — SMART moves
-    /// slowly and each poll issues real commands to every disk. Floor 60.
-    #[serde(default = "default_smart_interval_secs")]
-    pub interval_secs: u64,
 }
 
 impl Default for SmartConfig {
@@ -171,17 +167,12 @@ impl Default for SmartConfig {
         Self {
             enabled: default_smart_enabled(),
             smartctl_path: String::new(),
-            interval_secs: default_smart_interval_secs(),
         }
     }
 }
 
 fn default_smart_enabled() -> bool {
     true
-}
-
-fn default_smart_interval_secs() -> u64 {
-    1800
 }
 
 /// CORS policy.

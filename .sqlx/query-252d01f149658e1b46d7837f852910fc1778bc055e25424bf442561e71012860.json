@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT resource, resolution, keep_seconds FROM retention_policy",
+  "query": "SELECT resource, resolution, keep_seconds FROM retention_policy ORDER BY resource, resolution",
   "describe": {
     "columns": [
       {
@@ -46,5 +46,5 @@
       false
     ]
   },
-  "hash": "bd150156cd6661079565f0bd4c568d73908f7afbeff9effef7d832c6ad938956"
+  "hash": "252d01f149658e1b46d7837f852910fc1778bc055e25424bf442561e71012860"
 }

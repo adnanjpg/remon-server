@@ -121,6 +121,7 @@ impl TestApp {
             2000,
             5000,
             3000,
+            1_800_000,
             #[cfg(feature = "docker")]
             false,
             hardware,

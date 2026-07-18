@@ -45,13 +45,22 @@ Server-side credentials. Channel targets (chat_id, topic, URL) are managed via `
 SMART disk health, collected by shelling out to `smartctl` (smartmontools). When the binary is missing the collector logs one info line at boot and turns itself off; `GET /system/smart` then reports `available: false`. Readings land in `metrics_smart` (raw-only, 1-year retention) and are alertable via the `smart` namespace, e.g. `smart.health_passed{device="/dev/sda"} < 1` or `smart.temperature_c > 60`.
 - `enabled` — master switch (default: true; absence of smartctl already degrades gracefully)
 - `smartctl_path` — explicit binary path (default: empty = resolve `smartctl` from `PATH`)
-- `interval_secs` — poll interval (default: 1800; floor 60). Each poll issues real commands to every disk; `-n standby` keeps sleeping HDDs asleep, so a standby disk simply skips ticks until it wakes.
+
+The poll interval is runtime config, not TOML: `PATCH /config { collector_smart_interval_ms }` (default 1 800 000 = 30 min, floor 60 000). Each poll issues real commands to every disk; `-n standby` keeps sleeping HDDs asleep, so a standby disk simply skips ticks until it wakes.
 
 Note: `smartctl` needs root/Administrator to reach the devices — the same privilege level the service/process endpoints already require.
 
 ### `[cors]`
 - `allow_any_origin` — `true` in dev, `false` in production
 - `allowed_origins` — required when `allow_any_origin = false`, e.g. `["https://app.example.com"]`
+
+## Runtime config (DB-backed, no restart)
+
+Everything above is boot-time TOML. A separate set of knobs lives in the database, applies live, and is meant to be driven from the web UI:
+
+- `GET/PATCH /config` — `server_name` (used in notification titles and `/summary`), collector intervals (stats / processes / docker / smart), rollup + retention tick intervals.
+- `GET/PATCH /config/retention` — per-(resource, resolution) keep windows for the metrics pruner.
+- `GET /config/resolutions`, `PATCH /config/resolutions/{name}` — enable/disable rollup buckets (`raw` and mid-chain parents are guarded).
 
 ## Docker feature flag
 

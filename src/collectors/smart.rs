@@ -34,7 +34,14 @@ use crate::storage::repositories::{SmartDeviceRow, SmartRepository};
 
 /// Hard floor on the poll interval — each tick issues real commands to
 /// every disk, so sub-minute cadences are never sensible.
-const MIN_INTERVAL_SECS: u64 = 60;
+const MIN_INTERVAL_MS: u64 = 60_000;
+
+fn effective_interval_ms(state: &AppState) -> u64 {
+    state
+        .collector_smart_interval_ms
+        .load(Ordering::Relaxed)
+        .max(MIN_INTERVAL_MS)
+}
 /// Timeout per smartctl invocation. A hung USB bridge must not stall
 /// the whole scan.
 const CMD_TIMEOUT: Duration = Duration::from_secs(30);
@@ -72,12 +79,23 @@ async fn run(state: Arc<AppState>, cfg: SmartConfig) {
     }
 
     let repo = SmartRepository::new(state.db.clone());
-    let period = Duration::from_secs(cfg.interval_secs.max(MIN_INTERVAL_SECS));
-    let mut ticker = tokio::time::interval(period);
+    // Interval lives in runtime config (PATCH /config); re-read after every
+    // tick and rebuild the ticker when it changed — same pattern as the
+    // rollup/retention workers.
+    let mut current_interval_ms = effective_interval_ms(&state);
+    let mut ticker = tokio::time::interval(Duration::from_millis(current_interval_ms));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         ticker.tick().await;
+
+        let new_interval_ms = effective_interval_ms(&state);
+        if new_interval_ms != current_interval_ms {
+            current_interval_ms = new_interval_ms;
+            let next = tokio::time::Instant::now() + Duration::from_millis(current_interval_ms);
+            ticker = tokio::time::interval_at(next, Duration::from_millis(current_interval_ms));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        }
 
         let rows = match collect_once(&bin).await {
             Ok(r) => r,

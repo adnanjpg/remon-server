@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE resolutions SET enabled = ? WHERE name = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "c2c6e5c65254adbc40f87dc5bd1e0a6264fc4156d356840e789dde171401c91e"
+}

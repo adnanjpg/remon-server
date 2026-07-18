@@ -11,14 +11,22 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use axum::{Json, extract::State};
+use axum::{
+    Json,
+    extract::{Path, State},
+};
 use log::info;
 
 use crate::error::{AppError, AppResult};
-use crate::routes::dtos::admin::{ConfigResponse, UpdateConfigRequest};
+use crate::routes::dtos::admin::{
+    ConfigResponse, ResolutionDto, ResolutionsResponse, RetentionPolicyDto, RetentionResponse,
+    UpdateConfigRequest, UpdateResolutionRequest, UpdateRetentionRequest,
+};
 use crate::routes::extractors::Claims;
 use crate::state::{AppState, EffectiveConfig};
-use crate::storage::repositories::{ConfigRepository, RuntimeOverrides};
+use crate::storage::repositories::{
+    ConfigRepository, ResolutionRepository, RetentionRepository, RuntimeOverrides,
+};
 
 /// GET /config — current effective configuration.
 pub async fn get_config(
@@ -26,13 +34,21 @@ pub async fn get_config(
     State(state): State<Arc<AppState>>,
 ) -> AppResult<Json<ConfigResponse>> {
     let effective = state.effective_config.read().await.clone();
+    // Live values come from runtime state; only the audit timestamp needs
+    // the DB row.
+    let updated_at = ConfigRepository::new(state.db.clone())
+        .load()
+        .await?
+        .updated_at;
     Ok(Json(ConfigResponse {
         server_name: effective.server_name,
         collector_stats_interval_ms: state.collector_stats_interval_ms.load(Ordering::Relaxed),
         collector_processes_interval_ms: state.processes_cache_ttl_ms.load(Ordering::Relaxed),
         collector_docker_interval_ms: state.collector_docker_interval_ms.load(Ordering::Relaxed),
+        collector_smart_interval_ms: state.collector_smart_interval_ms.load(Ordering::Relaxed),
         rollup_tick_interval_ms: effective.rollup_tick_interval_ms,
         retention_tick_interval_ms: effective.retention_tick_interval_ms,
+        updated_at,
     }))
 }
 
@@ -60,12 +76,16 @@ pub async fn patch_config(
         collector_docker_interval_ms: req
             .collector_docker_interval_ms
             .unwrap_or(current.collector_docker_interval_ms),
+        collector_smart_interval_ms: req
+            .collector_smart_interval_ms
+            .unwrap_or(current.collector_smart_interval_ms),
         rollup_tick_interval_ms: req
             .rollup_tick_interval_ms
             .unwrap_or(current.rollup_tick_interval_ms),
         retention_tick_interval_ms: req
             .retention_tick_interval_ms
             .unwrap_or(current.retention_tick_interval_ms),
+        updated_at: current.updated_at,
     };
 
     const MAX_SERVER_NAME_LEN: usize = 128;
@@ -99,7 +119,17 @@ pub async fn patch_config(
         )));
     }
 
-    repo.update(&merged).await?;
+    // Each SMART tick shells out to smartctl for every disk — sub-minute
+    // cadences are never sensible (mirrors the collector's own floor).
+    const MIN_SMART_INTERVAL_MS: u64 = 60_000;
+    if merged.collector_smart_interval_ms < MIN_SMART_INTERVAL_MS {
+        return Err(AppError::BadRequest(format!(
+            "collector_smart_interval_ms must be >= {}",
+            MIN_SMART_INTERVAL_MS
+        )));
+    }
+
+    let updated_at = repo.update(&merged).await?;
 
     // Refresh in-memory: collector loops re-read `AtomicU64` each tick;
     // background tasks re-read the `RwLock` each tick.
@@ -112,6 +142,9 @@ pub async fn patch_config(
     state
         .collector_docker_interval_ms
         .store(merged.collector_docker_interval_ms, Ordering::Relaxed);
+    state
+        .collector_smart_interval_ms
+        .store(merged.collector_smart_interval_ms, Ordering::Relaxed);
 
     {
         let mut effective = state.effective_config.write().await;
@@ -123,10 +156,11 @@ pub async fn patch_config(
     }
 
     info!(
-        "runtime config updated: stats={}ms processes={}ms docker={}ms rollup={}ms retention={}ms",
+        "runtime config updated: stats={}ms processes={}ms docker={}ms smart={}ms rollup={}ms retention={}ms",
         merged.collector_stats_interval_ms,
         merged.processes_cache_ttl_ms,
         merged.collector_docker_interval_ms,
+        merged.collector_smart_interval_ms,
         merged.rollup_tick_interval_ms,
         merged.retention_tick_interval_ms,
     );
@@ -136,7 +170,154 @@ pub async fn patch_config(
         collector_stats_interval_ms: state.collector_stats_interval_ms.load(Ordering::Relaxed),
         collector_processes_interval_ms: merged.processes_cache_ttl_ms,
         collector_docker_interval_ms: merged.collector_docker_interval_ms,
+        collector_smart_interval_ms: merged.collector_smart_interval_ms,
         rollup_tick_interval_ms: merged.rollup_tick_interval_ms,
         retention_tick_interval_ms: merged.retention_tick_interval_ms,
+        updated_at,
     }))
+}
+
+// ─── Retention policy ───────────────────────────────────────────────────────
+
+/// Keeping less than an hour of anything guts the incident post-mortem
+/// story; more than ten years is a typo.
+const MIN_KEEP_SECONDS: i64 = 3600;
+const MAX_KEEP_SECONDS: i64 = 10 * 365 * 86400;
+
+/// GET /config/retention — per-(resource, resolution) keep windows.
+pub async fn get_retention(
+    _claims: Claims,
+    State(state): State<Arc<AppState>>,
+) -> AppResult<Json<RetentionResponse>> {
+    let policies = RetentionRepository::new(state.db.clone())
+        .list_all()
+        .await?
+        .into_iter()
+        .map(|p| RetentionPolicyDto {
+            resource: p.resource,
+            resolution: p.resolution,
+            keep_seconds: p.keep_seconds,
+        })
+        .collect();
+    Ok(Json(RetentionResponse { policies }))
+}
+
+/// PATCH /config/retention — batch-update keep windows. The next retention
+/// tick picks the new values up automatically (the task re-reads the table).
+pub async fn patch_retention(
+    _claims: Claims,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<UpdateRetentionRequest>,
+) -> AppResult<Json<RetentionResponse>> {
+    if req.policies.is_empty() {
+        return Err(AppError::BadRequest("policies must not be empty".into()));
+    }
+
+    let repo = RetentionRepository::new(state.db.clone());
+
+    // Validate the whole batch before writing anything so a bad entry can't
+    // leave the batch half-applied.
+    let existing: std::collections::HashSet<(String, String)> = repo
+        .list_all()
+        .await?
+        .into_iter()
+        .map(|p| (p.resource, p.resolution))
+        .collect();
+
+    for p in &req.policies {
+        if !(MIN_KEEP_SECONDS..=MAX_KEEP_SECONDS).contains(&p.keep_seconds) {
+            return Err(AppError::BadRequest(format!(
+                "keep_seconds for {}/{} must be between {} and {}",
+                p.resource, p.resolution, MIN_KEEP_SECONDS, MAX_KEEP_SECONDS
+            )));
+        }
+        if !existing.contains(&(p.resource.clone(), p.resolution.clone())) {
+            return Err(AppError::NotFound(format!(
+                "retention policy {}/{}",
+                p.resource, p.resolution
+            )));
+        }
+    }
+
+    for p in &req.policies {
+        repo.set_keep(&p.resource, &p.resolution, p.keep_seconds)
+            .await?;
+    }
+
+    info!("retention policy updated: {} row(s)", req.policies.len());
+    get_retention(_claims, State(state)).await
+}
+
+// ─── Resolutions ────────────────────────────────────────────────────────────
+
+/// GET /config/resolutions — rollup bucket chain with enabled flags.
+pub async fn get_resolutions(
+    _claims: Claims,
+    State(state): State<Arc<AppState>>,
+) -> AppResult<Json<ResolutionsResponse>> {
+    let resolutions = ResolutionRepository::new(state.db.clone())
+        .list_all()
+        .await?
+        .into_iter()
+        .map(|r| ResolutionDto {
+            name: r.name,
+            interval_seconds: r.interval_seconds,
+            rollup_from: r.rollup_from,
+            enabled: r.enabled,
+        })
+        .collect();
+    Ok(Json(ResolutionsResponse { resolutions }))
+}
+
+/// PATCH /config/resolutions/{name} — enable/disable one rollup bucket.
+///
+/// The chain must stay contiguous: disabling a bucket that a still-enabled
+/// child rolls up from would silently starve the child, and enabling a
+/// bucket under a disabled parent would never receive data. `raw` is what
+/// collectors write directly — it can't be turned off here.
+pub async fn patch_resolution(
+    _claims: Claims,
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<UpdateResolutionRequest>,
+) -> AppResult<Json<ResolutionsResponse>> {
+    let repo = ResolutionRepository::new(state.db.clone());
+    let all = repo.list_all().await?;
+
+    let target = all
+        .iter()
+        .find(|r| r.name == name)
+        .ok_or_else(|| AppError::NotFound(format!("resolution '{}'", name)))?;
+
+    if !req.enabled {
+        if target.rollup_from.is_none() {
+            return Err(AppError::BadRequest(format!(
+                "'{}' is written directly by collectors and cannot be disabled",
+                name
+            )));
+        }
+        if let Some(child) = all
+            .iter()
+            .find(|r| r.enabled && r.rollup_from.as_deref() == Some(name.as_str()))
+        {
+            return Err(AppError::BadRequest(format!(
+                "'{}' feeds enabled resolution '{}'; disable that first",
+                name, child.name
+            )));
+        }
+    } else if let Some(parent) = target
+        .rollup_from
+        .as_deref()
+        .and_then(|p| all.iter().find(|r| r.name == p))
+        && !parent.enabled
+    {
+        return Err(AppError::BadRequest(format!(
+            "'{}' rolls up from disabled resolution '{}'; enable that first",
+            name, parent.name
+        )));
+    }
+
+    repo.set_enabled(&name, req.enabled).await?;
+    info!("resolution '{}' enabled={}", name, req.enabled);
+    get_resolutions(_claims, State(state)).await
 }

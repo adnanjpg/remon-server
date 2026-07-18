@@ -193,6 +193,7 @@ async fn run(
         overrides.collector_stats_interval_ms,
         overrides.processes_cache_ttl_ms,
         overrides.collector_docker_interval_ms,
+        overrides.collector_smart_interval_ms,
         #[cfg(feature = "docker")]
         config.docker.exec_enabled,
         local_hardware,

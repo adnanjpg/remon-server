@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE retention_policy SET keep_seconds = ? WHERE resource = ? AND resolution = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "20b4ef65491baee4a7db5388da2cf45bbf5405a897762db9e0305c43745018d5"
+}
