@@ -3,6 +3,21 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.13.0] - 2026-07-18
+
+### Breaking
+
+- `server_config` gained `collector_smart_interval_ms`, folded into the initial migration (pre-1.0 policy — no migration chaining). Existing databases fail the migration checksum at boot: delete the database folder and re-pair devices after upgrading.
+- `[smart] interval_secs` left the TOML — the SMART poll interval is runtime config now (`PATCH /config { collector_smart_interval_ms }`, default 30 min, floor 60 s) and applies without a restart. A leftover `interval_secs` key in an existing TOML is ignored.
+
+### Added
+
+- **Notifications carry the server's name** — alert fired/resolved titles and the channel test notification are prefixed `[server_name]`, so several remon instances reporting into one Telegram chat / ntfy topic are tellable apart. The previously write-only `server_name` finally earns its keep.
+- **`GET/PATCH /config/retention`** — read and batch-tune the per-(resource, resolution) keep windows behind the metrics pruner. The batch validates as a whole (nothing half-applies), floor 1 h, cap 10 y; the retention task picks changes up on its next tick.
+- **`GET /config/resolutions`, `PATCH /config/resolutions/{name}`** — inspect and enable/disable rollup buckets. Chain guards keep the ladder contiguous: `raw` can't be disabled, a parent feeding an enabled child can't be disabled, a child under a disabled parent can't be enabled.
+- **`server_name` in `GET /system/info`** — clients read the canonical name from the response they already cache; remon-web now prefers it over the locally-typed alias (sidebar, server cards) and syncs it on pairing.
+- **`updated_at` in `GET/PATCH /config`** — audit timestamp of the last runtime-config write.
+
 ## [0.12.0] - 2026-07-14
 
 ### Added
