@@ -178,8 +178,9 @@ impl NotificationManager {
         WebhookPolicy::from_credentials(&self.credentials.webhook)
     }
 
-    /// Send a test notification to a single channel by ID.
-    pub async fn test_channel(&self, id: i64) -> Result<usize, String> {
+    /// Send a test notification to a single channel by ID. `server_name`
+    /// prefixes the title so multi-server channels can tell senders apart.
+    pub async fn test_channel(&self, id: i64, server_name: &str) -> Result<usize, String> {
         let channel: Option<Arc<dyn NotificationChannel>> = {
             let slots = self.channels.read().await;
             slots
@@ -193,7 +194,7 @@ impl NotificationManager {
         })?;
 
         let test_notif = Notification {
-            title: "Remon — Test Notification".to_string(),
+            title: format!("[{}] Test Notification", server_name),
             body: "Your notification channel is working correctly.".to_string(),
             severity: Severity::Warn,
             event: NotificationEvent::Fired,

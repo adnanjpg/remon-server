@@ -163,9 +163,10 @@ pub async fn test_channel(
         .await?
         .ok_or(AppError::NotFound("notification channel".to_string()))?;
 
+    let server_name = state.effective_config.read().await.server_name.clone();
     let delivered = state
         .notify
-        .test_channel(id)
+        .test_channel(id, &server_name)
         .await
         .map_err(AppError::BadRequest)?;
 

@@ -485,7 +485,7 @@ async fn fire_notify(
     meta: Option<&str>,
 ) -> bool {
     let n = Notification {
-        title: rule.name.clone(),
+        title: titled(state, &rule.name).await,
         body: format_fire_body(rule, label_set, value, meta),
         severity: alert_severity(rule.severity),
         event: NotificationEvent::Fired,
@@ -501,12 +501,19 @@ async fn resolve_notify(
     meta: Option<&str>,
 ) -> bool {
     let n = Notification {
-        title: rule.name.clone(),
+        title: titled(state, &rule.name).await,
         body: format_resolve_body(rule, label_set, value, meta),
         severity: alert_severity(rule.severity),
         event: NotificationEvent::Resolved,
     };
     state.notify.fanout(&n).await > 0
+}
+
+/// `[server_name] rule name` — lets one Telegram chat / ntfy topic receiving
+/// alerts from several remon instances attribute each notification.
+async fn titled(state: &AppState, rule_name: &str) -> String {
+    let server_name = state.effective_config.read().await.server_name.clone();
+    format!("[{}] {}", server_name, rule_name)
 }
 
 fn alert_severity(s: AlertSeverity) -> Severity {
