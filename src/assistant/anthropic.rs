@@ -315,6 +315,33 @@ impl StreamAssembler {
                             .unwrap_or_default();
                         self.partial_json.entry(index).or_default().push_str(part);
                     }
+                    // Extended thinking: the block starts as `{"type":"thinking","thinking":""}`
+                    // and streams its reasoning text the same way a text block streams
+                    // `text_delta` — then a trailing `signature_delta` seals it. Both must be
+                    // captured verbatim: an echoed-back thinking block with an empty
+                    // `thinking` field or a missing `signature` is a 400 on the next turn
+                    // ("each thinking block must contain thinking"). Not forwarded to the
+                    // client — thinking is scratch reasoning, not answer text.
+                    Some("thinking_delta") => {
+                        let text = v
+                            .pointer("/delta/thinking")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        if let Some(block) = self.blocks.get_mut(index)
+                            && let Some(Value::String(cur)) = block.get_mut("thinking")
+                        {
+                            cur.push_str(text);
+                        }
+                    }
+                    Some("signature_delta") => {
+                        let sig = v
+                            .pointer("/delta/signature")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        if let Some(block) = self.blocks.get_mut(index) {
+                            block["signature"] = json!(sig);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -505,6 +532,67 @@ mod tests {
         let msg = to_openai_message(&payload).unwrap();
         assert_eq!(msg["content"], "cpu is fine");
         assert_eq!(msg["tool_calls"][0]["function"]["name"], "query_metric");
+    }
+
+    /// Reproduces the "each thinking block must contain thinking" 400: an
+    /// extended-thinking block's `thinking_delta`/`signature_delta` frames
+    /// must be captured, not dropped, or the echoed-back block is empty and
+    /// the next turn's request is rejected by the Anthropic API.
+    #[test]
+    fn stream_assembler_captures_thinking_block() {
+        let mut a = StreamAssembler::default();
+        let frames: Vec<(&str, String)> = vec![
+            (
+                "content_block_start",
+                json!({ "index": 0, "content_block": { "type": "thinking", "thinking": "" } })
+                    .to_string(),
+            ),
+            (
+                "content_block_delta",
+                json!({ "index": 0, "delta": { "type": "thinking_delta", "thinking": "checking " } })
+                    .to_string(),
+            ),
+            (
+                "content_block_delta",
+                json!({ "index": 0, "delta": { "type": "thinking_delta", "thinking": "cpu load" } })
+                    .to_string(),
+            ),
+            (
+                "content_block_delta",
+                json!({ "index": 0, "delta": { "type": "signature_delta", "signature": "sig123" } })
+                    .to_string(),
+            ),
+            ("content_block_stop", json!({ "index": 0 }).to_string()),
+            (
+                "content_block_start",
+                json!({ "index": 1, "content_block": { "type": "text", "text": "" } }).to_string(),
+            ),
+            (
+                "content_block_delta",
+                json!({ "index": 1, "delta": { "type": "text_delta", "text": "cpu is fine" } })
+                    .to_string(),
+            ),
+            ("content_block_stop", json!({ "index": 1 }).to_string()),
+            ("message_stop", json!({}).to_string()),
+        ];
+
+        for (event, data) in frames {
+            a.apply(event, &data).unwrap();
+        }
+
+        let payload = a.finish().unwrap();
+        assert_eq!(payload["content"][0]["type"], "thinking");
+        assert_eq!(payload["content"][0]["thinking"], "checking cpu load");
+        assert_eq!(payload["content"][0]["signature"], "sig123");
+
+        // Echoed back verbatim for the next round trip — this is exactly
+        // what Anthropic validates on the following request.
+        let msg = to_openai_message(&payload).unwrap();
+        assert_eq!(
+            msg["_anthropic_content"][0]["thinking"],
+            "checking cpu load"
+        );
+        assert_eq!(msg["_anthropic_content"][0]["signature"], "sig123");
     }
 
     #[test]
