@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.4] - 2026-07-19
+
+### Performance
+
+- **Alert evaluation is now a single event-driven task, not one timer task per rule.** It wakes on the stats collector's signal (a `watch` bump after each `stats_latest` write), falling back to a 2s timer for liveness, and holds all rule lifecycle in memory. `alert_state` is written only on transitions and for active (pending/firing) rows — a healthy host with everything Ok touches the table **zero times per tick** (previously every rule wrote its state every tick). State hydrates from `alert_state` at startup so firing/pending survives a restart without re-firing. Per-rule `eval_interval` is honoured as a throttle; reload picks up rule changes within 30s. Completes the alerting DB-offload (Phase 2, after 0.15.2's indexes and 0.15.3's in-memory resolution). Binary-only, no schema change; the state machine, notifications, incident capture, and `/alerts/*` API are unchanged.
+
 ## [0.15.3] - 2026-07-19
 
 ### Performance
