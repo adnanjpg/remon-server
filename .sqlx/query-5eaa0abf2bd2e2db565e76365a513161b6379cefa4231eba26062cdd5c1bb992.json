@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT e.occurred_at as \"occurred_at!\", e.event_type as \"event_type!\",\n                      e.severity as \"severity!\", e.rule_id as \"rule_id!\",\n                      r.name as \"rule_name!\", e.label_set as \"label_set!\",\n                      e.metric_value\n               FROM alert_events e\n               JOIN alert_rules r ON r.id = e.rule_id\n              WHERE e.occurred_at >= ? AND e.occurred_at <= ?\n              ORDER BY e.occurred_at DESC, e.id DESC\n              LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "occurred_at!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_events",
+            "name": "occurred_at"
+          }
+        }
+      },
+      {
+        "name": "event_type!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_events",
+            "name": "event_type"
+          }
+        }
+      },
+      {
+        "name": "severity!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_events",
+            "name": "severity"
+          }
+        }
+      },
+      {
+        "name": "rule_id!",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_events",
+            "name": "rule_id"
+          }
+        }
+      },
+      {
+        "name": "rule_name!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_rules",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "label_set!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_events",
+            "name": "label_set"
+          }
+        }
+      },
+      {
+        "name": "metric_value",
+        "ordinal": 6,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "alert_events",
+            "name": "metric_value"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "5eaa0abf2bd2e2db565e76365a513161b6379cefa4231eba26062cdd5c1bb992"
+}

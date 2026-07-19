@@ -3,6 +3,7 @@ pub mod alerts;
 pub mod auth;
 pub mod cron;
 pub mod docker;
+pub mod events;
 pub mod heartbeats;
 pub mod logs;
 pub mod metrics;

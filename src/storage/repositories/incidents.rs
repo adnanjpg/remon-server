@@ -140,6 +140,45 @@ impl IncidentRepository {
             .collect())
     }
 
+    /// Range slice for the `GET /events` union timeline — summary rows only,
+    /// newest first; the bundle stays behind the incident detail endpoint.
+    pub async fn list_range(
+        &self,
+        start: i64,
+        end: i64,
+        limit: u32,
+    ) -> AppResult<Vec<IncidentSummaryRow>> {
+        let rows = sqlx::query!(
+            r#"SELECT id as "id!", created_at as "created_at!",
+                      trigger_kind as "trigger_kind!", category as "category!",
+                      rule_name, label_set, metric_value, reason,
+                      (after_bundle IS NOT NULL) as "has_after!: bool"
+               FROM incident_snapshots
+              WHERE created_at >= ? AND created_at <= ?
+              ORDER BY created_at DESC, id DESC
+              LIMIT ?"#,
+            start,
+            end,
+            limit,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| IncidentSummaryRow {
+                id: r.id,
+                created_at: r.created_at,
+                trigger_kind: r.trigger_kind,
+                category: r.category,
+                rule_name: r.rule_name,
+                label_set: r.label_set,
+                metric_value: r.metric_value,
+                reason: r.reason,
+                has_after: r.has_after,
+            })
+            .collect())
+    }
+
     pub async fn get(&self, id: i64) -> AppResult<Option<IncidentRow>> {
         let row = sqlx::query!(
             r#"SELECT id as "id!", created_at as "created_at!",

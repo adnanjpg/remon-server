@@ -14,6 +14,7 @@ mod assistant_api;
 mod assistant_tools;
 mod auth_flow;
 mod config_api;
+mod events_api;
 mod heartbeats_api;
 mod incidents_api;
 mod logs_api;

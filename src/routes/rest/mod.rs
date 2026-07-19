@@ -5,6 +5,7 @@ pub mod auth;
 pub mod cron;
 #[cfg(feature = "docker")]
 pub mod docker;
+pub mod events;
 pub mod heartbeats;
 pub mod incidents;
 pub mod logs;
@@ -251,6 +252,9 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         // Incident flight recorder — manual/external capture trigger.
         // Alert transitions capture on their own (services::incidents).
         .route("/incidents/capture", post(incidents::capture))
+        // Unified event timeline — host_events ∪ alert_events ∪ incidents,
+        // one normalized stream for chart annotations and feeds.
+        .route("/events", get(events::list_events))
         // Time-series history
         .route("/metrics/cpu", get(metrics::cpu_history))
         .route("/metrics/cpu/cores", get(metrics::cpu_cores_history))

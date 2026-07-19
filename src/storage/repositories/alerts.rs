@@ -323,6 +323,46 @@ impl AlertRepository {
         Ok(rows.into_iter().filter_map(AlertEventRow::decode).collect())
     }
 
+    /// Range slice for the `GET /events` union timeline: fire/resolve rows
+    /// joined with their rule's name and newest first. Inner join is safe —
+    /// `alert_events.rule_id` cascades on rule deletion, so an event's rule
+    /// always exists.
+    pub async fn events_in_range(
+        &self,
+        start: i64,
+        end: i64,
+        limit: u32,
+    ) -> AppResult<Vec<AlertEventWithRule>> {
+        let rows = sqlx::query!(
+            r#"SELECT e.occurred_at as "occurred_at!", e.event_type as "event_type!",
+                      e.severity as "severity!", e.rule_id as "rule_id!",
+                      r.name as "rule_name!", e.label_set as "label_set!",
+                      e.metric_value
+               FROM alert_events e
+               JOIN alert_rules r ON r.id = e.rule_id
+              WHERE e.occurred_at >= ? AND e.occurred_at <= ?
+              ORDER BY e.occurred_at DESC, e.id DESC
+              LIMIT ?"#,
+            start,
+            end,
+            limit,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| AlertEventWithRule {
+                occurred_at: r.occurred_at,
+                event_type: r.event_type,
+                severity: r.severity,
+                rule_id: r.rule_id,
+                rule_name: r.rule_name,
+                label_set: r.label_set,
+                metric_value: r.metric_value,
+            })
+            .collect())
+    }
+
     /// Cross-rule recent events, newest first. See `events_for_rule` for the
     /// offset semantics.
     pub async fn recent_events(&self, limit: u32, offset: u32) -> AppResult<Vec<AlertEvent>> {
@@ -342,6 +382,20 @@ impl AlertRepository {
         .await?;
         Ok(rows.into_iter().filter_map(AlertEventRow::decode).collect())
     }
+}
+
+/// Read-side shape for the `GET /events` union: one alert transition plus
+/// the rule fields the timeline renders. Strings stay raw (no enum decode) —
+/// the union endpoint passes them through.
+#[derive(Debug, Clone)]
+pub struct AlertEventWithRule {
+    pub occurred_at: i64,
+    pub event_type: String,
+    pub severity: String,
+    pub rule_id: i64,
+    pub rule_name: String,
+    pub label_set: String,
+    pub metric_value: Option<f64>,
 }
 
 // ===== private row types =====
