@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.2] - 2026-07-19
+
+### Performance
+
+- **Alert evaluator stops full-scanning the raw metric tables every tick.** Added `(resolution, <key>, timestamp)` indexes to the keyed metrics tables (disk, network, docker, components, pressure, smart) so the resolver's "latest value per key" query (`WHERE resolution=? … GROUP BY <key>`) resolves the per-key `MAX(timestamp)` through an index seek instead of scanning the whole raw partition into a GROUP BY temp-b-tree sorter. A profiling pass (perf + heaptrack) pinned that sorter (`sqlite3VdbeSorterWrite`) as the #1 allocation site — ~4M short-lived allocations per minute under a couple of disk rules evaluating every 10s — and the SQLite worker thread as ~76% of process CPU. The index removes the sorter from the query plan; correctness is unchanged (same rows, same latest-non-null fallback). Schema-only change (no runtime behaviour change), folded into the initial migration per the pre-1.0 policy.
+
 ## [0.15.1] - 2026-07-19
 
 ### Added
