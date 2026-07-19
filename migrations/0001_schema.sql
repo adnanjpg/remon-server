@@ -209,6 +209,13 @@ CREATE TABLE metrics_disk (
     PRIMARY KEY (resolution, timestamp, mount_point)
 ) WITHOUT ROWID;
 
+-- Latest-value-per-key index for the alert resolver: `WHERE resolution=?
+-- GROUP BY mount_point` picking MAX(timestamp) per mount. Without a
+-- (resolution, key, timestamp) index the group-wise max forces a full
+-- raw-partition scan into a temp-b-tree sorter every eval tick (the
+-- dominant CPU + allocation cost profiling surfaced).
+CREATE INDEX idx_metrics_disk_latest ON metrics_disk(resolution, mount_point, timestamp);
+
 CREATE TABLE metrics_network (
     resolution         TEXT    NOT NULL REFERENCES resolutions(name),
     timestamp          INTEGER NOT NULL,
@@ -221,6 +228,8 @@ CREATE TABLE metrics_network (
     errors_out_per_sec INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (resolution, timestamp, interface_name)
 ) WITHOUT ROWID;
+
+CREATE INDEX idx_metrics_network_latest ON metrics_network(resolution, interface_name, timestamp);
 
 CREATE TABLE metrics_docker (
     resolution         TEXT    NOT NULL REFERENCES resolutions(name),
@@ -236,6 +245,8 @@ CREATE TABLE metrics_docker (
     pids               INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (resolution, timestamp, container_id)
 ) WITHOUT ROWID;
+
+CREATE INDEX idx_metrics_docker_latest ON metrics_docker(resolution, container_id, timestamp);
 
 -- Name-grouped process series — the persistent, bounded complement of the
 -- in-memory per-pid ring (state.process_history). The collector aggregates
@@ -269,6 +280,8 @@ CREATE TABLE metrics_components (
     PRIMARY KEY (resolution, timestamp, label)
 ) WITHOUT ROWID;
 
+CREATE INDEX idx_metrics_components_latest ON metrics_components(resolution, label, timestamp);
+
 CREATE TABLE metrics_pressure (
     resolution  TEXT    NOT NULL REFERENCES resolutions(name),
     timestamp   INTEGER NOT NULL,
@@ -281,6 +294,8 @@ CREATE TABLE metrics_pressure (
     full_avg300 REAL    NOT NULL,
     PRIMARY KEY (resolution, timestamp, resource)
 ) WITHOUT ROWID;
+
+CREATE INDEX idx_metrics_pressure_latest ON metrics_pressure(resolution, resource, timestamp);
 
 -- ─── METRICS — probes ───────────────────────────────────────────────────────
 -- `labels` is a canonicalised JSON object (sorted keys, no whitespace).
@@ -325,6 +340,8 @@ CREATE TABLE metrics_smart (
     media_errors            INTEGER,
     PRIMARY KEY (resolution, timestamp, device)
 ) WITHOUT ROWID;
+
+CREATE INDEX idx_metrics_smart_latest ON metrics_smart(resolution, device, timestamp);
 
 -- ─── LOGS ───────────────────────────────────────────────────────────────────
 CREATE TABLE logs (
