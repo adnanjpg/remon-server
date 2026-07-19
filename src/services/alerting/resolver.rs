@@ -406,6 +406,36 @@ async fn resolve_unkeyed(
 
 // ===== Keyed tables (disk, network, pressure, components) =====
 
+/// The "latest value per key" query the evaluator runs each tick: pick the
+/// row with the greatest `timestamp` per `label_column` (skipping NULLs in
+/// the selected column, so a currently-NULL field falls back to its last
+/// non-NULL sample). Extracted so the query-plan audit test can `EXPLAIN` the
+/// real SQL — a `(resolution, label_column, timestamp)` index must keep the
+/// group-wise max off a temp-b-tree sorter (see the audit and 0.15.2).
+pub(crate) fn keyed_latest_sql(
+    table: &str,
+    select_expr: &str,
+    label_column: &str,
+    where_label: &str,
+) -> String {
+    format!(
+        "SELECT {label}, {col}
+           FROM {table}
+          WHERE resolution = 'raw' AND {col} IS NOT NULL
+            {where_label}
+            AND ({label}, timestamp) IN (
+              SELECT {label}, MAX(timestamp)
+                FROM {table}
+               WHERE resolution = 'raw' AND {col} IS NOT NULL
+               GROUP BY {label}
+            )",
+        label = label_column,
+        col = select_expr,
+        table = table,
+        where_label = where_label,
+    )
+}
+
 async fn resolve_keyed(
     pool: &SqlitePool,
     metric: &MetricRef,
@@ -442,22 +472,7 @@ async fn resolve_keyed(
         String::new()
     };
 
-    let sql = format!(
-        "SELECT {label}, {col}
-           FROM {table}
-          WHERE resolution = 'raw' AND {col} IS NOT NULL
-            {where_label}
-            AND ({label}, timestamp) IN (
-              SELECT {label}, MAX(timestamp)
-                FROM {table}
-               WHERE resolution = 'raw' AND {col} IS NOT NULL
-               GROUP BY {label}
-            )",
-        label = label_column,
-        col = select_expr,
-        table = table,
-        where_label = where_label,
-    );
+    let sql = keyed_latest_sql(table, select_expr, label_column, &where_label);
 
     let rows: Vec<(String, f64)> = if i64_fields.contains(&column) {
         let mut q2 = sqlx::query_as::<_, (String, i64)>(sqlx::AssertSqlSafe(sql.as_str()));
