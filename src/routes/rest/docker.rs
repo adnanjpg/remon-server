@@ -2,10 +2,11 @@
 
 use axum::{
     Json,
-    extract::{Path, Query},
+    extract::{Path, Query, State},
 };
 use bollard::models::ContainerInspectResponse as BollardInspectResponse;
 use log::error;
+use std::sync::Arc;
 
 use crate::error::AppResult;
 use crate::routes::dtos::docker::{
@@ -15,6 +16,28 @@ use crate::routes::dtos::docker::{
 };
 use crate::routes::extractors::Claims;
 use crate::services::docker::{self, PruneResult};
+use crate::services::events;
+use crate::state::AppState;
+
+/// Ledger entry for a completed container action, attributed to the calling
+/// device. The response message doubles as the event message.
+fn audit(
+    state: &Arc<AppState>,
+    claims: &Claims,
+    container_id: &str,
+    action: &'static str,
+    message: &str,
+) {
+    events::record_operator(
+        state,
+        &claims.device_id,
+        "container_action",
+        message.to_string(),
+        Some("container"),
+        Some(container_id.to_string()),
+        Some(serde_json::json!({ "action": action })),
+    );
+}
 
 // ===== Status =====
 
@@ -78,74 +101,92 @@ pub async fn list_containers(_claims: Claims) -> AppResult<Json<ListContainersRe
 
 /// POST /docker/containers/{id}/start
 pub async fn start_container(
-    _claims: Claims,
+    claims: Claims,
+    State(state): State<Arc<AppState>>,
     Path(container_id): Path<String>,
 ) -> AppResult<Json<DockerActionResponse>> {
     docker::start_container(&container_id).await?;
+    let msg = format!("Container {} started", container_id);
+    audit(&state, &claims, &container_id, "start", &msg);
     Ok(Json(DockerActionResponse {
         success: true,
-        message: format!("Container {} started", container_id),
+        message: msg,
     }))
 }
 
 /// POST /docker/containers/{id}/stop
 pub async fn stop_container(
-    _claims: Claims,
+    claims: Claims,
+    State(state): State<Arc<AppState>>,
     Path(container_id): Path<String>,
 ) -> AppResult<Json<DockerActionResponse>> {
     docker::stop_container(&container_id).await?;
+    let msg = format!("Container {} stopped", container_id);
+    audit(&state, &claims, &container_id, "stop", &msg);
     Ok(Json(DockerActionResponse {
         success: true,
-        message: format!("Container {} stopped", container_id),
+        message: msg,
     }))
 }
 
 /// POST /docker/containers/{id}/restart
 pub async fn restart_container(
-    _claims: Claims,
+    claims: Claims,
+    State(state): State<Arc<AppState>>,
     Path(container_id): Path<String>,
 ) -> AppResult<Json<DockerActionResponse>> {
     docker::restart_container(&container_id).await?;
+    let msg = format!("Container {} restarted", container_id);
+    audit(&state, &claims, &container_id, "restart", &msg);
     Ok(Json(DockerActionResponse {
         success: true,
-        message: format!("Container {} restarted", container_id),
+        message: msg,
     }))
 }
 
 /// POST /docker/containers/{id}/pause
 pub async fn pause_container(
-    _claims: Claims,
+    claims: Claims,
+    State(state): State<Arc<AppState>>,
     Path(container_id): Path<String>,
 ) -> AppResult<Json<DockerActionResponse>> {
     docker::pause_container(&container_id).await?;
+    let msg = format!("Container {} paused", container_id);
+    audit(&state, &claims, &container_id, "pause", &msg);
     Ok(Json(DockerActionResponse {
         success: true,
-        message: format!("Container {} paused", container_id),
+        message: msg,
     }))
 }
 
 /// POST /docker/containers/{id}/unpause
 pub async fn unpause_container(
-    _claims: Claims,
+    claims: Claims,
+    State(state): State<Arc<AppState>>,
     Path(container_id): Path<String>,
 ) -> AppResult<Json<DockerActionResponse>> {
     docker::unpause_container(&container_id).await?;
+    let msg = format!("Container {} unpaused", container_id);
+    audit(&state, &claims, &container_id, "unpause", &msg);
     Ok(Json(DockerActionResponse {
         success: true,
-        message: format!("Container {} unpaused", container_id),
+        message: msg,
     }))
 }
 
 /// DELETE /docker/containers/{id}
 pub async fn delete_container(
-    _claims: Claims,
+    claims: Claims,
+    State(state): State<Arc<AppState>>,
     Path(container_id): Path<String>,
     Query(params): Query<ForceDeleteRequest>,
 ) -> AppResult<Json<DockerActionResponse>> {
     docker::delete_container(&container_id, params.force).await?;
+    let msg = format!("Container {} deleted", container_id);
+    audit(&state, &claims, &container_id, "delete", &msg);
     Ok(Json(DockerActionResponse {
         success: true,
-        message: format!("Container {} deleted", container_id),
+        message: msg,
     }))
 }
 

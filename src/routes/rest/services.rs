@@ -11,7 +11,30 @@ use crate::routes::dtos::services::{
     TimerDto,
 };
 use crate::routes::extractors::Claims;
+use crate::services::events;
 use crate::state::AppState;
+
+/// Ledger entry for a completed unit action — one audit row per mutating
+/// endpoint, attributed to the calling device. The response message doubles
+/// as the event message.
+fn audit(
+    state: &Arc<AppState>,
+    claims: &Claims,
+    ref_type: &'static str,
+    name: &str,
+    action: &'static str,
+    message: &str,
+) {
+    events::record_operator(
+        state,
+        &claims.device_id,
+        "service_action",
+        message.to_string(),
+        Some(ref_type),
+        Some(name.to_string()),
+        Some(serde_json::json!({ "action": action })),
+    );
+}
 
 /// Defense-in-depth: validate the path-param name BEFORE handing it to a
 /// shell-out backend. Both systemd unit names and Windows service names
@@ -66,86 +89,80 @@ pub async fn get_service(
 
 /// POST /services/{name}/start
 pub async fn start_service(
-    _claims: Claims,
+    claims: Claims,
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
     state.service_manager.start(&name).await?;
-    Ok(Json(ServiceActionResponse::ok(format!(
-        "Service '{}' started",
-        name
-    ))))
+    let msg = format!("Service '{}' started", name);
+    audit(&state, &claims, "service", &name, "start", &msg);
+    Ok(Json(ServiceActionResponse::ok(msg)))
 }
 
 /// POST /services/{name}/stop
 pub async fn stop_service(
-    _claims: Claims,
+    claims: Claims,
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
     state.service_manager.stop(&name).await?;
-    Ok(Json(ServiceActionResponse::ok(format!(
-        "Service '{}' stopped",
-        name
-    ))))
+    let msg = format!("Service '{}' stopped", name);
+    audit(&state, &claims, "service", &name, "stop", &msg);
+    Ok(Json(ServiceActionResponse::ok(msg)))
 }
 
 /// POST /services/{name}/restart
 pub async fn restart_service(
-    _claims: Claims,
+    claims: Claims,
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
     state.service_manager.restart(&name).await?;
-    Ok(Json(ServiceActionResponse::ok(format!(
-        "Service '{}' restarted",
-        name
-    ))))
+    let msg = format!("Service '{}' restarted", name);
+    audit(&state, &claims, "service", &name, "restart", &msg);
+    Ok(Json(ServiceActionResponse::ok(msg)))
 }
 
 /// POST /services/{name}/reload
 pub async fn reload_service(
-    _claims: Claims,
+    claims: Claims,
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
     state.service_manager.reload(&name).await?;
-    Ok(Json(ServiceActionResponse::ok(format!(
-        "Service '{}' reloaded",
-        name
-    ))))
+    let msg = format!("Service '{}' reloaded", name);
+    audit(&state, &claims, "service", &name, "reload", &msg);
+    Ok(Json(ServiceActionResponse::ok(msg)))
 }
 
 /// PUT /services/{name}/enable — enable service at boot.
 pub async fn enable_service(
-    _claims: Claims,
+    claims: Claims,
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
     state.service_manager.enable_at_boot(&name).await?;
-    Ok(Json(ServiceActionResponse::ok(format!(
-        "Service '{}' enabled at boot",
-        name
-    ))))
+    let msg = format!("Service '{}' enabled at boot", name);
+    audit(&state, &claims, "service", &name, "enable", &msg);
+    Ok(Json(ServiceActionResponse::ok(msg)))
 }
 
 /// PUT /services/{name}/disable — disable service at boot.
 pub async fn disable_service(
-    _claims: Claims,
+    claims: Claims,
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
     state.service_manager.disable_at_boot(&name).await?;
-    Ok(Json(ServiceActionResponse::ok(format!(
-        "Service '{}' disabled at boot",
-        name
-    ))))
+    let msg = format!("Service '{}' disabled at boot", name);
+    audit(&state, &claims, "service", &name, "disable", &msg);
+    Ok(Json(ServiceActionResponse::ok(msg)))
 }
 
 // ===== Timers =====
@@ -163,28 +180,26 @@ pub async fn list_timers(
 
 /// PUT /timers/{name}/enable
 pub async fn enable_timer(
-    _claims: Claims,
+    claims: Claims,
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
     state.service_manager.enable_timer(&name).await?;
-    Ok(Json(ServiceActionResponse::ok(format!(
-        "Timer '{}' enabled",
-        name
-    ))))
+    let msg = format!("Timer '{}' enabled", name);
+    audit(&state, &claims, "timer", &name, "enable", &msg);
+    Ok(Json(ServiceActionResponse::ok(msg)))
 }
 
 /// PUT /timers/{name}/disable
 pub async fn disable_timer(
-    _claims: Claims,
+    claims: Claims,
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
     state.service_manager.disable_timer(&name).await?;
-    Ok(Json(ServiceActionResponse::ok(format!(
-        "Timer '{}' disabled",
-        name
-    ))))
+    let msg = format!("Timer '{}' disabled", name);
+    audit(&state, &claims, "timer", &name, "disable", &msg);
+    Ok(Json(ServiceActionResponse::ok(msg)))
 }

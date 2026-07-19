@@ -244,7 +244,7 @@ pub async fn delete_alert(
 /// keeps running — state transitions and event history continue, and
 /// Resolved notifications still go through.
 pub async fn silence_alert(
-    _claims: Claims,
+    claims: Claims,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
     Json(req): Json<SilenceAlertRequest>,
@@ -266,13 +266,25 @@ pub async fn silence_alert(
         .get(id)
         .await?
         .ok_or_else(|| AppError::Internal("silenced rule not readable".into()))?;
+    crate::services::events::record_operator(
+        &state,
+        &claims.device_id,
+        "alert_silenced",
+        format!(
+            "Alert '{}' silenced for {}s",
+            stored.name, req.duration_secs
+        ),
+        Some("alert_rule"),
+        Some(id.to_string()),
+        Some(serde_json::json!({ "duration_secs": req.duration_secs, "until": until })),
+    );
     Ok(Json(stored.into()))
 }
 
 /// Lift any active silence on a rule. Idempotent — returns 204 even if
 /// the rule wasn't silenced.
 pub async fn unsilence_alert(
-    _claims: Claims,
+    claims: Claims,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> AppResult<StatusCode> {
@@ -281,6 +293,20 @@ pub async fn unsilence_alert(
     if !updated {
         return Err(AppError::NotFound(format!("Alert rule {}", id)));
     }
+    let name = repo
+        .get(id)
+        .await?
+        .map(|r| r.name)
+        .unwrap_or_else(|| format!("#{id}"));
+    crate::services::events::record_operator(
+        &state,
+        &claims.device_id,
+        "alert_unsilenced",
+        format!("Alert '{}' silence lifted", name),
+        Some("alert_rule"),
+        Some(id.to_string()),
+        None,
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -166,6 +166,23 @@ pub async fn complete_pairing(
 
     info!("new device paired: {} ({})", device_id, req.device_name);
 
+    // Security-relevant enough for the ledger: a new credential now exists.
+    // Actor fields are filled directly — the device was created two lines up.
+    crate::services::events::record(
+        &state,
+        crate::storage::repositories::NewHostEvent {
+            source: "operator",
+            kind: "device_paired",
+            severity: "info",
+            message: format!("New device '{}' paired", req.device_name),
+            actor_device_id: Some(device_id.clone()),
+            actor_name: Some(req.device_name.clone()),
+            ref_type: Some("device"),
+            ref_id: Some(device_id.clone()),
+            ..Default::default()
+        },
+    );
+
     Ok(Json(PairCompleteResponse {
         device_id,
         device_token,

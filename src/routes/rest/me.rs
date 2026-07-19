@@ -96,14 +96,29 @@ pub async fn rename_session(
 /// `device_id` self-revokes — the next refresh will fail and the
 /// browser bounces back to /unlock.
 pub async fn revoke_session(
-    _claims: Claims,
+    claims: Claims,
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
     let repo = DeviceRepository::new(state.db.clone());
+    // Name read before the delete — afterwards there is nothing to name
+    // the audit row with.
+    let revoked_name = repo.get_by_id(&id).await.ok().flatten().map(|d| d.name);
     repo.delete(&id).await?;
     // The cascade happens inside SQLite, so there is no per-jti signal to
     // evict on — drop the auth cache wholesale.
     state.session_cache.clear();
+    crate::services::events::record_operator(
+        &state,
+        &claims.device_id,
+        "device_revoked",
+        match &revoked_name {
+            Some(n) => format!("Device '{}' revoked", n),
+            None => format!("Device {} revoked", id),
+        },
+        Some("device"),
+        Some(id),
+        None,
+    );
     Ok(StatusCode::NO_CONTENT)
 }

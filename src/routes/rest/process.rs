@@ -172,7 +172,8 @@ async fn refresh_process_snapshot() -> ProcessList {
 /// `?signal=9` for SIGKILL on stuck processes. The signal arg is ignored on
 /// Windows (no POSIX signals there).
 pub async fn delete_process(
-    _claims: Claims,
+    claims: Claims,
+    State(state): State<Arc<AppState>>,
     Path(pid): Path<u32>,
     Query(q): Query<KillProcessQuery>,
 ) -> AppResult<StatusCode> {
@@ -184,6 +185,31 @@ pub async fn delete_process(
         )));
     }
     process::kill_process(pid, signal).map_err(AppError::ProcessKillFailed)?;
+
+    // The name makes the audit row readable after the pid is recycled;
+    // the cached snapshot is the cheap best-effort source.
+    let name = state
+        .processes_latest
+        .read()
+        .await
+        .as_ref()
+        .and_then(|l| l.processes.iter().find(|p| p.pid == pid))
+        .map(|p| p.name.clone());
+    crate::services::events::record_operator(
+        &state,
+        &claims.device_id,
+        "process_killed",
+        match &name {
+            Some(n) => format!(
+                "Process '{}' (pid {}) killed with signal {}",
+                n, pid, signal
+            ),
+            None => format!("Process {} killed with signal {}", pid, signal),
+        },
+        Some("process"),
+        Some(pid.to_string()),
+        Some(serde_json::json!({ "signal": signal, "name": name })),
+    );
 
     debug!("process {} killed with signal {}", pid, signal);
     Ok(StatusCode::NO_CONTENT)

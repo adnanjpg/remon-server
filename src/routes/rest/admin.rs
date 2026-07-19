@@ -57,12 +57,36 @@ pub async fn get_config(
 /// Order matters here: persist first, then update in-memory state. If the
 /// DB write fails the runtime stays on the old values (no torn state).
 pub async fn patch_config(
-    _claims: Claims,
+    claims: Claims,
     State(state): State<Arc<AppState>>,
     Json(req): Json<UpdateConfigRequest>,
 ) -> AppResult<Json<ConfigResponse>> {
     let repo = ConfigRepository::new(state.db.clone());
     let current = repo.load().await?;
+
+    // Which fields the caller actually sent — the audit row names them.
+    let mut changed: Vec<&'static str> = Vec::new();
+    if req.server_name.is_some() {
+        changed.push("server_name");
+    }
+    if req.collector_stats_interval_ms.is_some() {
+        changed.push("collector_stats_interval_ms");
+    }
+    if req.collector_processes_interval_ms.is_some() {
+        changed.push("collector_processes_interval_ms");
+    }
+    if req.collector_docker_interval_ms.is_some() {
+        changed.push("collector_docker_interval_ms");
+    }
+    if req.collector_smart_interval_ms.is_some() {
+        changed.push("collector_smart_interval_ms");
+    }
+    if req.rollup_tick_interval_ms.is_some() {
+        changed.push("rollup_tick_interval_ms");
+    }
+    if req.retention_tick_interval_ms.is_some() {
+        changed.push("retention_tick_interval_ms");
+    }
 
     // Merge: every Some(x) wins over current.
     let merged = RuntimeOverrides {
@@ -165,6 +189,18 @@ pub async fn patch_config(
         merged.retention_tick_interval_ms,
     );
 
+    if !changed.is_empty() {
+        crate::services::events::record_operator(
+            &state,
+            &claims.device_id,
+            "config_changed",
+            format!("Runtime configuration updated ({})", changed.join(", ")),
+            None,
+            None,
+            Some(serde_json::json!({ "fields": changed })),
+        );
+    }
+
     Ok(Json(ConfigResponse {
         server_name: merged.server_name,
         collector_stats_interval_ms: state.collector_stats_interval_ms.load(Ordering::Relaxed),
@@ -205,7 +241,7 @@ pub async fn get_retention(
 /// PATCH /config/retention — batch-update keep windows. The next retention
 /// tick picks the new values up automatically (the task re-reads the table).
 pub async fn patch_retention(
-    _claims: Claims,
+    claims: Claims,
     State(state): State<Arc<AppState>>,
     Json(req): Json<UpdateRetentionRequest>,
 ) -> AppResult<Json<RetentionResponse>> {
@@ -245,7 +281,21 @@ pub async fn patch_retention(
     }
 
     info!("retention policy updated: {} row(s)", req.policies.len());
-    get_retention(_claims, State(state)).await
+    let touched: Vec<String> = req
+        .policies
+        .iter()
+        .map(|p| format!("{}/{}", p.resource, p.resolution))
+        .collect();
+    crate::services::events::record_operator(
+        &state,
+        &claims.device_id,
+        "config_changed",
+        format!("Retention policy updated ({} entries)", touched.len()),
+        None,
+        None,
+        Some(serde_json::json!({ "retention": touched })),
+    );
+    get_retention(claims, State(state)).await
 }
 
 // ─── Resolutions ────────────────────────────────────────────────────────────
@@ -276,7 +326,7 @@ pub async fn get_resolutions(
 /// bucket under a disabled parent would never receive data. `raw` is what
 /// collectors write directly — it can't be turned off here.
 pub async fn patch_resolution(
-    _claims: Claims,
+    claims: Claims,
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
     Json(req): Json<UpdateResolutionRequest>,
@@ -319,5 +369,18 @@ pub async fn patch_resolution(
 
     repo.set_enabled(&name, req.enabled).await?;
     info!("resolution '{}' enabled={}", name, req.enabled);
-    get_resolutions(_claims, State(state)).await
+    crate::services::events::record_operator(
+        &state,
+        &claims.device_id,
+        "config_changed",
+        format!(
+            "Rollup resolution '{}' {}",
+            name,
+            if req.enabled { "enabled" } else { "disabled" }
+        ),
+        None,
+        None,
+        Some(serde_json::json!({ "resolution": name, "enabled": req.enabled })),
+    );
+    get_resolutions(claims, State(state)).await
 }

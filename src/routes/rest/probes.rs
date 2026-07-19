@@ -140,12 +140,30 @@ pub async fn get_probe_history(
 
 /// `POST /probes/reload` — rescan manifests and sync registry.
 pub async fn reload_probes(
-    _claims: Claims,
+    claims: Claims,
     State(state): State<Arc<AppState>>,
 ) -> AppResult<Json<ReloadProbesResponse>> {
     let dir = PathBuf::from(PROBES_DIR);
     let report =
         scheduler::load_and_spawn(&dir, Arc::clone(&state.probe_registry), state.db.clone()).await;
+    crate::services::events::record_operator(
+        &state,
+        &claims.device_id,
+        "probes_reloaded",
+        format!(
+            "Probe definitions reloaded ({} loaded, {} failed)",
+            report.loaded.len(),
+            report.failed.len()
+        ),
+        None,
+        None,
+        Some(serde_json::json!({
+            "loaded": report.loaded.len(),
+            "skipped_disabled": report.skipped_disabled,
+            "skipped_platform": report.skipped_platform,
+            "failed": report.failed.len(),
+        })),
+    );
     Ok(Json(ReloadProbesResponse {
         loaded: report.loaded,
         skipped_disabled: report.skipped_disabled,

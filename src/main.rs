@@ -206,6 +206,12 @@ async fn run(
 
     services::logging::start_db_writer(log_rx, db.pool().clone());
 
+    // Reboot / unclean-exit detection first, so the boot event (stamped
+    // with the actual boot time) exists before anything else this run
+    // writes to the ledger.
+    services::events::detect_boot_on_startup(&app_state).await;
+    services::events::spawn_oom_sweep(app_state.clone());
+
     collectors::spawn_all(app_state.clone());
     collectors::smart::spawn(app_state.clone(), config.smart.clone());
 
@@ -223,7 +229,7 @@ async fn run(
     )
     .await;
 
-    let app = routes::build_app(app_state, &config)?;
+    let app = routes::build_app(app_state.clone(), &config)?;
 
     let bind_addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
         .parse()
@@ -250,6 +256,10 @@ async fn run(
     {
         error!("server error: {}", e);
     }
+
+    // Reached only on orderly drain — a crash/kill skips this, which is
+    // exactly what the next boot's unclean-exit detection keys on.
+    services::events::mark_clean_shutdown(&app_state).await;
 
     info!("shutdown complete");
     Ok(())

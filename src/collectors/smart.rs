@@ -79,6 +79,22 @@ async fn run(state: Arc<AppState>, cfg: SmartConfig) {
     }
 
     let repo = SmartRepository::new(state.db.clone());
+
+    // Last known health verdict per device, seeded from the DB so a
+    // transition that happened while the daemon was down (last stored
+    // reading healthy, first fresh reading failing) is still caught.
+    let mut last_health: std::collections::HashMap<String, Option<bool>> =
+        match repo.read_latest().await {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|r| (r.row.device.clone(), r.row.health_passed))
+                .collect(),
+            Err(e) => {
+                warn!("SMART collector: seed of last-health map failed: {:?}", e);
+                Default::default()
+            }
+        };
+
     // Interval lives in runtime config (PATCH /config); re-read after every
     // tick and rebuild the ticker when it changed — same pattern as the
     // rollup/retention workers.
@@ -114,6 +130,41 @@ async fn run(state: Arc<AppState>, cfg: SmartConfig) {
             warn!("SMART collector: persist failed: {:?}", e);
         } else {
             debug!("SMART collector: stored {} device reading(s)", rows.len());
+        }
+
+        // Verdict transitions land in the host-event ledger — the timeline
+        // wants "this disk started failing here", not every healthy tick.
+        for r in &rows {
+            let prev = last_health.get(&r.device).copied().flatten();
+            if let Some((severity, what)) =
+                crate::services::events::smart_transition(prev, r.health_passed)
+            {
+                let label = match &r.model {
+                    Some(m) => format!("{} ({})", r.device, m),
+                    None => r.device.clone(),
+                };
+                crate::services::events::record(
+                    &state,
+                    crate::storage::repositories::NewHostEvent {
+                        source: "system",
+                        kind: "smart_health",
+                        severity,
+                        message: format!("{} on {}", what, label),
+                        ref_type: Some("disk"),
+                        ref_id: Some(r.device.clone()),
+                        details: Some(
+                            serde_json::json!({
+                                "model": r.model,
+                                "serial": r.serial,
+                                "health_passed": r.health_passed,
+                            })
+                            .to_string(),
+                        ),
+                        ..Default::default()
+                    },
+                );
+            }
+            last_health.insert(r.device.clone(), r.health_passed);
         }
     }
 }
