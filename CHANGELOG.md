@@ -3,6 +3,21 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.0] - 2026-07-19
+
+### Breaking
+
+- Two new tables (`host_events`, `runtime_state`) folded into the initial migration (pre-1.0 policy — no migration chaining). Existing databases fail the migration checksum at boot: delete the database folder and re-pair devices after upgrading.
+
+### Added
+
+- **Host-event ledger (`host_events`)** — the discrete-happenings counterpart to the metric series: things that *happened*, recorded once, queryable forever (well, 90 days). Three sources: `system` (detected by the daemon), `operator` (an authenticated device did something through the API, with actor attribution), `agent` (reserved). Ages out via the standard retention engine.
+- **`GET /events`** — one normalized timeline unioning the ledger with `alert_events` (projected as `alert_fired`/`alert_resolved`, severity mapped from the rule) and `incident_snapshots` (projected as `incident_captured`, `ref` pointing at the bundle id). Same range contract as `/metrics/*` (`start`/`end`/`limit`, default last 24 h), plus `kinds=` / `sources=` CSV filters — built to be drawn straight onto charts as annotation markers/bands and to back a timeline feed.
+- **Boot / powercycle detection** — on startup the daemon compares the host's boot time against the persisted previous value: a change records a `boot` event *stamped with the actual boot moment* (so the annotation lines up with the gap in the charts), flagged `warn` when the previous run never wrote its clean-shutdown marker — power loss, crash, or hard reset. Same-boot restarts after an unclean exit record `agent_restart`.
+- **OOM-kill sweep (Linux)** — a 5-minute kernel-journal scan turns "Out of memory: Killed process" lines (global and cgroup) into `oom_kill` events with pid/name, stamped at kill time and cursor-deduped across restarts. The only real answer to "why did my process vanish at 03:12".
+- **SMART health transition events** — the SMART collector now diffs each device's verdict against the last known one (seeded from the DB, so failures that happen while the daemon is down are still caught): `passed→failed` records an error-severity `smart_health` event, recovery records `info`.
+- **Operator audit trail** — mutating endpoints record who did what: service/timer actions, container lifecycle, process kills (with the process name when the snapshot has it), alert silence/unsilence, probe reloads, runtime-config/retention/resolution changes, device pairing and revocation. Attribution comes from the JWT device identity; the ledger write is fire-and-forget and never fails the action it records.
+
 ## [0.14.0] - 2026-07-18
 
 ### Added

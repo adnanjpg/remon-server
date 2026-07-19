@@ -12,6 +12,7 @@ Server component of Remon — a self-hosted system monitoring platform. Exposes 
 - **Services** — systemd (full), OpenRC (full), Windows SCM (full); timers, cron listing, live log streaming
 - **Docker / Podman** — container lifecycle, logs, stats, exec over WebSocket; optional at compile time (`--no-default-features`)
 - **Alert engine** — expression-based rules (`cpu.usage_percent > 80`), pending/firing/ok lifecycle, configurable for-duration and cooldown
+- **Host-event timeline** — `GET /events` unions system events (boot/powercycle detection, OOM kills, SMART health transitions), alert fire/resolve, incident captures, and an operator audit trail (who restarted what, from which device) into one stream, ready for chart annotations
 - **Notification channels** — FCM, Telegram, ntfy, webhook; managed via REST API
 - **Custom probes** — shell scripts with inline YAML header; drop into `probes/`, hot-reload via `POST /probes/reload`
 - **Heartbeat checks** — push-model dead-man's switches for cron jobs and external services: `curl` a capability URL on schedule, alert when it goes quiet (`heartbeat.up < 1`); pause windows for planned downtime, service-announced via the same URL
