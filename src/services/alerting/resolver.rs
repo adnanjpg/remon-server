@@ -24,6 +24,9 @@ use std::sync::Arc;
 use sqlx::SqlitePool;
 
 use super::expression::MetricRef;
+use crate::models::stats::{
+    AllStats, CpuStats, DiskStats, MemoryStats, NetworkStats, PressureStats,
+};
 use crate::platform::services::ServiceManager;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -232,6 +235,19 @@ pub async fn resolve_with_state(
     state: &crate::state::AppState,
     metric: &MetricRef,
 ) -> Result<Vec<ResolvedSample>, ResolveError> {
+    // Hot host-metric namespaces resolve from the live in-memory snapshot the
+    // stats collector maintains (`stats_latest`, refreshed every tick) — the
+    // current value for alerting is already in RAM, so the evaluator needn't
+    // round-trip to the DB every tick. Only always-present fields take this
+    // path; optional/enriched fields (steal, iowait, inode_used_percent, …)
+    // and the boot window (snapshot not yet populated) fall through to the DB
+    // query, which preserves the latest-non-null fallback the resolver
+    // guarantees. See `resolve_from_snapshot`.
+    if let Some(snap) = state.stats_latest.read().await.clone()
+        && let Some(result) = resolve_from_snapshot(metric, &snap)
+    {
+        return result;
+    }
     resolve_inner(&state.db, Some(&state.service_manager), metric).await
 }
 
@@ -476,6 +492,201 @@ async fn resolve_keyed(
             }
         })
         .collect())
+}
+
+// ===== In-memory snapshot resolution (hot namespaces) =====
+//
+// The alert evaluator's dominant cost was a "latest value per key" DB query
+// per rule per tick. But the collector already holds the current values in
+// `state.stats_latest`, so for the host-metric namespaces we resolve straight
+// from that snapshot — zero DB round-trips on the hot path.
+//
+// Only always-present fields take this path. Optional/enriched fields (steal,
+// iowait, inode_used_percent, io_util, page faults, …) can legitimately be
+// NULL for a tick, and the resolver's contract is to fall back to the last
+// non-NULL sample; that history lives only in the DB, so those fields (and the
+// boot window before the first tick populates the snapshot) fall through to
+// the DB query. The common rules — cpu.usage_percent, memory.used_bytes,
+// disk.used_percent, network rates, pressure — are all always-present and
+// resolve entirely in memory.
+
+/// Always-present CPU fields (subset of `CPU_FIELDS`).
+const CPU_SNAP: &[&str] = &["usage_percent", "load_1m", "load_5m", "load_15m"];
+/// Always-present memory fields (subset of `MEMORY_FIELDS`).
+const MEMORY_SNAP: &[&str] = &[
+    "used_bytes",
+    "available_bytes",
+    "cached_bytes",
+    "swap_used_bytes",
+];
+/// Always-present disk fields (subset of `DISK_FIELDS`; `used_percent` is
+/// computed and yields NaN only for a 0-total phantom mount).
+const DISK_SNAP: &[&str] = &[
+    "total_bytes",
+    "used_bytes",
+    "available_bytes",
+    "used_percent",
+    "read_bytes_per_sec",
+    "write_bytes_per_sec",
+];
+// network + pressure fields are all always-present, so their whole whitelists
+// (`NETWORK_FIELDS` / `PRESSURE_FIELDS`) are snapshot-resolvable.
+
+/// Resolve a metric from the live `AllStats` snapshot.
+/// - `Some(Ok(samples))` — resolved in memory.
+/// - `Some(Err(_))` — snapshot namespace but malformed metric (bad field /
+///   label), same error the DB path raises.
+/// - `None` — not snapshot-resolvable (non-hot namespace or an optional
+///   field); caller uses the DB path.
+fn resolve_from_snapshot(
+    metric: &MetricRef,
+    snap: &AllStats,
+) -> Option<Result<Vec<ResolvedSample>, ResolveError>> {
+    let field = metric.field.as_str();
+    match metric.namespace.as_str() {
+        "cpu" if CPU_SNAP.contains(&field) => {
+            Some(unkeyed_snap(metric, cpu_snap_value(&snap.cpu, field)))
+        }
+        "memory" if MEMORY_SNAP.contains(&field) => {
+            Some(unkeyed_snap(metric, memory_snap_value(&snap.memory, field)))
+        }
+        "disk" if DISK_SNAP.contains(&field) => Some(keyed_snap(
+            metric,
+            "mount_point",
+            snap.disks
+                .iter()
+                .map(|d| (d.mount_point.clone(), disk_snap_value(d, field))),
+        )),
+        "network" if NETWORK_FIELDS.contains(&field) => Some(keyed_snap(
+            metric,
+            "interface_name",
+            snap.network
+                .iter()
+                .map(|n| (n.interface.clone(), network_snap_value(n, field))),
+        )),
+        "pressure" if PRESSURE_FIELDS.contains(&field) => {
+            // No PSI on this host at all → fall to the DB path (also empty).
+            let p = snap.pressure.as_ref()?;
+            let items = [("cpu", &p.cpu), ("memory", &p.memory), ("io", &p.io)]
+                .into_iter()
+                .filter_map(|(res, opt)| {
+                    opt.as_ref()
+                        .map(|ps| (res.to_string(), pressure_snap_value(ps, field)))
+                });
+            Some(keyed_snap(metric, "resource", items))
+        }
+        _ => None,
+    }
+}
+
+/// Build the single sample for an unkeyed namespace, rejecting stray labels
+/// exactly as the DB path does.
+fn unkeyed_snap(metric: &MetricRef, value: f64) -> Result<Vec<ResolvedSample>, ResolveError> {
+    if !metric.labels.is_empty() {
+        return Err(ResolveError::msg(format!(
+            "namespace '{}' has no label dimensions; remove the label set",
+            metric.namespace
+        )));
+    }
+    Ok(vec![ResolvedSample {
+        label_set: "{}".to_string(),
+        value,
+        meta: None,
+    }])
+}
+
+/// Build one sample per key from a snapshot iterator, honouring an optional
+/// single-label filter (same validation/semantics as `resolve_keyed`).
+fn keyed_snap(
+    metric: &MetricRef,
+    label_column: &str,
+    items: impl Iterator<Item = (String, f64)>,
+) -> Result<Vec<ResolvedSample>, ResolveError> {
+    let mut filter_value: Option<&str> = None;
+    for (k, v) in &metric.labels {
+        if k == label_column {
+            filter_value = Some(v.as_str());
+        } else {
+            return Err(ResolveError::msg(format!(
+                "namespace '{}' supports only the '{}' label, got '{}'",
+                metric.namespace, label_column, k
+            )));
+        }
+    }
+    Ok(items
+        .filter(|(key, _)| filter_value.is_none_or(|f| f == key))
+        .map(|(key, value)| {
+            let mut labels = BTreeMap::new();
+            labels.insert(label_column.to_string(), key);
+            ResolvedSample {
+                label_set: canonical_labels(&labels),
+                value,
+                meta: None,
+            }
+        })
+        .collect())
+}
+
+fn cpu_snap_value(c: &CpuStats, field: &str) -> f64 {
+    match field {
+        "usage_percent" => c.usage_percent,
+        "load_1m" => c.load_avg.one,
+        "load_5m" => c.load_avg.five,
+        "load_15m" => c.load_avg.fifteen,
+        _ => f64::NAN,
+    }
+}
+
+fn memory_snap_value(m: &MemoryStats, field: &str) -> f64 {
+    match field {
+        "used_bytes" => m.used_bytes as f64,
+        "available_bytes" => m.available_bytes as f64,
+        "cached_bytes" => m.cached_bytes as f64,
+        "swap_used_bytes" => m.swap_used_bytes as f64,
+        _ => f64::NAN,
+    }
+}
+
+fn disk_snap_value(d: &DiskStats, field: &str) -> f64 {
+    match field {
+        "total_bytes" => d.total_bytes as f64,
+        "used_bytes" => d.used_bytes as f64,
+        "available_bytes" => d.available_bytes as f64,
+        "used_percent" => {
+            if d.total_bytes > 0 {
+                d.used_bytes as f64 * 100.0 / d.total_bytes as f64
+            } else {
+                f64::NAN
+            }
+        }
+        "read_bytes_per_sec" => d.read_bytes_per_sec as f64,
+        "write_bytes_per_sec" => d.write_bytes_per_sec as f64,
+        _ => f64::NAN,
+    }
+}
+
+fn network_snap_value(n: &NetworkStats, field: &str) -> f64 {
+    match field {
+        "rx_bytes_per_sec" => n.rx_bytes_per_sec as f64,
+        "tx_bytes_per_sec" => n.tx_bytes_per_sec as f64,
+        "rx_packets_per_sec" => n.rx_packets_per_sec as f64,
+        "tx_packets_per_sec" => n.tx_packets_per_sec as f64,
+        "errors_in_per_sec" => n.errors_in_per_sec as f64,
+        "errors_out_per_sec" => n.errors_out_per_sec as f64,
+        _ => f64::NAN,
+    }
+}
+
+fn pressure_snap_value(p: &PressureStats, field: &str) -> f64 {
+    match field {
+        "some_avg10" => p.some_avg10,
+        "some_avg60" => p.some_avg60,
+        "some_avg300" => p.some_avg300,
+        "full_avg10" => p.full_avg10,
+        "full_avg60" => p.full_avg60,
+        "full_avg300" => p.full_avg300,
+        _ => f64::NAN,
+    }
 }
 
 // ===== Probe namespace =====
@@ -1489,5 +1700,214 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.message.contains("unknown namespace"));
+    }
+
+    // ===== In-memory snapshot resolution =====
+
+    use crate::models::stats::{CoreStats, LoadAverage, PressureSnapshot};
+
+    fn test_disk(mount: &str, total: u64, used: u64) -> DiskStats {
+        DiskStats {
+            mount_point: mount.to_string(),
+            total_bytes: total,
+            used_bytes: used,
+            available_bytes: total.saturating_sub(used),
+            read_bytes_per_sec: 0,
+            write_bytes_per_sec: 0,
+            timestamp: 100,
+            inode_used_percent: None,
+            read_iops: None,
+            write_iops: None,
+            io_util_percent: None,
+        }
+    }
+
+    /// Build a snapshot with the fields the tests exercise; the rest carry
+    /// harmless defaults.
+    fn test_snapshot(disks: Vec<DiskStats>, pressure: Option<PressureSnapshot>) -> AllStats {
+        AllStats {
+            cpu: Arc::new(CpuStats {
+                usage_percent: 75.0,
+                per_core: vec![CoreStats {
+                    core_index: 0,
+                    usage_percent: 75.0,
+                    freq_mhz: 3000,
+                }],
+                load_avg: LoadAverage {
+                    one: 1.5,
+                    five: 1.6,
+                    fifteen: 1.7,
+                },
+                timestamp: 100,
+                steal_percent: Some(0.5),
+                iowait_percent: Some(0.2),
+                guest_percent: None,
+                user_percent: None,
+                system_percent: None,
+                context_switches_per_sec: Some(1000),
+                process_forks_per_sec: Some(5),
+            }),
+            memory: Arc::new(MemoryStats {
+                total_bytes: 8_000_000_000,
+                used_bytes: 6_000_000_000,
+                available_bytes: 2_000_000_000,
+                cached_bytes: 1_000_000_000,
+                swap_total_bytes: 0,
+                swap_used_bytes: 0,
+                timestamp: 100,
+                page_faults_minor_per_sec: None,
+                page_faults_major_per_sec: None,
+                swap_in_pages_per_sec: None,
+                swap_out_pages_per_sec: None,
+            }),
+            disks: Arc::new(disks),
+            network: Arc::new(vec![NetworkStats {
+                interface: "eth0".to_string(),
+                rx_bytes_per_sec: 1234,
+                tx_bytes_per_sec: 5678,
+                rx_packets_per_sec: 10,
+                tx_packets_per_sec: 20,
+                errors_in_per_sec: 0,
+                errors_out_per_sec: 0,
+                rx_bytes_total: 0,
+                tx_bytes_total: 0,
+                timestamp: 100,
+            }]),
+            pressure: pressure.map(Arc::new),
+            components: None,
+        }
+    }
+
+    fn call_snap(
+        ns: &str,
+        field: &str,
+        labels: &[(&str, &str)],
+        snap: &AllStats,
+    ) -> Vec<ResolvedSample> {
+        resolve_from_snapshot(&metric(ns, field, labels), snap)
+            .expect("snapshot-resolvable")
+            .expect("no error")
+    }
+
+    #[test]
+    fn snapshot_cpu_usage() {
+        let snap = test_snapshot(vec![], None);
+        let out = call_snap("cpu", "usage_percent", &[], &snap);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].label_set, "{}");
+        assert_eq!(out[0].value, 75.0);
+        // load fields map through load_avg.
+        assert_eq!(call_snap("cpu", "load_5m", &[], &snap)[0].value, 1.6);
+    }
+
+    #[test]
+    fn snapshot_optional_fields_fall_through_to_db() {
+        let snap = test_snapshot(vec![test_disk("/", 1000, 900)], None);
+        // Optional/enriched fields are not snapshot-resolvable → None (DB path).
+        assert!(resolve_from_snapshot(&metric("cpu", "steal_percent", &[]), &snap).is_none());
+        assert!(resolve_from_snapshot(&metric("disk", "inode_used_percent", &[]), &snap).is_none());
+        assert!(
+            resolve_from_snapshot(&metric("memory", "page_faults_major_per_sec", &[]), &snap)
+                .is_none()
+        );
+        // Non-hot namespaces are never snapshot-resolvable.
+        assert!(resolve_from_snapshot(&metric("smart", "health_passed", &[]), &snap).is_none());
+    }
+
+    #[test]
+    fn snapshot_memory_used_bytes() {
+        let snap = test_snapshot(vec![], None);
+        let out = call_snap("memory", "used_bytes", &[], &snap);
+        assert_eq!(out[0].value, 6_000_000_000.0);
+    }
+
+    #[test]
+    fn snapshot_disk_used_percent_per_mount() {
+        let snap = test_snapshot(
+            vec![test_disk("/", 1000, 900), test_disk("/boot", 200, 50)],
+            None,
+        );
+        let mut out = call_snap("disk", "used_percent", &[], &snap);
+        out.sort_by(|a, b| a.label_set.cmp(&b.label_set));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].label_set, r#"{"mount_point":"/"}"#);
+        assert!((out[0].value - 90.0).abs() < 1e-9);
+        assert_eq!(out[1].label_set, r#"{"mount_point":"/boot"}"#);
+        assert!((out[1].value - 25.0).abs() < 1e-9);
+
+        // Filter narrows to one mount.
+        let one = call_snap("disk", "used_percent", &[("mount_point", "/")], &snap);
+        assert_eq!(one.len(), 1);
+        assert!((one[0].value - 90.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn snapshot_disk_zero_total_is_nan_not_dropped() {
+        // A 0-total phantom mount stays in the output (key present → no false
+        // prune) with a NaN value the evaluator holds on.
+        let snap = test_snapshot(vec![test_disk("/phantom", 0, 0)], None);
+        let out = call_snap("disk", "used_percent", &[], &snap);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].value.is_nan());
+    }
+
+    #[test]
+    fn snapshot_network_keyed_by_interface() {
+        let snap = test_snapshot(vec![], None);
+        let out = call_snap("network", "rx_bytes_per_sec", &[], &snap);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].label_set, r#"{"interface_name":"eth0"}"#);
+        assert_eq!(out[0].value, 1234.0);
+    }
+
+    #[test]
+    fn snapshot_pressure_present_resources_only() {
+        let ps = |v: f64| PressureStats {
+            some_avg10: v,
+            some_avg60: v,
+            some_avg300: v,
+            full_avg10: 0.0,
+            full_avg60: 0.0,
+            full_avg300: 0.0,
+        };
+        let pressure = PressureSnapshot {
+            cpu: Some(ps(2.5)),
+            memory: None, // absent resource is skipped, not emitted as NaN
+            io: Some(ps(1.0)),
+            timestamp: 100,
+        };
+        let snap = test_snapshot(vec![], Some(pressure));
+        let mut out = call_snap("pressure", "some_avg10", &[], &snap);
+        out.sort_by(|a, b| a.label_set.cmp(&b.label_set));
+        assert_eq!(out.len(), 2, "memory (None) must be skipped");
+        assert_eq!(out[0].label_set, r#"{"resource":"cpu"}"#);
+        assert_eq!(out[0].value, 2.5);
+        assert_eq!(out[1].label_set, r#"{"resource":"io"}"#);
+        assert_eq!(out[1].value, 1.0);
+    }
+
+    #[test]
+    fn snapshot_pressure_absent_falls_through() {
+        // No PSI at all on the host → not snapshot-resolvable (DB path, empty).
+        let snap = test_snapshot(vec![], None);
+        assert!(resolve_from_snapshot(&metric("pressure", "some_avg10", &[]), &snap).is_none());
+    }
+
+    #[test]
+    fn snapshot_rejects_bad_labels() {
+        let snap = test_snapshot(vec![test_disk("/", 1000, 900)], None);
+        // Unkeyed namespace with a label → error.
+        let err = resolve_from_snapshot(&metric("cpu", "usage_percent", &[("x", "y")]), &snap)
+            .unwrap()
+            .unwrap_err();
+        assert!(err.message.contains("no label dimensions"));
+        // Keyed namespace with the wrong label → error naming the right one.
+        let err = resolve_from_snapshot(
+            &metric("disk", "used_bytes", &[("interface_name", "eth0")]),
+            &snap,
+        )
+        .unwrap()
+        .unwrap_err();
+        assert!(err.message.contains("'mount_point'"));
     }
 }
