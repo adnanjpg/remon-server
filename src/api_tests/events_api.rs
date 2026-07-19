@@ -198,14 +198,14 @@ async fn events_range_excludes_outside_rows() {
     let now = chrono::Utc::now().timestamp();
 
     let repo = HostEventRepository::new(app.state.db.clone());
-    for (ts, kind) in [(now - 7200, "boot"), (now - 60, "agent_restart")] {
+    for (ts, kind) in [(now - 7200, "boot"), (now - 60, "server_started")] {
         repo.insert(&NewHostEvent {
             created_at: Some(ts),
             source: "system",
             kind: if kind == "boot" {
                 "boot"
             } else {
-                "agent_restart"
+                "server_started"
             },
             severity: "info",
             message: kind.to_string(),
@@ -217,14 +217,14 @@ async fn events_range_excludes_outside_rows() {
 
     // Kinds-scoped so the pairing audit row can't leak into the count.
     let uri = format!(
-        "/events?start={}&end={}&kinds=boot,agent_restart",
+        "/events?start={}&end={}&kinds=boot,server_started",
         now - 3600,
         now
     );
     let (st, body) = app.request("GET", &uri, Some(&token), None).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(body["count"], 1, "got: {body}");
-    assert_eq!(body["events"][0]["kind"], "agent_restart");
+    assert_eq!(body["events"][0]["kind"], "server_started");
 }
 
 /// The operator-audit write path end-to-end: a real mutating endpoint

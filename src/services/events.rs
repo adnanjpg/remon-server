@@ -7,7 +7,8 @@
 //!   resolved inside the task.
 //! - **Boot detection** (`detect_boot_on_startup` + `mark_clean_shutdown`):
 //!   compares the host's boot time against the value persisted in
-//!   `runtime_state`. A changed boot time is a reboot; a clean-shutdown
+//!   `runtime_state`. Every start records `server_started`; a changed boot
+//!   time additionally records `boot` (a reboot), and a clean-shutdown
 //!   marker that was never written distinguishes powercycle/crash from an
 //!   orderly restart.
 //! - **OOM sweep** (`spawn_oom_sweep`, Linux): a low-frequency journal scan
@@ -116,13 +117,11 @@ pub async fn detect_boot_on_startup(state: &Arc<AppState>) {
         .flatten()
         .map(|v| v == "1");
 
-    if let Some(event) = classify_startup(prev_boot, boot_ts, clean_shutdown) {
+    let repo = HostEventRepository::new(state.db.clone());
+    for event in classify_startup(prev_boot, boot_ts, clean_shutdown) {
         info!("startup event: {}", event.message);
-        if let Err(e) = HostEventRepository::new(state.db.clone())
-            .insert(&event)
-            .await
-        {
-            warn!("boot event insert failed: {e}");
+        if let Err(e) = repo.insert(&event).await {
+            warn!("startup event insert failed: {e}");
         }
     }
 
@@ -143,22 +142,26 @@ pub async fn mark_clean_shutdown(state: &Arc<AppState>) {
 }
 
 /// Pure startup classification: previous boot ts + this boot ts + whether
-/// the previous run exited cleanly → the event to record, if any.
+/// the previous run exited cleanly → the lifecycle events to record.
 ///
-/// - First run ever: nothing to compare, no event.
-/// - Boot ts moved: the host rebooted. Clean prior shutdown → `info` (an
-///   orderly reboot); otherwise `warn` — power loss, crash, or hard reset.
-/// - Boot ts unchanged but the clean marker is missing: the daemon itself
-///   died uncleanly (OOM-killed, `kill -9`, panic) and is back.
+/// Always yields a `server_started` event (the daemon is up). A changed
+/// boot ts additionally yields a `boot` event (the host rebooted), `warn`
+/// when the prior shutdown was unclean. `server_started` is itself `warn`
+/// only for a genuine daemon crash-restart (same boot, no clean marker).
 fn classify_startup(
     prev_boot: Option<i64>,
     boot_ts: i64,
     clean_shutdown: Option<bool>,
-) -> Option<NewHostEvent> {
-    let prev = prev_boot?;
+) -> Vec<NewHostEvent> {
     let clean = clean_shutdown == Some(true);
+    let host_rebooted = prev_boot.is_some_and(|prev| (boot_ts - prev).abs() > BOOT_JITTER_SECS);
+    let mut events = Vec::new();
 
-    if (boot_ts - prev).abs() > BOOT_JITTER_SECS {
+    // The host came up (or came back). Stamped with the actual boot moment
+    // so chart annotations line up with the gap in the metric series, not
+    // with daemon start.
+    if host_rebooted {
+        let prev = prev_boot.expect("host_rebooted implies a previous boot");
         let (severity, message) = if clean {
             ("info", "Host booted".to_string())
         } else {
@@ -167,9 +170,7 @@ fn classify_startup(
                 "Host booted after unclean shutdown (power loss, crash, or hard reset)".to_string(),
             )
         };
-        return Some(NewHostEvent {
-            // Stamped with the actual boot moment so chart annotations line
-            // up with the gap in the metric series, not with daemon start.
+        events.push(NewHostEvent {
             created_at: Some(boot_ts),
             source: "system",
             kind: "boot",
@@ -180,17 +181,40 @@ fn classify_startup(
         });
     }
 
-    if !clean {
-        return Some(NewHostEvent {
-            created_at: None,
-            source: "system",
-            kind: "agent_restart",
-            severity: "warn",
-            message: "remon-server restarted after unclean exit (crash or kill)".to_string(),
-            ..Default::default()
-        });
-    }
-    None
+    // The daemon itself started — recorded every run, so a metric-series gap
+    // from a plain restart (deploy, manual bounce) is explained too. `warn`
+    // only for a genuine crash-restart: same host boot as last run but the
+    // previous run never wrote its clean-shutdown marker. A missing marker
+    // right after a host reboot is expected (the box went down under the
+    // daemon) and already carried by the `boot` event, so it stays `info`.
+    let crash_restart = prev_boot.is_some() && !host_rebooted && !clean;
+    let (severity, message) = if crash_restart {
+        (
+            "warn",
+            "remon-server started after an unclean exit (crash or kill)".to_string(),
+        )
+    } else {
+        ("info", "remon-server started".to_string())
+    };
+    events.push(NewHostEvent {
+        created_at: None,
+        source: "system",
+        kind: "server_started",
+        severity,
+        message,
+        details: Some(
+            json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "clean_previous_exit": clean,
+                "host_rebooted": host_rebooted,
+                "first_run": prev_boot.is_none(),
+            })
+            .to_string(),
+        ),
+        ..Default::default()
+    });
+
+    events
 }
 
 // ===== OOM sweep (Linux) =====
@@ -360,40 +384,67 @@ pub fn smart_transition(
 mod tests {
     use super::*;
 
-    #[test]
-    fn first_run_records_nothing() {
-        assert!(classify_startup(None, 1_000_000, None).is_none());
-        assert!(classify_startup(None, 1_000_000, Some(true)).is_none());
+    /// Helper: the single event of a given kind, or panic.
+    fn one<'a>(events: &'a [NewHostEvent], kind: &str) -> &'a NewHostEvent {
+        events.iter().find(|e| e.kind == kind).unwrap_or_else(|| {
+            panic!(
+                "no {kind} event in {:?}",
+                events.iter().map(|e| e.kind).collect::<Vec<_>>()
+            )
+        })
     }
 
     #[test]
-    fn clean_reboot_is_info_at_boot_time() {
-        let ev = classify_startup(Some(1_000_000), 1_005_000, Some(true)).expect("event");
-        assert_eq!(ev.kind, "boot");
-        assert_eq!(ev.severity, "info");
-        assert_eq!(ev.created_at, Some(1_005_000));
+    fn first_run_records_only_server_started_info() {
+        for marker in [None, Some(true)] {
+            let evs = classify_startup(None, 1_000_000, marker);
+            assert_eq!(evs.len(), 1, "no boot event on first run");
+            let s = one(&evs, "server_started");
+            assert_eq!(s.severity, "info");
+        }
     }
 
     #[test]
-    fn unclean_reboot_is_warn() {
+    fn clean_reboot_emits_boot_info_and_server_started() {
+        let evs = classify_startup(Some(1_000_000), 1_005_000, Some(true));
+        let boot = one(&evs, "boot");
+        assert_eq!(boot.severity, "info");
+        assert_eq!(boot.created_at, Some(1_005_000));
+        // A reboot start is not the daemon's fault → info, not warn.
+        assert_eq!(one(&evs, "server_started").severity, "info");
+    }
+
+    #[test]
+    fn unclean_reboot_is_warn_boot_but_info_server_started() {
         for marker in [Some(false), None] {
-            let ev = classify_startup(Some(1_000_000), 1_005_000, marker).expect("event");
-            assert_eq!(ev.kind, "boot");
-            assert_eq!(ev.severity, "warn");
+            let evs = classify_startup(Some(1_000_000), 1_005_000, marker);
+            assert_eq!(one(&evs, "boot").severity, "warn");
+            // Unclean-ness belongs to the reboot, already flagged on `boot`.
+            assert_eq!(one(&evs, "server_started").severity, "info");
         }
     }
 
     #[test]
     fn boot_jitter_is_not_a_reboot() {
-        assert!(classify_startup(Some(1_000_000), 1_000_000 + 60, Some(true)).is_none());
-        assert!(classify_startup(Some(1_000_000), 1_000_000 - 60, Some(true)).is_none());
+        for delta in [60, -60] {
+            let evs = classify_startup(Some(1_000_000), 1_000_000 + delta, Some(true));
+            assert_eq!(evs.len(), 1, "jitter must not record a boot");
+            assert_eq!(evs[0].kind, "server_started");
+        }
     }
 
     #[test]
-    fn unclean_daemon_exit_without_reboot_is_agent_restart() {
-        let ev = classify_startup(Some(1_000_000), 1_000_010, Some(false)).expect("event");
-        assert_eq!(ev.kind, "agent_restart");
-        assert_eq!(ev.severity, "warn");
+    fn crash_restart_without_reboot_is_server_started_warn() {
+        let evs = classify_startup(Some(1_000_000), 1_000_010, Some(false));
+        assert_eq!(evs.len(), 1, "no boot event without a reboot");
+        assert_eq!(one(&evs, "server_started").severity, "warn");
+    }
+
+    #[test]
+    fn clean_restart_without_reboot_is_server_started_info() {
+        let evs = classify_startup(Some(1_000_000), 1_000_010, Some(true));
+        assert_eq!(evs.len(), 1);
+        assert_eq!(one(&evs, "server_started").severity, "info");
     }
 
     #[test]
