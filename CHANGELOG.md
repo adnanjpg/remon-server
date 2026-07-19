@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.1] - 2026-07-19
+
+### Added
+
+- **`server_started` host event** — the daemon now records its own startup on every run, so a gap in the metric series from a plain restart (deploy, manual bounce) is explained on the timeline, not just host reboots. It is `warn` only for a genuine crash-restart (same host boot as the previous run, which never wrote its clean-shutdown marker) and `info` otherwise — including the first run and any start right after a host reboot (where the unclean-ness belongs to the reboot, already carried by the `boot` event). This folds in the former `agent_restart` event: the crash-restart signal is now `server_started` at `warn`.
+
 ## [0.15.0] - 2026-07-19
 
 ### Breaking
