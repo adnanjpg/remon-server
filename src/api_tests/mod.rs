@@ -22,6 +22,7 @@ mod probes_api;
 mod process_api;
 mod public;
 mod push_api;
+mod query_plan_audit;
 mod smart_api;
 mod summary_api;
 
