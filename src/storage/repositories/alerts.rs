@@ -214,6 +214,29 @@ impl AlertRepository {
         Ok(())
     }
 
+    /// All persisted lifecycle rows — the event-driven evaluator's startup
+    /// hydration source, so firing/pending state survives a restart without
+    /// re-firing from Ok.
+    pub async fn list_all_state(&self) -> AppResult<Vec<AlertStateRow>> {
+        let rows = sqlx::query_as!(
+            AlertStateRawRow,
+            "SELECT rule_id, label_set, state, state_since,
+                    last_value, last_eval_at, last_notified_at
+               FROM alert_state"
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(AlertStateRawRow::decode)
+            .collect())
+    }
+
+    /// Prior state for one rule. Used by the single-tick test driver
+    /// [`crate::services::alerting::evaluator::evaluate_once`] and heartbeat
+    /// tests; production hydrates once via `list_all_state` and keeps state in
+    /// memory.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn list_state_for_rule(&self, rule_id: i64) -> AppResult<Vec<AlertStateRow>> {
         let rows = sqlx::query_as!(
             AlertStateRawRow,

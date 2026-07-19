@@ -176,3 +176,75 @@ async fn explicit_null_clears_description_and_silence() {
     assert!(body["description"].is_null(), "null must clear description");
     assert!(body["silenced_until"].is_null(), "null must clear silence");
 }
+
+/// The event-driven evaluator keeps lifecycle in memory and writes
+/// `alert_state` only on transitions / for non-Ok rows — a healthy Ok rule
+/// must not touch the table, while a pending row must persist so
+/// `GET /alerts/state` can show it.
+#[tokio::test]
+async fn evaluator_persists_selectively() {
+    use crate::models::alert::AlertLifecycle;
+    use crate::services::alerting::{evaluator, expression};
+    use crate::storage::repositories::AlertRepository;
+
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+
+    let (st, _) = app
+        .request(
+            "POST",
+            "/alerts",
+            Some(&token),
+            Some(serde_json::json!({
+                "name": "cpu-threshold",
+                "expression": "cpu.usage_percent > 80",
+                "severity": "warn",
+                "for_duration_secs": 0
+            })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::CREATED);
+
+    let repo = AlertRepository::new(app.state.db.clone());
+    let rule = repo.list_enabled().await.unwrap().pop().expect("rule");
+    let expr = expression::parse(&rule.expression).expect("parse");
+    let now = chrono::Utc::now().timestamp();
+
+    // Below threshold → Ok. resolve_with_state falls through to the DB (no
+    // live snapshot in tests), so seed a raw sample.
+    sqlx::query(
+        "INSERT INTO metrics_cpu (resolution, timestamp, usage_percent, load_1m, load_5m, load_15m)
+         VALUES ('raw', ?, 10.0, 0, 0, 0)",
+    )
+    .bind(now)
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+
+    let out = evaluator::evaluate_in_memory_once(&rule, &expr, &app.state, &[], now).await;
+    assert_eq!(out, vec![("{}".to_string(), AlertLifecycle::Ok)]);
+    assert!(
+        repo.list_state_for_rule(rule.id).await.unwrap().is_empty(),
+        "an Ok row stays in memory, never hits alert_state"
+    );
+
+    // Above threshold → ok→pending, which is non-Ok and must persist.
+    sqlx::query(
+        "INSERT INTO metrics_cpu (resolution, timestamp, usage_percent, load_1m, load_5m, load_15m)
+         VALUES ('raw', ?, 95.0, 0, 0, 0)",
+    )
+    .bind(now + 1)
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+
+    let out = evaluator::evaluate_in_memory_once(&rule, &expr, &app.state, &[], now + 1).await;
+    assert_eq!(out, vec![("{}".to_string(), AlertLifecycle::Pending)]);
+    let rows = repo.list_state_for_rule(rule.id).await.unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "a pending row must persist for /alerts/state"
+    );
+    assert_eq!(rows[0].state, AlertLifecycle::Pending);
+}

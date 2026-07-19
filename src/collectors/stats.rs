@@ -198,6 +198,12 @@ pub async fn run(state: Arc<AppState>) {
         };
         *state.stats_latest.write().await = Some(bundle);
 
+        // Wake the alert evaluator on fresh data — it resolves host metrics
+        // from `stats_latest`, so it should re-evaluate the moment the
+        // snapshot advances rather than on its own timer. `send_modify` bumps
+        // the watch generation even with no subscribers.
+        state.stats_signal.send_modify(|g| *g = g.wrapping_add(1));
+
         // ── Phase: db_write ─────────────────────────────────────────────
         let t_db = Instant::now();
         if let Err(e) = metrics_repo

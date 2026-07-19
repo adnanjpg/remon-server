@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 
 use sqlx::SqlitePool;
-use tokio::sync::{Mutex, RwLock, broadcast};
+use tokio::sync::{Mutex, RwLock, broadcast, watch};
 
 use crate::auth::session_cache::SessionCache;
 use crate::config::{AssistantConfig, AuthConfig};
@@ -77,6 +77,12 @@ pub struct AppState {
 
     /// Most recent stats tick — primer source for new SSE subscribers.
     pub stats_latest: Arc<RwLock<Option<AllStats>>>,
+
+    /// Monotonic counter bumped by the stats collector after each
+    /// `stats_latest` write. The alert evaluator subscribes and re-evaluates
+    /// on change (with a fallback timer for liveness), so alert resolution is
+    /// driven by fresh in-memory data rather than its own DB poll.
+    pub stats_signal: watch::Sender<u64>,
 
     /// Latest process snapshot. `GET /processes` refreshes on demand when
     /// the cache is stale; no background scan, since sysinfo's process
@@ -165,6 +171,7 @@ impl AppState {
     ) -> Self {
         let (stats_tx, _) = broadcast::channel(64);
         let (processes_tx, _) = broadcast::channel(16);
+        let (stats_signal, _) = watch::channel(0u64);
 
         Self {
             db,
@@ -175,6 +182,7 @@ impl AppState {
             session_cache: SessionCache::new(),
             stats_tx,
             processes_tx,
+            stats_signal,
             stats_latest: Arc::new(RwLock::new(None)),
             processes_latest: Arc::new(RwLock::new(None)),
             processes_refresh_lock: Arc::new(Mutex::new(())),
