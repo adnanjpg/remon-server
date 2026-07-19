@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.3] - 2026-07-19
+
+### Performance
+
+- **Alert evaluator resolves host metrics from the live in-memory snapshot instead of the DB.** cpu/memory/disk/network/pressure rules on always-present fields (`usage_percent`, `used_bytes`, `used_percent`, network rates, PSI) now evaluate against the `stats_latest` snapshot the collector already maintains — zero DB round-trips per eval tick for the common case. Optional/enriched fields (`steal_percent`, `iowait_percent`, `inode_used_percent`, page faults, …) and the boot window (before the first snapshot) fall through to the DB query, preserving the resolver's latest-non-null fallback exactly. Phase 1 of moving alerting off the DB hot path; the evaluator, state machine, notifications and `/alerts/*` API are unchanged. Binary-only change — no schema change.
+
 ## [0.15.2] - 2026-07-19
 
 ### Performance
