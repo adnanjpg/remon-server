@@ -4,6 +4,7 @@ mod devices;
 #[cfg(feature = "docker")]
 mod docker;
 mod heartbeats;
+mod host_events;
 mod incidents;
 pub mod logs;
 mod metrics;
@@ -13,6 +14,7 @@ mod process;
 mod resolutions;
 mod retention;
 mod rollup_state;
+mod runtime_state;
 mod smart;
 
 pub use alerts::{AlertRepository, UpsertAlertRule};
@@ -21,6 +23,7 @@ pub use devices::DeviceRepository;
 #[cfg(feature = "docker")]
 pub use docker::{DockerMetricsRepository, DockerStatsRow};
 pub use heartbeats::{HeartbeatRepository, UpsertHeartbeatCheck};
+pub use host_events::{HostEventRepository, NewHostEvent};
 pub use incidents::{IncidentRepository, NewIncident};
 pub use logs::LogRepository;
 pub use metrics::MetricsRepository;
@@ -30,4 +33,5 @@ pub use process::{ProcessGroupRow, ProcessMetricsRepository};
 pub use resolutions::{Resolution, ResolutionRepository};
 pub use retention::RetentionRepository;
 pub use rollup_state::RollupStateRepository;
+pub use runtime_state::RuntimeStateRepository;
 pub use smart::{SmartDeviceRow, SmartRepository};

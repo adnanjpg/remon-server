@@ -140,7 +140,8 @@ INSERT INTO retention_policy (resource, resolution, keep_seconds) VALUES
     ('probe',        '5m',  2592000),
     ('probe',        '1h',  31536000),
     ('smart',        'raw', 31536000),
-    ('alert_events', 'raw', 7776000);
+    ('alert_events', 'raw', 7776000),
+    ('host_events',  'raw', 7776000);
 
 -- ─── ROLLUP STATE ───────────────────────────────────────────────────────────
 CREATE TABLE rollup_state (
@@ -511,6 +512,49 @@ CREATE TABLE incident_snapshots (
 );
 CREATE INDEX idx_incident_snapshots_ts   ON incident_snapshots(created_at DESC);
 CREATE INDEX idx_incident_snapshots_rule ON incident_snapshots(rule_id, created_at DESC);
+
+-- ─── HOST EVENTS ────────────────────────────────────────────────────────────
+-- The host's event ledger: discrete things that happened, as opposed to the
+-- continuous metric series. Three sources:
+--   system   — detected by the daemon (host boot, OOM kill, SMART health
+--              transition, …)
+--   operator — an authenticated client did something through the API
+--              (service restart, process kill, alert silence, config change);
+--              actor_* records which paired device pulled the trigger
+--   agent    — reserved for actions the assistant executes directly
+-- `kind` is an open vocabulary (boot, oom_kill, smart_health, service_action,
+-- process_killed, …) — CHECK-constraining it would turn every new detector
+-- into a schema change. `details` is small bounded JSON, shape per kind.
+-- Alert fire/resolve and incident captures keep their own tables; the
+-- GET /events endpoint unions all three into one timeline.
+CREATE TABLE host_events (
+    id              INTEGER PRIMARY KEY,
+    created_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+    source          TEXT    NOT NULL CHECK (source IN ('system','operator','agent')),
+    kind            TEXT    NOT NULL,
+    severity        TEXT    NOT NULL DEFAULT 'info'
+                      CHECK (severity IN ('info','warn','error')),
+    message         TEXT    NOT NULL,
+    actor_device_id TEXT,
+    actor_name      TEXT,
+    -- What the event is about, when it points at a concrete object:
+    -- ('service','nginx'), ('process','1234'), ('disk','/dev/sda'), …
+    ref_type        TEXT,
+    ref_id          TEXT,
+    details         TEXT
+);
+CREATE INDEX idx_host_events_ts   ON host_events(created_at DESC);
+CREATE INDEX idx_host_events_kind ON host_events(kind, created_at DESC);
+
+-- ─── RUNTIME STATE ──────────────────────────────────────────────────────────
+-- Tiny daemon-owned KV: cross-restart breadcrumbs that are neither config
+-- nor metrics — last seen host boot time, the clean-shutdown marker, sweep
+-- cursors. Values are strings; readers parse.
+CREATE TABLE runtime_state (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+) WITHOUT ROWID;
 
 -- ─── NOTIFICATION CHANNELS ──────────────────────────────────────────────────
 -- Credentials live in server config / env vars — never here.

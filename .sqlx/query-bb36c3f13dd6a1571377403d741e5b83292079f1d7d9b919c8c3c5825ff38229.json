@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO runtime_state (key, value, updated_at)\n             VALUES (?, ?, unixepoch())\n             ON CONFLICT(key) DO UPDATE\n                SET value = excluded.value, updated_at = excluded.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "bb36c3f13dd6a1571377403d741e5b83292079f1d7d9b919c8c3c5825ff38229"
+}

@@ -686,6 +686,14 @@ impl MetricsRepository {
                     .execute(&self.pool)
                     .await?
             }
+            "host_events" => {
+                if resolution != "raw" {
+                    return Ok(0);
+                }
+                sqlx::query!("DELETE FROM host_events WHERE created_at < ?", cutoff_ts)
+                    .execute(&self.pool)
+                    .await?
+            }
             "incident_snapshots" => {
                 if resolution != "raw" {
                     return Ok(0);

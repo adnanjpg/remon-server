@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO host_events\n               (created_at, source, kind, severity, message,\n                actor_device_id, actor_name, ref_type, ref_id, details)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "3fe45891629065f1291a65530974023e0c8bb884ef975db25d8d553faf96414a"
+}
