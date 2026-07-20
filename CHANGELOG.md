@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.16.0] - 2026-07-21
+
+### Added
+
+- **Critical host events now notify, no alert rule required.** The `host_events` producers were write-only — an OOM kill, an unclean reboot, or a SMART health failure landed in the ledger and showed on the `/events` timeline, but paged no one unless you'd separately built an alert rule for it. A curated set of system-source kinds now fans out through the existing notification channels the moment it's recorded: `oom_kill` and `smart_health` failures at **crit**, an unclean `boot` at **warn**. Routine lifecycle (`server_started`, a clean reboot, SMART *recovery*) and the operator audit trail stay quiet. Each channel's `min_severity` still applies, so a crit-only channel gets just the OOM/SMART ones. Notifications carry a new `NotificationEvent::HostEvent` type (webhook/web-push payloads emit `"event": "host_event"`); the alert fired/resolved path is unchanged. This is the "set and forget" half of the host-event feature. Binary-only, no schema change.
+
 ## [0.15.5] - 2026-07-20
 
 ### Fixed
