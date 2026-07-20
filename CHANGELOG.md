@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.5] - 2026-07-20
+
+### Fixed
+
+- **A rule disabled and re-enabled within the same server run could lose its Firing/Pending state, silently resuming from Ok.** The 0.15.4 event-driven evaluator drops a rule's in-memory lifecycle when it's disabled (correctly — the rule stops evaluating); re-enabling it later without a restart re-created that lifecycle from scratch instead of restoring it from the `alert_state` row the DB still had (non-Ok rows persist regardless of enabled state). A rule flipped off and back on while firing would go quiet without ever emitting the resolve it's still owed. Startup hydration only ever covered a process restart, not this same-process cycle; `rehydrate_missing` now runs after every reload for any rule that just (re)appeared without a tracked lifecycle. Binary-only, no schema change.
+
 ## [0.15.4] - 2026-07-19
 
 ### Performance
