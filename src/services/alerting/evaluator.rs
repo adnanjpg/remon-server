@@ -172,6 +172,7 @@ async fn run(state: Arc<AppState>) {
             last_reload = now;
             // Drop in-memory lifecycle for rules that no longer exist.
             live.retain(|rid, _| rules.contains_key(rid));
+            rehydrate_missing(&repo, rules.keys().copied(), &mut live).await;
         }
 
         for compiled in rules.values_mut() {
@@ -193,6 +194,44 @@ async fn run(state: Arc<AppState>) {
             {
                 warn!("alert rule '{}' eval failed: {}", compiled.rule.name, e);
             }
+        }
+    }
+}
+
+/// Re-hydrate in-memory lifecycle for any rule id in `rule_ids` that isn't
+/// already tracked in `live`, from its `alert_state` rows.
+///
+/// Disabling a rule drops its `live` entry (see `run`'s post-reload
+/// `retain`); without this, re-enabling it later in the same process —
+/// no restart involved — would silently resume from Ok via the
+/// `or_default()` in the eval loop, losing whatever Pending/Firing state
+/// the DB still has. That row stays current regardless of enabled state:
+/// a non-Ok row is persisted on every tick it's evaluated, and simply
+/// stops being touched (not deleted) while disabled. Startup hydration
+/// alone only covers a process restart, not this same-process
+/// disable/enable cycle.
+async fn rehydrate_missing(
+    repo: &AlertRepository,
+    rule_ids: impl IntoIterator<Item = i64>,
+    live: &mut HashMap<i64, HashMap<String, Live>>,
+) {
+    for rid in rule_ids {
+        if live.contains_key(&rid) {
+            continue;
+        }
+        match repo.list_state_for_rule(rid).await {
+            Ok(rows) if !rows.is_empty() => {
+                let hydrated: HashMap<String, Live> = rows
+                    .iter()
+                    .map(|r| (r.label_set.clone(), Live::from_row(r)))
+                    .collect();
+                live.insert(rid, hydrated);
+            }
+            Ok(_) => {}
+            Err(e) => warn!(
+                "alert evaluator: state re-hydration failed for rule id={}: {:?}",
+                rid, e
+            ),
         }
     }
 }
@@ -775,6 +814,123 @@ mod tests {
         // converts to Firing immediately.
         let s = transition(AlertLifecycle::Pending, 100, true, 0, 100);
         assert_eq!(s.state, AlertLifecycle::Firing);
+    }
+
+    /// A migrated in-memory DB, isolated per test. Lighter than the full
+    /// `api_tests::TestApp` — `rehydrate_missing` only needs an
+    /// `AlertRepository`, not a wired `AppState`.
+    async fn test_repo() -> AlertRepository {
+        let db = crate::storage::Database::connect("sqlite::memory:", 1)
+            .await
+            .expect("connect in-memory sqlite");
+        db.migrate().await.expect("run migrations");
+        AlertRepository::new(db.pool().clone())
+    }
+
+    use crate::storage::repositories::UpsertAlertRule;
+
+    async fn insert_test_rule(repo: &AlertRepository) -> i64 {
+        repo.insert(&UpsertAlertRule {
+            name: "test rule".to_string(),
+            description: None,
+            enabled: true,
+            expression: "cpu.usage_percent > 90".to_string(),
+            severity: AlertSeverity::Warn,
+            for_duration_secs: 60,
+            eval_interval_secs: 10,
+            cooldown_secs: 300,
+            silenced_until: None,
+        })
+        .await
+        .expect("insert rule")
+    }
+
+    /// The regression this covers: a rule Firing when disabled must resume
+    /// Firing when re-enabled later in the same process, not restart from
+    /// Ok. `run()`'s post-reload `live.retain` drops the entry on disable;
+    /// `rehydrate_missing` is what puts it back from `alert_state` (which
+    /// was never touched by the disable itself) once the rule reappears.
+    #[tokio::test]
+    async fn rehydrate_missing_restores_firing_state_after_reenable() {
+        let repo = test_repo().await;
+        let rule_id = insert_test_rule(&repo).await;
+
+        // Simulate: the rule was Firing, then got disabled (its `live` entry
+        // dropped, but the DB row is untouched) — write that row directly.
+        repo.upsert_state(&AlertStateRow {
+            rule_id,
+            label_set: "{}".to_string(),
+            state: AlertLifecycle::Firing,
+            state_since: 1_000,
+            last_value: Some(97.5),
+            last_eval_at: 1_060,
+            last_notified_at: Some(1_060),
+        })
+        .await
+        .expect("seed firing state");
+
+        // Simulate: the rule just reappeared in `rules` after re-enable, but
+        // `live` has nothing for it (exactly what disabling left behind).
+        let mut live: HashMap<i64, HashMap<String, Live>> = HashMap::new();
+        rehydrate_missing(&repo, [rule_id], &mut live).await;
+
+        let restored = live
+            .get(&rule_id)
+            .and_then(|m| m.get("{}"))
+            .expect("rule id and label_set restored into `live`");
+        assert_eq!(restored.state, AlertLifecycle::Firing);
+        assert_eq!(restored.state_since, 1_000);
+        assert_eq!(restored.last_notified_at, Some(1_060));
+    }
+
+    /// A rule already tracked in `live` (the common case — still enabled,
+    /// nothing changed) must not be touched or re-queried.
+    #[tokio::test]
+    async fn rehydrate_missing_skips_already_tracked_rules() {
+        let repo = test_repo().await;
+        let rule_id = insert_test_rule(&repo).await;
+        // No alert_state row exists at all — if this got queried and
+        // "successfully" found nothing, the outcome would look identical to
+        // "skipped"; the assertion instead pins the pre-seeded in-memory
+        // value survives untouched, which only holds if the DB was never
+        // consulted for an already-tracked id.
+        let mut live: HashMap<i64, HashMap<String, Live>> = HashMap::new();
+        live.insert(
+            rule_id,
+            HashMap::from([(
+                "{}".to_string(),
+                Live {
+                    state: AlertLifecycle::Pending,
+                    state_since: 42,
+                    last_value: Some(1.0),
+                    last_eval_at: 42,
+                    last_notified_at: None,
+                },
+            )]),
+        );
+
+        rehydrate_missing(&repo, [rule_id], &mut live).await;
+
+        let entry = live.get(&rule_id).and_then(|m| m.get("{}")).unwrap();
+        assert_eq!(entry.state, AlertLifecycle::Pending);
+        assert_eq!(entry.state_since, 42);
+    }
+
+    /// A brand-new rule with no `alert_state` history yet must not gain a
+    /// spurious empty entry — that would defeat the "skip if tracked" check
+    /// on every future reload, hiding a real re-enable's hydration behind
+    /// this rule's empty placeholder. It's fine (and expected) that the
+    /// normal eval loop's `live.entry(id).or_default()` creates the entry
+    /// itself once the rule actually evaluates.
+    #[tokio::test]
+    async fn rehydrate_missing_no_op_for_rule_with_no_history() {
+        let repo = test_repo().await;
+        let rule_id = insert_test_rule(&repo).await;
+        let mut live: HashMap<i64, HashMap<String, Live>> = HashMap::new();
+
+        rehydrate_missing(&repo, [rule_id], &mut live).await;
+
+        assert!(!live.contains_key(&rule_id));
     }
 
     #[test]
