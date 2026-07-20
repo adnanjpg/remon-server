@@ -210,7 +210,7 @@ async fn run(
     // with the actual boot time) exists before anything else this run
     // writes to the ledger.
     services::events::detect_boot_on_startup(&app_state).await;
-    services::events::spawn_oom_sweep(app_state.clone());
+    services::events::spawn_system_event_sweep(app_state.clone());
 
     collectors::spawn_all(app_state.clone());
     collectors::smart::spawn(app_state.clone(), config.smart.clone());

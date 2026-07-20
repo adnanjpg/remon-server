@@ -11,19 +11,22 @@
 //!   time additionally records `boot` (a reboot), and a clean-shutdown
 //!   marker that was never written distinguishes powercycle/crash from an
 //!   orderly restart.
-//! - **OOM sweep** (`spawn_oom_sweep`, Linux): a low-frequency journal scan
-//!   turning kernel "Killed process" lines into structured events — the
-//!   only real answer to "why did my process vanish".
+//! - **System-event sweep** (`spawn_system_event_sweep`): a low-frequency log
+//!   scan turning OOM kills, process crashes (`app_crash`), and disk /
+//!   filesystem errors (`disk_error`) into structured events — the only real
+//!   answer to "why did my process vanish". Linux reads the kernel journal;
+//!   Windows reads the System + Application event logs.
 //!
 //! SMART health transitions are detected by `collectors::smart` and land
 //! here via [`record`]. Alert fire/resolve and incident captures keep their
 //! own tables; `GET /events` unions all of them.
 //!
 //! **Notifications.** A curated set of system-source kinds (unclean `boot`,
-//! `oom_kill`, `smart_health` failure — see [`notify_severity`]) pages the
-//! configured channels the moment it lands, no alert rule required. Routine
-//! lifecycle and operator/agent audit stay quiet. This is the "set and
-//! forget" half: the ledger records everything; only the alarming kinds push.
+//! `oom_kill`, `smart_health` failure, `disk_error` — see [`notify_severity`])
+//! pages the configured channels the moment it lands, no alert rule required.
+//! Routine lifecycle, operator/agent audit, and noisy `app_crash` stay quiet.
+//! This is the "set and forget" half: the ledger records everything; only the
+//! alarming kinds push.
 
 use std::sync::Arc;
 
@@ -38,8 +41,8 @@ use crate::storage::repositories::{
 
 const KEY_BOOT_TS: &str = "host_boot_ts";
 const KEY_CLEAN_SHUTDOWN: &str = "clean_shutdown";
-#[cfg(target_os = "linux")]
-const KEY_OOM_CURSOR: &str = "oom_sweep_cursor";
+#[cfg(any(target_os = "linux", windows))]
+const KEY_SYSEVENT_CURSOR: &str = "sysevent_sweep_cursor";
 
 /// Uptime-derived boot timestamps wobble by a few seconds between reads;
 /// only a difference beyond this is a real reboot.
@@ -57,8 +60,8 @@ pub fn record(state: &Arc<AppState>, event: NewHostEvent) {
 
 /// Insert a host event, then page an operator if it's notification-worthy.
 /// The one place the notify policy lives, so every producer (boot detection,
-/// OOM sweep, SMART, operator audit) shares it. Insert failure is logged and
-/// skips the notify.
+/// the system-event sweep, SMART, operator audit) shares it. Insert failure is
+/// logged and skips the notify.
 async fn insert_and_maybe_notify(state: &Arc<AppState>, event: &NewHostEvent) {
     if let Err(e) = HostEventRepository::new(state.db.clone())
         .insert(event)
@@ -88,7 +91,9 @@ async fn insert_and_maybe_notify(state: &Arc<AppState>, event: &NewHostEvent) {
 /// clean reboot is `info`, an unclean one `warn`). Channel `min_severity`
 /// gives the operator the final say per channel.
 fn notify_severity(kind: &str, severity: &str) -> Option<Severity> {
-    if !matches!(kind, "boot" | "oom_kill" | "smart_health") {
+    // `app_crash` is intentionally absent — process crashes can be routine and
+    // noisy; they land in the ledger but don't page.
+    if !matches!(kind, "boot" | "oom_kill" | "smart_health" | "disk_error") {
         return None;
     }
     match severity {
@@ -105,6 +110,7 @@ fn host_event_subject(kind: &str) -> &'static str {
         "boot" => "Host restarted uncleanly",
         "oom_kill" => "Out-of-memory kill",
         "smart_health" => "Disk SMART health failed",
+        "disk_error" => "Disk / filesystem error",
         _ => "Host event",
     }
 }
@@ -268,97 +274,107 @@ fn classify_startup(
     events
 }
 
-// ===== OOM sweep (Linux) =====
+// ===== System-event sweep (Linux journald + Windows Event Log) =====
 
-/// Spawn the periodic kernel-journal sweep for OOM kills. No-op off Linux —
-/// the OOM killer is a Linux concept and the journal is the only reliable
-/// witness. Windows has no equivalent event; macOS jetsam is out of scope.
-pub fn spawn_oom_sweep(state: Arc<AppState>) {
-    #[cfg(target_os = "linux")]
-    tokio::spawn(oom_sweep_loop(state));
-    #[cfg(not(target_os = "linux"))]
+/// Spawn the periodic host system-event sweep: OOM kills, process crashes,
+/// and disk / filesystem errors, turned into host events. Linux reads the
+/// kernel journal (`journalctl -k`); Windows reads the System + Application
+/// event logs (`Get-WinEvent`). No-op elsewhere — macOS `log show` parsing is
+/// a future addition.
+pub fn spawn_system_event_sweep(state: Arc<AppState>) {
+    #[cfg(any(target_os = "linux", windows))]
+    tokio::spawn(system_event_sweep_loop(state));
+    #[cfg(not(any(target_os = "linux", windows)))]
     let _ = state;
 }
 
-#[cfg(target_os = "linux")]
-const OOM_SWEEP_INTERVAL_SECS: u64 = 300;
+#[cfg(any(target_os = "linux", windows))]
+const SWEEP_INTERVAL_SECS: u64 = 300;
 
-/// First-run lookback: long enough to catch the OOM that likely preceded
-/// an unclean restart, short enough to not replay ancient history.
-#[cfg(target_os = "linux")]
-const OOM_FIRST_LOOKBACK_SECS: i64 = 900;
+/// First-run lookback: long enough to catch the crash/OOM that likely
+/// preceded an unclean restart, short enough not to replay ancient history.
+#[cfg(any(target_os = "linux", windows))]
+const SWEEP_FIRST_LOOKBACK_SECS: i64 = 900;
 
-#[cfg(target_os = "linux")]
-async fn oom_sweep_loop(state: Arc<AppState>) {
+/// One detected system event, platform-agnostic. The scan functions parse
+/// their native log format into this; the loop turns it into a `NewHostEvent`.
+#[allow(dead_code)] // fields unused on platforms without a scan (macOS)
+struct SysEvent {
+    ts: i64,
+    kind: &'static str,
+    severity: &'static str,
+    message: String,
+    ref_type: Option<&'static str>,
+    ref_id: Option<String>,
+}
+
+#[cfg(any(target_os = "linux", windows))]
+async fn system_event_sweep_loop(state: Arc<AppState>) {
     use std::time::Duration;
 
     let rs = RuntimeStateRepository::new(state.db.clone());
-    let mut cursor = match rs.get(KEY_OOM_CURSOR).await {
+    let mut cursor = match rs.get(KEY_SYSEVENT_CURSOR).await {
         Ok(v) => v
             .and_then(|s| s.parse::<i64>().ok())
-            .unwrap_or_else(|| chrono::Utc::now().timestamp() - OOM_FIRST_LOOKBACK_SECS),
+            .unwrap_or_else(|| chrono::Utc::now().timestamp() - SWEEP_FIRST_LOOKBACK_SECS),
         Err(e) => {
-            warn!("OOM sweep: cursor read failed, disabling: {e}");
+            warn!("system-event sweep: cursor read failed, disabling: {e}");
             return;
         }
     };
 
-    let mut ticker = tokio::time::interval(Duration::from_secs(OOM_SWEEP_INTERVAL_SECS));
+    let mut ticker = tokio::time::interval(Duration::from_secs(SWEEP_INTERVAL_SECS));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // interval fires immediately; that first sweep doubles as the
-    // journalctl availability probe.
+    // The interval fires immediately; that first sweep doubles as the
+    // platform-availability probe (journalctl / Get-WinEvent present?).
     let mut first = true;
 
     loop {
         ticker.tick().await;
         let now = chrono::Utc::now().timestamp();
-        let lines = match read_kernel_kill_lines(cursor).await {
-            Ok(l) => l,
+        let events = match scan_system_events(cursor).await {
+            Ok(e) => e,
             Err(e) => {
                 if first {
-                    info!("OOM sweep: journalctl unavailable, disabling ({e})");
+                    info!("system-event sweep: unavailable, disabling ({e})");
                     return;
                 }
-                warn!("OOM sweep failed: {e}");
+                warn!("system-event sweep failed: {e}");
                 continue;
             }
         };
         first = false;
 
-        for line in &lines {
-            let Some((ts, pid, name)) = parse_oom_line(line) else {
-                continue;
-            };
-            if ts <= cursor {
+        for ev in events {
+            if ev.ts <= cursor {
                 continue;
             }
             let event = NewHostEvent {
-                created_at: Some(ts),
+                created_at: Some(ev.ts),
                 source: "system",
-                kind: "oom_kill",
-                severity: "error",
-                message: format!("Kernel OOM killer terminated '{name}' (pid {pid})"),
-                ref_type: Some("process"),
-                ref_id: Some(name),
-                details: Some(
-                    json!({ "pid": pid, "line": line.chars().take(300).collect::<String>() })
-                        .to_string(),
-                ),
+                kind: ev.kind,
+                severity: ev.severity,
+                message: ev.message,
+                ref_type: ev.ref_type,
+                ref_id: ev.ref_id,
                 ..Default::default()
             };
             insert_and_maybe_notify(&state, &event).await;
         }
         cursor = now;
-        let _ = rs.set(KEY_OOM_CURSOR, &cursor.to_string()).await;
+        let _ = rs.set(KEY_SYSEVENT_CURSOR, &cursor.to_string()).await;
     }
 }
 
-/// One bounded journal read: kernel messages containing "Killed process"
-/// since the cursor — matches both global ("Out of memory: Killed process")
-/// and cgroup ("Memory cgroup out of memory: Killed process") kills.
+// ----- Linux: kernel journal -----
+
+/// One bounded kernel-journal read since the cursor, classified into events.
 #[cfg(target_os = "linux")]
-async fn read_kernel_kill_lines(since_ts: i64) -> Result<Vec<String>, String> {
-    let since = format!("@{}", since_ts);
+async fn scan_system_events(cursor: i64) -> Result<Vec<SysEvent>, String> {
+    // PCRE union of the message families we record. journald's -g uses PCRE2
+    // (standard on modern systemd), so one read covers every detector.
+    const PATTERN: &str = "Killed process|segfault|general protection|I/O error|EXT4-fs error|Buffer I/O error|critical (medium|target) error";
+    let since = format!("@{}", cursor);
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         tokio::process::Command::new("journalctl")
@@ -368,7 +384,7 @@ async fn read_kernel_kill_lines(since_ts: i64) -> Result<Vec<String>, String> {
                 "-o",
                 "short-unix",
                 "-g",
-                "Killed process",
+                PATTERN,
                 "--since",
                 &since,
             ])
@@ -388,15 +404,69 @@ async fn read_kernel_kill_lines(since_ts: i64) -> Result<Vec<String>, String> {
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter(|l| !l.trim().is_empty() && !l.starts_with("--"))
-        .take(50)
-        .map(str::to_string)
+        .take(100)
+        .filter_map(classify_kernel_line)
         .collect())
 }
 
-/// Parse a `short-unix` journal line like
+/// Classify one `short-unix` kernel line into a host event. The grep upstream
+/// guarantees every line matches one of the families below, so the trailing
+/// arm (disk / filesystem errors) is a safe catch-all.
+#[allow(dead_code)] // used only by the Linux scan
+fn classify_kernel_line(line: &str) -> Option<SysEvent> {
+    let ts = line.split_whitespace().next()?.parse::<f64>().ok()? as i64;
+
+    if line.contains("Killed process") {
+        let (_, pid, name) = parse_oom_line(line)?;
+        return Some(SysEvent {
+            ts,
+            kind: "oom_kill",
+            severity: "error",
+            message: format!("Kernel OOM killer terminated '{name}' (pid {pid})"),
+            ref_type: Some("process"),
+            ref_id: Some(name),
+        });
+    }
+    if line.contains("segfault") || line.contains("general protection") {
+        let fault = if line.contains("segfault") {
+            "segfaulted"
+        } else {
+            "hit a general-protection fault"
+        };
+        return Some(match parse_crash_line(line) {
+            Some((name, pid)) => SysEvent {
+                ts,
+                kind: "app_crash",
+                severity: "warn",
+                message: format!("Process '{name}' (pid {pid}) {fault}"),
+                ref_type: Some("process"),
+                ref_id: Some(name),
+            },
+            None => SysEvent {
+                ts,
+                kind: "app_crash",
+                severity: "warn",
+                message: format!("A process {fault}: {}", kernel_message(line)),
+                ref_type: None,
+                ref_id: None,
+            },
+        });
+    }
+    // Everything else the grep let through is a storage error.
+    Some(SysEvent {
+        ts,
+        kind: "disk_error",
+        severity: "error",
+        message: format!("Kernel storage error: {}", kernel_message(line)),
+        ref_type: None,
+        ref_id: None,
+    })
+}
+
+/// Parse a `short-unix` OOM line like
 /// `1721375123.456789 host kernel: Out of memory: Killed process 1234 (chrome) total-vm:…`
 /// → (unix ts, pid, process name).
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[allow(dead_code)] // used only by the Linux scan
 fn parse_oom_line(line: &str) -> Option<(i64, u32, String)> {
     let ts = line.split_whitespace().next()?.parse::<f64>().ok()? as i64;
     let rest = &line[line.find("Killed process ")? + "Killed process ".len()..];
@@ -408,6 +478,99 @@ fn parse_oom_line(line: &str) -> Option<(i64, u32, String)> {
         return None;
     }
     Some((ts, pid, name.to_string()))
+}
+
+/// Parse the `<name>[<pid>]` token from a crash line like
+/// `… kernel: chrome[1234]: segfault at 0 ip …` → ("chrome", 1234).
+#[allow(dead_code)] // used only by the Linux scan
+fn parse_crash_line(line: &str) -> Option<(String, u32)> {
+    let open = line.find('[')?;
+    let close = line[open..].find(']')? + open;
+    let pid: u32 = line[open + 1..close].parse().ok()?;
+    let name = line[..open]
+        .rsplit(|c: char| c.is_whitespace() || c == ':')
+        .find(|s| !s.is_empty())?
+        .to_string();
+    if name.is_empty() {
+        return None;
+    }
+    Some((name, pid))
+}
+
+/// Strip the `<epoch> <host> kernel: ` prefix, keeping the message, clamped.
+#[allow(dead_code)] // used only by the Linux scan
+fn kernel_message(line: &str) -> String {
+    line.split_once("kernel: ")
+        .map_or(line, |(_, msg)| msg)
+        .chars()
+        .take(200)
+        .collect()
+}
+
+// ----- Windows: System + Application event logs -----
+
+/// Query the Windows event logs for storage errors and application crashes
+/// since the cursor. Each match is emitted by PowerShell as `<unixts>|<kind>|
+/// <message>` and parsed back by `classify_win_line`.
+///
+/// NOTE: compile-verified only — there is no Windows host in the deploy path
+/// to runtime-test this against. The provider list is deliberately narrow so a
+/// misfit can't page (`disk_error` is the only Windows kind that notifies).
+#[cfg(windows)]
+async fn scan_system_events(cursor: i64) -> Result<Vec<SysEvent>, String> {
+    // Braces are unescaped because we substitute the cursor by string replace
+    // rather than format!, so the PCRE-free script stays readable.
+    const SCRIPT: &str = r#"
+function Emit($k,$ev){foreach($e in $ev){$ts=[int64]([System.DateTimeOffset]$e.TimeCreated).ToUnixTimeSeconds();$m=($e.Message -split "`r?`n")[0];"$ts|$k|$m"}}
+$since=[System.DateTimeOffset]::FromUnixTimeSeconds(__CURSOR__).LocalDateTime
+Emit 'disk_error' (Get-WinEvent -FilterHashtable @{LogName='System';Level=1,2;StartTime=$since;ProviderName='disk','Disk','Ntfs','Microsoft-Windows-Ntfs','volmgr','Microsoft-Windows-DiskDiagnosticResolver','storahci','stornvme'} -ErrorAction SilentlyContinue)
+Emit 'app_crash' (Get-WinEvent -FilterHashtable @{LogName='Application';StartTime=$since;ProviderName='Application Error'} -ErrorAction SilentlyContinue)
+"#;
+    let script = SCRIPT.replace("__CURSOR__", &cursor.to_string());
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        tokio::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output(),
+    )
+    .await
+    .map_err(|_| "Get-WinEvent timed out after 15s".to_string())?
+    .map_err(|e| format!("powershell spawn failed: {e}"))?;
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .take(100)
+        .filter_map(classify_win_line)
+        .collect())
+}
+
+/// Parse one `<unixts>|<kind>|<message>` line emitted by the PowerShell probe.
+#[allow(dead_code)] // used only by the Windows scan
+fn classify_win_line(line: &str) -> Option<SysEvent> {
+    let mut parts = line.splitn(3, '|');
+    let ts: i64 = parts.next()?.trim().parse().ok()?;
+    let raw_kind = parts.next()?.trim();
+    let msg = parts.next().unwrap_or("").trim();
+    let (kind, severity, subject) = match raw_kind {
+        "disk_error" => ("disk_error", "error", "Disk / filesystem error"),
+        "app_crash" => ("app_crash", "warn", "Application crashed"),
+        _ => return None,
+    };
+    Some(SysEvent {
+        ts,
+        kind,
+        severity,
+        message: if msg.is_empty() {
+            subject.to_string()
+        } else {
+            msg.chars().take(200).collect()
+        },
+        ref_type: None,
+        ref_id: None,
+    })
 }
 
 // ===== SMART transition classification =====
@@ -548,6 +711,7 @@ mod tests {
             notify_severity("smart_health", "error"),
             Some(Severity::Crit)
         );
+        assert_eq!(notify_severity("disk_error", "error"), Some(Severity::Crit));
         assert_eq!(notify_severity("boot", "warn"), Some(Severity::Warn));
 
         // Recovery / routine lifecycle / clean reboot stay quiet.
@@ -555,9 +719,95 @@ mod tests {
         assert_eq!(notify_severity("boot", "info"), None);
         assert_eq!(notify_severity("server_started", "warn"), None);
 
+        // Process crashes are recorded but too noisy to page.
+        assert_eq!(notify_severity("app_crash", "warn"), None);
+        assert_eq!(notify_severity("app_crash", "error"), None);
+
         // Operator audit is never notification-worthy.
         assert_eq!(notify_severity("service_action", "info"), None);
         assert_eq!(notify_severity("config_changed", "info"), None);
         assert_eq!(notify_severity("process_killed", "info"), None);
+    }
+
+    #[test]
+    fn classifies_oom_kill_line() {
+        let line = "1721375123.456789 myhost kernel: Out of memory: Killed process 1234 \
+                    (chrome) total-vm:1000kB";
+        let ev = classify_kernel_line(line).expect("classify");
+        assert_eq!(ev.kind, "oom_kill");
+        assert_eq!(ev.severity, "error");
+        assert_eq!(ev.ts, 1721375123);
+        assert_eq!(ev.ref_id.as_deref(), Some("chrome"));
+    }
+
+    #[test]
+    fn classifies_segfault_as_app_crash() {
+        let line = "1721375200.000000 myhost kernel: nginx[4321]: segfault at 0 ip \
+                    00007f error 4 in libc.so.6";
+        let ev = classify_kernel_line(line).expect("classify");
+        assert_eq!(ev.kind, "app_crash");
+        assert_eq!(ev.severity, "warn");
+        assert_eq!(ev.ref_id.as_deref(), Some("nginx"));
+        assert!(ev.message.contains("pid 4321"));
+        assert!(ev.message.contains("segfaulted"));
+    }
+
+    #[test]
+    fn classifies_general_protection_fault() {
+        let line = "1721375201.5 myhost kernel: traps: app[99] general protection ip:400 sp:7ff";
+        let ev = classify_kernel_line(line).expect("classify");
+        assert_eq!(ev.kind, "app_crash");
+        assert_eq!(ev.ref_id.as_deref(), Some("app"));
+        assert!(ev.message.contains("general-protection"));
+    }
+
+    #[test]
+    fn classifies_disk_error() {
+        for line in [
+            "1721375300.0 myhost kernel: EXT4-fs error (device sda1): ext4_find_entry:1234",
+            "1721375301.0 myhost kernel: blk_update_request: I/O error, dev sda, sector 12345",
+            "1721375302.0 myhost kernel: critical medium error, dev sdb, sector 999",
+        ] {
+            let ev = classify_kernel_line(line).expect("classify");
+            assert_eq!(ev.kind, "disk_error", "line: {line}");
+            assert_eq!(ev.severity, "error");
+        }
+    }
+
+    #[test]
+    fn parses_crash_process_name() {
+        assert_eq!(
+            parse_crash_line("… kernel: chrome[1234]: segfault at 0"),
+            Some(("chrome".to_string(), 1234))
+        );
+        // The traps: form has no colon after the bracket.
+        assert_eq!(
+            parse_crash_line("… kernel: traps: worker[57] general protection"),
+            Some(("worker".to_string(), 57))
+        );
+        assert!(parse_crash_line("no brackets here").is_none());
+    }
+
+    #[test]
+    fn win_line_parses_and_maps_severity() {
+        let disk =
+            classify_win_line("1721375400|disk_error|The device is not ready").expect("disk");
+        assert_eq!(disk.kind, "disk_error");
+        assert_eq!(disk.severity, "error");
+        assert_eq!(disk.ts, 1721375400);
+        assert_eq!(disk.message, "The device is not ready");
+
+        let app =
+            classify_win_line("1721375401|app_crash|Faulting application foo.exe").expect("app");
+        assert_eq!(app.kind, "app_crash");
+        assert_eq!(app.severity, "warn");
+
+        // Empty message falls back to the kind subject; unknown kinds drop.
+        assert_eq!(
+            classify_win_line("1721375402|disk_error|").unwrap().message,
+            "Disk / filesystem error"
+        );
+        assert!(classify_win_line("1721375403|something_else|x").is_none());
+        assert!(classify_win_line("not a valid line").is_none());
     }
 }
