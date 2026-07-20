@@ -389,17 +389,26 @@ async fn scan_system_events(cursor: i64) -> Result<Vec<SysEvent>, String> {
                 &since,
             ])
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .output(),
     )
     .await
     .map_err(|_| "journalctl timed out after 10s".to_string())?
     .map_err(|e| format!("journalctl spawn failed: {e}"))?;
 
-    // -g with no matches exits 1 with empty output — that's "nothing new",
-    // not an error.
-    if !output.status.success() && !output.stdout.is_empty() {
-        return Err(format!("journalctl exited with {}", output.status));
+    // `-g` with no matches exits 1 but still prints a "-- No entries --"
+    // banner to stdout — that's normal, not a failure, so the exit status
+    // alone is not a reliable signal (a status-only check here previously
+    // meant "no OOM this window" was misread as "journalctl is unavailable",
+    // permanently disabling the sweep on the very first empty tick). A real
+    // failure (bad regex, no journal, permission denied, …) writes to
+    // stderr; that's the only signal trusted here.
+    if !output.stderr.is_empty() {
+        return Err(format!(
+            "journalctl exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -532,13 +541,23 @@ Emit 'app_crash' (Get-WinEvent -FilterHashtable @{LogName='Application';StartTim
         tokio::process::Command::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .output(),
     )
     .await
     .map_err(|_| "Get-WinEvent timed out after 15s".to_string())?
     .map_err(|e| format!("powershell spawn failed: {e}"))?;
 
+    // `-ErrorAction SilentlyContinue` already swallows "no events matched" at
+    // the Get-WinEvent level, so any stderr here is a genuine script/host
+    // failure (syntax error, log inaccessible), not "nothing new".
+    if !output.stderr.is_empty() {
+        return Err(format!(
+            "powershell exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter(|l| !l.trim().is_empty())
