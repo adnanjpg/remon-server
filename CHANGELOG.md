@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.17.1] - 2026-07-21
+
+### Fixed
+
+- **The kernel-journal sweep (OOM kills, now also crashes/disk errors) has been silently disabling itself on every single restart since 0.15.0.** `journalctl -g` exits 1 when nothing matches the pattern, but still prints a `-- No entries --` banner to stdout — the sweep's availability check read "non-zero exit + non-empty stdout" as "journalctl is broken" and permanently disabled itself on the very first tick, which is *every* boot unless an OOM kill happened to fall inside the 900s startup lookback. Production has recorded **zero `oom_kill` events since the feature shipped**. Fixed by trusting stderr instead of exit status: a real failure (bad regex, no journal, permission denied) writes to stderr, "nothing matched this window" doesn't. Applied the same fix to the new Windows path pre-emptively. Binary-only, no schema change.
+
 ## [0.17.0] - 2026-07-21
 
 ### Added
