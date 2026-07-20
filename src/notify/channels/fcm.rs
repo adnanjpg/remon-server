@@ -374,7 +374,9 @@ fn pem_body_to_der(pem: &str) -> Result<Vec<u8>, String> {
 
 fn format_fcm(n: &Notification) -> (String, String) {
     let title = match n.event {
-        NotificationEvent::Fired => format!("{}{}", n.severity.label(), n.title),
+        NotificationEvent::Fired | NotificationEvent::HostEvent => {
+            format!("{}{}", n.severity.label(), n.title)
+        }
         NotificationEvent::Resolved => format!("[Resolved] {}", n.title),
     };
     (title, n.body.clone())

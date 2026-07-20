@@ -18,12 +18,19 @@
 //! SMART health transitions are detected by `collectors::smart` and land
 //! here via [`record`]. Alert fire/resolve and incident captures keep their
 //! own tables; `GET /events` unions all of them.
+//!
+//! **Notifications.** A curated set of system-source kinds (unclean `boot`,
+//! `oom_kill`, `smart_health` failure — see [`notify_severity`]) pages the
+//! configured channels the moment it lands, no alert rule required. Routine
+//! lifecycle and operator/agent audit stay quiet. This is the "set and
+//! forget" half: the ledger records everything; only the alarming kinds push.
 
 use std::sync::Arc;
 
 use log::{info, warn};
 use serde_json::json;
 
+use crate::notify::{Notification, NotificationEvent, Severity};
 use crate::state::AppState;
 use crate::storage::repositories::{
     DeviceRepository, HostEventRepository, NewHostEvent, RuntimeStateRepository,
@@ -39,17 +46,67 @@ const KEY_OOM_CURSOR: &str = "oom_sweep_cursor";
 const BOOT_JITTER_SECS: i64 = 120;
 
 /// Fire-and-forget ledger write. Failures are logged, never surfaced —
-/// an audit row must not fail the action it records.
+/// an audit row must not fail the action it records. Notification-worthy
+/// system events (see [`notify_severity`]) also page the configured channels.
 pub fn record(state: &Arc<AppState>, event: NewHostEvent) {
     let state = Arc::clone(state);
     tokio::spawn(async move {
-        if let Err(e) = HostEventRepository::new(state.db.clone())
-            .insert(&event)
-            .await
-        {
-            warn!("host event insert failed (kind={}): {e}", event.kind);
-        }
+        insert_and_maybe_notify(&state, &event).await;
     });
+}
+
+/// Insert a host event, then page an operator if it's notification-worthy.
+/// The one place the notify policy lives, so every producer (boot detection,
+/// OOM sweep, SMART, operator audit) shares it. Insert failure is logged and
+/// skips the notify.
+async fn insert_and_maybe_notify(state: &Arc<AppState>, event: &NewHostEvent) {
+    if let Err(e) = HostEventRepository::new(state.db.clone())
+        .insert(event)
+        .await
+    {
+        warn!("host event insert failed (kind={}): {e}", event.kind);
+        return;
+    }
+    let Some(sev) = notify_severity(event.kind, event.severity) else {
+        return;
+    };
+    let server_name = state.effective_config.read().await.server_name.clone();
+    let n = Notification {
+        title: format!("[{}] {}", server_name, host_event_subject(event.kind)),
+        body: event.message.clone(),
+        severity: sev,
+        event: NotificationEvent::HostEvent,
+    };
+    state.notify.fanout(&n).await;
+}
+
+/// Which host-event kinds page an operator by default, and at what severity.
+/// A curated set — routine lifecycle (`server_started`, a clean `boot`) and
+/// operator/agent audit stay quiet; only the "something's wrong on the box"
+/// kinds notify. Severity distinguishes failure from recovery (a SMART
+/// recovery is `info` and doesn't page; a failure is `error` and does; a
+/// clean reboot is `info`, an unclean one `warn`). Channel `min_severity`
+/// gives the operator the final say per channel.
+fn notify_severity(kind: &str, severity: &str) -> Option<Severity> {
+    if !matches!(kind, "boot" | "oom_kill" | "smart_health") {
+        return None;
+    }
+    match severity {
+        "error" => Some(Severity::Crit),
+        "warn" => Some(Severity::Warn),
+        _ => None,
+    }
+}
+
+/// Short notification subject per kind — the headline; the event's own message
+/// carries the specifics in the body.
+fn host_event_subject(kind: &str) -> &'static str {
+    match kind {
+        "boot" => "Host restarted uncleanly",
+        "oom_kill" => "Out-of-memory kill",
+        "smart_health" => "Disk SMART health failed",
+        _ => "Host event",
+    }
 }
 
 /// Audit entry for an operator action, attributed to the calling device.
@@ -85,12 +142,9 @@ pub fn record_operator(
             ref_id,
             details: details.map(|d| d.to_string()),
         };
-        if let Err(e) = HostEventRepository::new(state.db.clone())
-            .insert(&event)
-            .await
-        {
-            warn!("host event insert failed (kind={}): {e}", event.kind);
-        }
+        // Operator kinds are never notification-worthy, but routing through
+        // the shared path keeps the insert/notify logic in one place.
+        insert_and_maybe_notify(&state, &event).await;
     });
 }
 
@@ -117,12 +171,9 @@ pub async fn detect_boot_on_startup(state: &Arc<AppState>) {
         .flatten()
         .map(|v| v == "1");
 
-    let repo = HostEventRepository::new(state.db.clone());
     for event in classify_startup(prev_boot, boot_ts, clean_shutdown) {
         info!("startup event: {}", event.message);
-        if let Err(e) = repo.insert(&event).await {
-            warn!("startup event insert failed: {e}");
-        }
+        insert_and_maybe_notify(state, &event).await;
     }
 
     let _ = rs.set(KEY_BOOT_TS, &boot_ts.to_string()).await;
@@ -274,7 +325,6 @@ async fn oom_sweep_loop(state: Arc<AppState>) {
         };
         first = false;
 
-        let repo = HostEventRepository::new(state.db.clone());
         for line in &lines {
             let Some((ts, pid, name)) = parse_oom_line(line) else {
                 continue;
@@ -296,9 +346,7 @@ async fn oom_sweep_loop(state: Arc<AppState>) {
                 ),
                 ..Default::default()
             };
-            if let Err(e) = repo.insert(&event).await {
-                warn!("OOM event insert failed: {e}");
-            }
+            insert_and_maybe_notify(&state, &event).await;
         }
         cursor = now;
         let _ = rs.set(KEY_OOM_CURSOR, &cursor.to_string()).await;
@@ -490,5 +538,26 @@ mod tests {
         assert_eq!(smart_transition(Some(false), Some(false)), None);
         assert_eq!(smart_transition(None, None), None);
         assert_eq!(smart_transition(Some(true), None), None);
+    }
+
+    #[test]
+    fn notify_policy_pages_only_the_alarming_kinds() {
+        // Failures / unclean events page, at a severity-mapped level.
+        assert_eq!(notify_severity("oom_kill", "error"), Some(Severity::Crit));
+        assert_eq!(
+            notify_severity("smart_health", "error"),
+            Some(Severity::Crit)
+        );
+        assert_eq!(notify_severity("boot", "warn"), Some(Severity::Warn));
+
+        // Recovery / routine lifecycle / clean reboot stay quiet.
+        assert_eq!(notify_severity("smart_health", "info"), None);
+        assert_eq!(notify_severity("boot", "info"), None);
+        assert_eq!(notify_severity("server_started", "warn"), None);
+
+        // Operator audit is never notification-worthy.
+        assert_eq!(notify_severity("service_action", "info"), None);
+        assert_eq!(notify_severity("config_changed", "info"), None);
+        assert_eq!(notify_severity("process_killed", "info"), None);
     }
 }

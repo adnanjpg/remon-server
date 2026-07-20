@@ -51,8 +51,9 @@ impl NotificationChannel for WebhookChannel {
 
         let payload = serde_json::json!({
             "event": match notification.event {
-                NotificationEvent::Fired    => "fired",
-                NotificationEvent::Resolved => "resolved",
+                NotificationEvent::Fired      => "fired",
+                NotificationEvent::Resolved   => "resolved",
+                NotificationEvent::HostEvent  => "host_event",
             },
             "severity": notification.severity.as_str(),
             "title":    notification.title,

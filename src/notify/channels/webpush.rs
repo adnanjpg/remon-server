@@ -323,7 +323,9 @@ fn parse_origin(url: &str) -> anyhow::Result<String> {
 
 fn format_payload(n: &Notification) -> String {
     let title = match n.event {
-        NotificationEvent::Fired => format!("{}{}", n.severity.label(), n.title),
+        NotificationEvent::Fired | NotificationEvent::HostEvent => {
+            format!("{}{}", n.severity.label(), n.title)
+        }
         NotificationEvent::Resolved => format!("[Resolved] {}", n.title),
     };
     let severity = match n.severity {
@@ -333,6 +335,7 @@ fn format_payload(n: &Notification) -> String {
     let event = match n.event {
         NotificationEvent::Fired => "fired",
         NotificationEvent::Resolved => "resolved",
+        NotificationEvent::HostEvent => "host_event",
     };
     serde_json::json!({
         "title": title,

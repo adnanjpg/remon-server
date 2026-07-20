@@ -24,8 +24,14 @@ impl Severity {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationEvent {
+    /// An alert rule crossed its threshold.
     Fired,
+    /// An alert rule recovered.
     Resolved,
+    /// A discrete host event (OOM kill, unclean reboot, SMART failure) — not
+    /// part of an alert's fired→resolved lifecycle; it never resolves. Renders
+    /// like `Fired` for urgency (severity-driven) but titled by the event.
+    HostEvent,
 }
 
 /// A notification ready to be dispatched to one or more channels.
