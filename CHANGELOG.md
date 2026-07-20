@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.17.0] - 2026-07-21
+
+### Added
+
+- **Process crashes and disk errors are now detected as host events, cross-platform.** The kernel-journal sweep that caught OOM kills is generalised into a single system-event sweep covering two more families: `app_crash` (a process segfault / general-protection fault) and `disk_error` (I/O or filesystem errors — EXT4-fs, `blk_update_request`, buffer, critical medium/target). It runs on **Windows** too, reading the System + Application event logs via `Get-WinEvent` (disk/NTFS/storage providers → `disk_error`; Application Error → `app_crash`), so the same three kinds land on both platforms; other targets (macOS) are a no-op. `disk_error` is notification-worthy — it pages at **crit** alongside `oom_kill`/`smart_health`/unclean `boot`; `app_crash` is recorded to the ledger and shown on the timeline but stays quiet by default, as process crashes can be routine and noisy. One shared cursor drives the whole sweep (5-minute cadence, 15-minute first-run lookback). Binary-only, no schema change. *(The Windows path is compile-verified but not yet runtime-tested — there's no Windows host in the deploy path; the Linux path is verified on the production VPS.)*
+
 ## [0.16.0] - 2026-07-21
 
 ### Added
