@@ -37,7 +37,7 @@ sqlx = { version = "0.9.0", features = ["sqlite", "runtime-tokio", "migrate"] }
 sysinfo = { version = "0.39.6" }
 log = "0.4"
 blake3 = "1.8"
-tokio = { version = "1.52", features = [
+tokio = { version = "1.53", features = [
     "rt-multi-thread",
     "macros",
     "time",
@@ -57,7 +57,7 @@ futures-util = "0.3"
 argon2 = "0.5"
 rand = "0.10"
 hex = "0.4"
-p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
+p256 = { version = "0.14", features = ["ecdsa", "pem", "pkcs8"] }
 uuid = { version = "1", features = ["v4"] }
 subtle = "2"
 tower_governor = "0.8"

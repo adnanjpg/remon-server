@@ -14,7 +14,7 @@
 use anyhow::{Context, Result};
 use p256::{
     SecretKey,
-    elliptic_curve::{rand_core::OsRng, sec1::ToEncodedPoint},
+    elliptic_curve::{Generate, sec1::ToSec1Point},
     pkcs8::{DecodePrivateKey, EncodePrivateKey, LineEnding},
 };
 use sqlx::SqlitePool;
@@ -33,7 +33,11 @@ impl VapidKeyPair {
     /// Generate a fresh ECDSA P-256 keypair (the algorithm Web Push
     /// mandates) and return it PEM-encoded.
     pub fn generate() -> Result<Self> {
-        let secret = SecretKey::random(&mut OsRng);
+        // rand_core 0.10 (pulled in by elliptic-curve 0.14) dropped OsRng,
+        // and `SecretKey::random` is deprecated in favor of `Generate`.
+        // `rand::rng()` (a CSPRNG seeded from the OS, reseeded periodically)
+        // satisfies elliptic-curve's `CryptoRng` bound.
+        let secret = SecretKey::generate_from_rng(&mut rand::rng());
         let private_key_pem = secret
             .to_pkcs8_pem(LineEnding::LF)
             .context("encode VAPID private key as PKCS#8 PEM")?
@@ -51,7 +55,7 @@ impl VapidKeyPair {
     pub fn public_key_for_client(&self) -> Result<String> {
         let secret = SecretKey::from_pkcs8_pem(&self.private_key_pem)
             .context("re-parse VAPID PKCS#8 PEM")?;
-        let encoded = secret.public_key().to_encoded_point(false); // uncompressed
+        let encoded = secret.public_key().to_sec1_point(false); // uncompressed
         Ok(base64url_encode(encoded.as_bytes()))
     }
 }
