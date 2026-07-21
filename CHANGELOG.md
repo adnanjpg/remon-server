@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.17.2] - 2026-07-22
+
+### Security
+
+- **Notification-channel credentials could leak into the server log on a delivery failure.** Every channel (`telegram`, `ntfy`, `webhook`, `fcm`, `webpush`) builds its outbound request against a URL that embeds a secret — the Telegram bot token is a path segment, the ntfy topic is effectively a bearer-equivalent, an operator's webhook URL may carry a token in its query string, and a Web Push endpoint is itself an unguessable per-subscriber credential. `reqwest::Error`'s `Display` includes the request URL verbatim, and every channel's error path did `e.to_string()` straight into a `warn!()` on send failure — so a single Telegram hiccup (bad chat ID, a transient API blip) would print the bot token to the server log at WARN level. Fixed by calling `.without_url()` on every reqwest error before it's stringified, across all five channels. No config or behavior change — only what lands in the log on failure.
+
+### Fixed
+
+- **`systemctl restart`/`stop` could hang for 90s and get SIGKILLed while an SSE stream was open.** `main.rs` hands axum's graceful shutdown a signal future, which stops accepting new connections but then waits for every in-flight response to finish. The live-stats, container-log, and service-log-follow SSE streams are infinite by design (they run until the client disconnects) and never observed the shutdown signal — so any open dashboard tab or log-follow blocked shutdown indefinitely, until systemd's default `TimeoutStopSec` elapsed and SIGKILLed the process. The SIGKILL had a second, quieter effect: `mark_clean_shutdown` only runs after `serve()` returns normally, so a killed process never set the `clean_shutdown` marker — corrupting the next boot's classification (a plain restart with a live dashboard open would misreport as a crash-restart, and the following real reboot as an unclean shutdown). Fixed with a `watch::Sender<bool>` on `AppState`, flipped inside the shutdown future *before* axum's drain phase begins; every infinite SSE stream (`routes::sse::until_shutdown`) now races its next item against that signal and ends within one poll. `systemctl restart` with open SSE clients now completes in well under a second instead of 90s. The assistant's answer-streaming SSE is unaffected — it already terminates on its own (a `done`/`error` frame closes the channel), so it isn't in the affected set. Binary-only, no schema change.
+
 ## [0.17.1] - 2026-07-21
 
 ### Fixed
