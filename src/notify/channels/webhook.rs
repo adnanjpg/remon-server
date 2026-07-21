@@ -70,7 +70,9 @@ impl NotificationChannel for WebhookChannel {
         let resp = req
             .send()
             .await
-            .map_err(|e| ChannelError::Send(e.to_string()))?;
+            // An operator-supplied webhook URL may carry a secret in its
+            // query string — keep it out of the logged error.
+            .map_err(|e| ChannelError::Send(e.without_url().to_string()))?;
 
         if resp.status().is_success() {
             Ok(1)

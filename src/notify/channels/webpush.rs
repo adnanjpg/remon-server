@@ -104,7 +104,12 @@ impl WebPushChannel {
             .body(ciphertext)
             .send()
             .await
-            .map_err(|e| ChannelError::Send(format!("HTTP send ({}): {}", device_id, e)))?;
+            // The per-subscriber relay endpoint is itself an unguessable
+            // secret (equivalent to a bearer credential) — keep it out of
+            // the logged error.
+            .map_err(|e| {
+                ChannelError::Send(format!("HTTP send ({}): {}", device_id, e.without_url()))
+            })?;
 
         match resp.status().as_u16() {
             200..=299 => Ok(()),

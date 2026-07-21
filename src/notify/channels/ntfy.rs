@@ -94,7 +94,9 @@ impl NotificationChannel for NtfyChannel {
         let resp = req
             .send()
             .await
-            .map_err(|e| ChannelError::Send(e.to_string()))?;
+            // The ntfy topic (a bearer-equivalent secret for unauthenticated
+            // servers) lives in this URL — keep it out of the logged error.
+            .map_err(|e| ChannelError::Send(e.without_url().to_string()))?;
 
         if resp.status().is_success() {
             Ok(1)

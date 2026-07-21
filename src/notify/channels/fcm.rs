@@ -153,7 +153,7 @@ impl FcmInner {
             ])
             .send()
             .await
-            .map_err(|e| ChannelError::Send(format!("FCM token request: {}", e)))?;
+            .map_err(|e| ChannelError::Send(format!("FCM token request: {}", e.without_url())))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -175,7 +175,7 @@ impl FcmInner {
         let tr: TokenResp = resp
             .json()
             .await
-            .map_err(|e| ChannelError::Send(format!("FCM token parse: {}", e)))?;
+            .map_err(|e| ChannelError::Send(format!("FCM token parse: {}", e.without_url())))?;
 
         Ok(tr.access_token)
     }
@@ -207,7 +207,7 @@ impl FcmInner {
             }))
             .send()
             .await
-            .map_err(|e| ChannelError::Send(e.to_string()))?;
+            .map_err(|e| ChannelError::Send(e.without_url().to_string()))?;
 
         if resp.status().is_success() {
             Ok(())

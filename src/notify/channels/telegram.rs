@@ -80,13 +80,15 @@ impl NotificationChannel for TelegramChannel {
             }))
             .send()
             .await
-            .map_err(|e| ChannelError::Send(e.to_string()))?;
+            // reqwest errors carry the request URL (bot token included) in
+            // their Display output — strip it before this reaches the logs.
+            .map_err(|e| ChannelError::Send(e.without_url().to_string()))?;
 
         let status = resp.status();
         let body: TgResponse = resp
             .json()
             .await
-            .map_err(|e| ChannelError::Send(format!("parse response: {}", e)))?;
+            .map_err(|e| ChannelError::Send(format!("parse response: {}", e.without_url())))?;
 
         if body.ok {
             Ok(1)
