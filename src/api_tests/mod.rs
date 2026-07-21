@@ -24,6 +24,7 @@ mod public;
 mod push_api;
 mod query_plan_audit;
 mod smart_api;
+mod sse_shutdown;
 mod summary_api;
 
 use std::net::SocketAddr;
@@ -135,12 +136,14 @@ impl TestApp {
 
         // Mirror `build_app`: the assistant lives outside `create_routes`
         // (it gets a longer timeout there), so mount it here too — with the
-        // same auth middleware — or the `/assistant` route tests 404.
+        // same auth middleware — or the `/assistant` route tests 404. SSE
+        // routes are likewise a separate nest in the real app.
         let assistant = crate::routes::rest::create_assistant_routes().layer(
             axum::middleware::from_fn_with_state(state.clone(), crate::middleware::auth_middleware),
         );
         let router = crate::routes::rest::create_routes(state.clone())
             .merge(assistant)
+            .nest("/sse", crate::routes::sse::create_routes(state.clone()))
             .with_state(state.clone());
         TestApp { router, state }
     }
