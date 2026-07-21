@@ -8,6 +8,7 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::{
     models::stats::{AllStats, StatsEvent},
+    routes::sse::until_shutdown,
     state::AppState,
 };
 
@@ -29,7 +30,8 @@ pub async fn stream_stats(
         Err(_) => Ok(Event::default().comment("lagged")),
     });
 
-    Sse::new(primer.chain(live)).keep_alive(
+    let stream = until_shutdown(primer.chain(live), state.shutdown.subscribe());
+    Sse::new(stream).keep_alive(
         KeepAlive::new()
             .interval(Duration::from_secs(5))
             .text("keep-alive"),
@@ -76,6 +78,7 @@ pub async fn stream_cpu_stats(
         }
     });
 
+    let stream = until_shutdown(stream, state.shutdown.subscribe());
     Sse::new(stream).keep_alive(
         KeepAlive::new()
             .interval(Duration::from_secs(5))
@@ -99,6 +102,7 @@ pub async fn stream_memory_stats(
         }
     });
 
+    let stream = until_shutdown(stream, state.shutdown.subscribe());
     Sse::new(stream).keep_alive(
         KeepAlive::new()
             .interval(Duration::from_secs(5))
@@ -122,6 +126,7 @@ pub async fn stream_disk_stats(
         }
     });
 
+    let stream = until_shutdown(stream, state.shutdown.subscribe());
     Sse::new(stream).keep_alive(
         KeepAlive::new()
             .interval(Duration::from_secs(5))
@@ -145,6 +150,7 @@ pub async fn stream_network_stats(
         }
     });
 
+    let stream = until_shutdown(stream, state.shutdown.subscribe());
     Sse::new(stream).keep_alive(
         KeepAlive::new()
             .interval(Duration::from_secs(5))

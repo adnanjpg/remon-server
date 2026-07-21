@@ -145,6 +145,12 @@ pub struct AppState {
     /// `GET /push/vapid-public-key`; the private half signs the JWT we
     /// send to push relays in phase 3.
     pub vapid_keys: Arc<crate::services::webpush::VapidKeyPair>,
+
+    /// Flips to `true` once shutdown has started. The infinite SSE streams
+    /// (live stats, container logs, service log follow) race their next
+    /// item against this so they end promptly instead of blocking axum's
+    /// graceful shutdown forever — see `routes::sse::until_shutdown`.
+    pub shutdown: watch::Sender<bool>,
 }
 
 impl AppState {
@@ -172,6 +178,7 @@ impl AppState {
         let (stats_tx, _) = broadcast::channel(64);
         let (processes_tx, _) = broadcast::channel(16);
         let (stats_signal, _) = watch::channel(0u64);
+        let (shutdown, _) = watch::channel(false);
 
         Self {
             db,
@@ -200,6 +207,7 @@ impl AppState {
             probe_registry,
             notify,
             vapid_keys,
+            shutdown,
         }
     }
 }

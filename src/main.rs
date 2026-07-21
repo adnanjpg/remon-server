@@ -247,11 +247,22 @@ async fn run(
         .await
         .with_context(|| format!("bind on {bind_addr}"))?;
 
+    // Flip `state.shutdown` inside the future handed to axum, before its
+    // graceful-drain phase starts waiting on in-flight responses. The
+    // infinite SSE streams race their next item against this signal (see
+    // `routes::sse::until_shutdown`) so they end promptly instead of
+    // blocking shutdown forever.
+    let shutdown_state = app_state.clone();
+    let graceful_shutdown = async move {
+        shutdown::signal().await;
+        let _ = shutdown_state.shutdown.send(true);
+    };
+
     if let Err(e) = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown::signal())
+    .with_graceful_shutdown(graceful_shutdown)
     .await
     {
         error!("server error: {}", e);

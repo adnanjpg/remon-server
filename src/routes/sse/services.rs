@@ -1,11 +1,13 @@
 use axum::{
-    extract::{Path, Query},
+    extract::{Path, Query, State},
     response::Response,
 };
 use serde::Deserialize;
+use std::sync::Arc;
 
 use crate::error::{AppError, AppResult};
 use crate::routes::extractors::Claims;
+use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct StreamServiceLogsQuery {
@@ -26,6 +28,7 @@ pub struct StreamServiceLogsQuery {
 /// `into_response()` collapses both shapes into a single `Response`.
 pub async fn stream_service_logs(
     _claims: Claims,
+    State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
     Query(params): Query<StreamServiceLogsQuery>,
 ) -> AppResult<Response> {
@@ -44,7 +47,7 @@ pub async fn stream_service_logs(
 
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (name, params);
+        let _ = (name, params, state);
         Err(AppError::NotSupported)
     }
 
@@ -99,6 +102,7 @@ pub async fn stream_service_logs(
                 Some((event, (lines, child)))
             });
 
+        let stream = crate::routes::sse::until_shutdown(stream, state.shutdown.subscribe());
         Ok(Sse::new(stream)
             .keep_alive(KeepAlive::default())
             .into_response())
