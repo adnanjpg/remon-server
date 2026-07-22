@@ -17,6 +17,7 @@
 //!    `tracing::*!` here would feed back through DbLayer and loop.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -143,7 +144,10 @@ impl<S: Subscriber> Layer<S> for DbLayer {
         // try_send — drop if the buffer is full. We never want a log
         // emission to block the calling task; a saturated channel means
         // the DB writer is stuck and is already complaining to stderr.
-        let _ = self.sender.try_send(app_log);
+        // Drops are counted and surfaced by the writer's next drain.
+        if self.sender.try_send(app_log).is_err() {
+            DROPPED.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -179,6 +183,11 @@ impl Visit for EventVisitor {
     }
 }
 
+/// Events dropped by `DbLayer` on a full channel. Swapped to zero and
+/// reported as a synthetic WARN row on the writer's next drain, so a
+/// gap in the log table is visible instead of silent.
+static DROPPED: AtomicU64 = AtomicU64::new(0);
+
 /// Upper bound on one writer drain. Matches the channel capacity order
 /// of magnitude — a full channel flushes in a couple of commits instead
 /// of hundreds.
@@ -201,7 +210,7 @@ pub fn start_db_writer(mut rx: mpsc::Receiver<AppLog>, pool: SqlitePool) {
                 // Channel closed and drained — sender side shut down.
                 return;
             }
-            let rows: Vec<NewLogRow> = buf
+            let mut rows: Vec<NewLogRow> = buf
                 .drain(..)
                 .map(|l| NewLogRow {
                     timestamp: l.logged_at,
@@ -211,6 +220,16 @@ pub fn start_db_writer(mut rx: mpsc::Receiver<AppLog>, pool: SqlitePool) {
                     message: l.message,
                 })
                 .collect();
+            let dropped = DROPPED.swap(0, Ordering::Relaxed);
+            if dropped > 0 {
+                rows.push(NewLogRow {
+                    timestamp: chrono::Utc::now().timestamp(),
+                    level: LogLevel::Warn.as_i32(),
+                    source: rows[0].source.clone(),
+                    target: "remon_server::services::logging".into(),
+                    message: format!("{dropped} log entries dropped (channel full)"),
+                });
+            }
             if let Err(e) = repo.insert_batch(&rows).await {
                 // stderr only — emitting a `log::*!` or `tracing::*!` here
                 // would feed back through DbLayer and loop.
