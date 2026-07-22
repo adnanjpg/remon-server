@@ -1,6 +1,7 @@
 use config::{Config as ConfigBuilder, ConfigError, Environment, File};
 use serde::Deserialize;
 use std::env;
+use std::net::SocketAddr;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
@@ -34,6 +35,21 @@ pub struct ServerConfig {
     /// XFF and either pollute audit data or bypass rate limits.
     #[serde(default)]
     pub trusted_proxy: bool,
+}
+
+impl ServerConfig {
+    /// Bind address from `host`/`port`. `host` must be an IP literal —
+    /// hostnames never worked here (the old code fell back to 0.0.0.0 on
+    /// any parse failure, so "localhost" silently bound all interfaces).
+    /// Validated in `Config::new` so a typo dies at boot.
+    pub fn bind_addr(&self) -> Result<SocketAddr, ConfigError> {
+        format!("{}:{}", self.host, self.port).parse().map_err(|_| {
+            ConfigError::Message(format!(
+                "invalid server.host '{}': expected an IP address (e.g. 0.0.0.0 or 127.0.0.1)",
+                self.host
+            ))
+        })
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -303,6 +319,8 @@ impl Config {
             )
             .build()?;
 
-        config.try_deserialize()
+        let cfg: Self = config.try_deserialize()?;
+        cfg.server.bind_addr()?;
+        Ok(cfg)
     }
 }

@@ -231,15 +231,8 @@ async fn run(
 
     let app = routes::build_app(app_state.clone(), &config)?;
 
-    let bind_addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
-        .parse()
-        .unwrap_or_else(|_| {
-            error!(
-                "invalid server.host '{}', falling back to 0.0.0.0:{}",
-                config.server.host, config.server.port
-            );
-            SocketAddr::from(([0, 0, 0, 0], config.server.port))
-        });
+    // Already validated in Config::new — a bad host never reaches here.
+    let bind_addr: SocketAddr = config.server.bind_addr().context("bind address")?;
 
     info!("listening on http://{}", bind_addr);
 
