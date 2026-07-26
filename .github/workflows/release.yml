@@ -9,44 +9,158 @@ on:
 jobs:
   build:
     runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux ships static musl builds. A glibc build made on the runner
+          # carries that runner's glibc version requirement with it, which
+          # rules out every distro older than the image — Debian 12, Ubuntu
+          # 22.04 and RHEL 9 among them. Static linking makes the artifact
+          # run anywhere, which is the whole point of a single-binary agent.
+          - target: x86_64-unknown-linux-musl
+            platform: linux-amd64
+            runner: ubuntu-24.04
+            archive: tar.gz
+          - target: aarch64-unknown-linux-musl
+            platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            platform: windows-amd64
+            runner: windows-2022
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: ⚡ Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # Both libsqlite3-sys (bundled SQLite) and ring compile C, so a musl
+      # target needs a musl C toolchain even on a native-architecture runner.
+      - name: Install musl toolchain
+        if: endsWith(matrix.target, '-musl')
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          # The cc crate reads CC_<target with dashes as underscores>. Only the
+          # variable name is rewritten — musl-gcc keeps its dash.
+          cc_var="CC_$(printf '%s' '${{ matrix.target }}' | tr '-' '_')"
+          echo "$cc_var=musl-gcc" >> "$GITHUB_ENV"
+
+      - name: 🔨 Build
+        shell: bash
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo build --release --all-features --target ${{ matrix.target }}
+
+      # A release that cannot start is the failure mode worth spending a CI
+      # step on: the binary carries its own defaults, so it must come up in a
+      # directory that holds nothing but itself.
+      - name: Smoke test
+        shell: bash
+        run: |
+          set -eux
+          bin="target/${{ matrix.target }}/release/remon-server"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            bin="$bin.exe"
+          fi
+          smoke="$(mktemp -d)"
+          cp "$bin" "$smoke/"
+          cd "$smoke"
+          ./remon-server --version
+          ./remon-server --config-dir . --data-dir . config check
+
+      # `ldd` reports static binaries with several different wordings across
+      # distros; `file` says "dynamically linked" or it does not.
+      - name: Verify the Linux build is static
+        if: endsWith(matrix.target, '-musl')
+        run: |
+          set -eu
+          bin="target/${{ matrix.target }}/release/remon-server"
+          file "$bin"
+          if file "$bin" | grep -q 'dynamically linked'; then
+            echo "::error::$bin is dynamically linked; expected a static musl build"
+            exit 1
+          fi
+
+      - name: Package
+        shell: bash
+        run: |
+          set -eux
+          stage="dist/remon-server-${{ matrix.platform }}"
+          mkdir -p "$stage"
+
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            cp "target/${{ matrix.target }}/release/remon-server.exe" "$stage/"
+          else
+            cp "target/${{ matrix.target }}/release/remon-server" "$stage/"
+            cp packaging/remon-server.service "$stage/"
+            cp packaging/install.sh "$stage/"
+            cp packaging/uninstall.sh "$stage/"
+          fi
+
+          # Shipped as a sample so the installer never has to invent one, and
+          # so an operator unpacking by hand has a commented starting point.
+          cp config/default.toml "$stage/config.toml.sample"
+          cp README.md CONFIG.md "$stage/"
+          mkdir -p "$stage/probes"
+          cp probes/examples/*.sh "$stage/probes/"
+
+          cd dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "remon-server-${{ matrix.platform }}.zip" "remon-server-${{ matrix.platform }}/*"
+          else
+            tar -czf "remon-server-${{ matrix.platform }}.tar.gz" \
+                -C "remon-server-${{ matrix.platform }}" .
+          fi
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: remon-server-${{ matrix.platform }}
+          path: dist/remon-server-${{ matrix.platform }}.${{ matrix.archive }}
+          retention-days: 1
+          if-no-files-found: error
+
+  release:
+    needs: build
+    # A manual dispatch has no tag to attach a release to; it still produces
+    # downloadable artifacts from the build job, which is the point of running
+    # it by hand.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
 
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            platform: linux-amd64
-            runner: ubuntu-24.04
-          - target: aarch64-unknown-linux-gnu
-            platform: linux-arm64
-            runner: ubuntu-24.04-arm
-
     steps:
-    - uses: actions/checkout@v4
+      - name: Collect builds
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: ${{ matrix.target }}
+      # install.sh refuses to install without a matching entry here, so this
+      # file is part of the release, not a convenience.
+      - name: Generate SHA256SUMS
+        working-directory: dist
+        run: |
+          set -eu
+          sha256sum remon-server-* > SHA256SUMS
+          cat SHA256SUMS
 
-    - name: ⚡ Cache
-      uses: Swatinem/rust-cache@v2
-      with:
-        key: ${{ matrix.target }}
-
-    - name: 🔨 Build
-      env:
-        REMON__AUTH__JWT_SECRET: "ci-test-secret-minimum-32-characters-long-12345678"
-      run: cargo build --release --all-features --target ${{ matrix.target }}
-
-    - name: Package binary
-      run: |
-        mkdir -p dist
-        cp target/${{ matrix.target }}/release/remon-server dist/
-        tar -czvf ${{ matrix.platform }}-${{ matrix.target }}-release.tar.gz -C dist .
-
-    - name: Upload to GitHub Release
-      uses: softprops/action-gh-release@v2
-      with:
-        files: ${{ matrix.platform }}-${{ matrix.target }}-release.tar.gz
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
