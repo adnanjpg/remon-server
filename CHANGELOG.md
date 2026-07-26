@@ -3,6 +3,23 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.18.0] - 2026-07-26
+
+### Added
+
+- **A one-line installer, a systemd unit, and the CLI an installed server needs.** `curl -fsSL .../packaging/install.sh | sudo sh` resolves the build for the machine, verifies it against the published `SHA256SUMS`, installs to `/usr/local/bin`, writes `/etc/remon/config.toml` only when there is not one already, validates it, and starts an enabled service — then waits on `/health` so a crash loop is reported instead of discovered later. Re-running it is the upgrade path; configuration and the database are never touched. `uninstall.sh` keeps both unless given `--purge`. The unit runs as root deliberately (restarting services, killing processes and reading SMART do not work otherwise, which also rules out `User=`/`NoNewPrivileges`) and carries the hardening that does not conflict with that job, plus a stop timeout long enough for the SSE drain to record a clean shutdown. The binary itself gained `--version`, `--help`, `--config-dir`, `--data-dir`, `config check` (validate and exit — what the installer gates on) and `doctor` (paths, writability, bind address and port availability, privileges, init system, smartctl, Docker socket; opens nothing and mutates nothing, so it is safe against a live install). Hand-rolled argument parsing — no new dependency.
+- **A fresh install now says what to do next.** Until a device has paired, every boot prints the reachable addresses and how pairing starts. A wildcard bind says nothing about how to reach the host, so the address the routing table would use to leave the machine is resolved and offered alongside loopback; no packet is sent, a connected UDP socket only records a peer and performs the route lookup. This lives in the server rather than the installer because a host set up from a package, a container image or an unpacked tarball never runs one.
+- **Windows release artifacts.** The SCM service backend and the PowerShell event collectors have been in the tree for several releases with nothing published to run them on; `remon-server-windows-amd64.zip` ships now.
+
+### Fixed
+
+- **The published release artifact could not start.** The tarball contained a lone executable, but `config/default` was a *required* config source — extracting it anywhere without a repo checkout beside it died at boot with `configuration file "config/default" not found`, so the only working path was cloning the repository. The defaults are now compiled into the binary via `include_str!` and the on-disk copy is one more optional override layer, leaving the checkout workflow byte-for-byte unchanged. An empty CORS allow-list is no longer fatal either: it is the tightest possible policy (no browser origin may call the API, native clients unaffected) and the shipped default, so it boots and logs a warning instead of refusing to start — a fresh install has no frontend origin to name yet.
+- **Linux builds would not run on Debian 12, Ubuntu 22.04 or RHEL 9.** The artifacts were glibc builds produced on `ubuntu-24.04`, so they inherited that image's glibc 2.39 requirement; glibc is backward compatible, not forward, and those distros ship 2.34–2.36. Linux now builds against musl and CI asserts the result is statically linked, so the binary has no libc floor and no runtime dependency to install. The release pipeline also gained a smoke test that runs `--version` and `config check` from a directory holding nothing but the binary — the failure this pipeline exists to catch.
+
+### Changed
+
+- **Config, database and probes are no longer resolved relative to the working directory.** A daemon has no meaningful working directory, so an installed server had nowhere sensible to put its files. The layout resolves once at startup: `--config-dir`/`--data-dir` or `REMON_CONFIG_DIR`/`REMON_DATA_DIR` win; a working directory containing `config/default.toml` keeps the existing relative paths, so `cargo run` in a checkout is unchanged; otherwise `/etc/remon` and `/var/lib/remon` when privileged, XDG directories when not, `%ProgramData%\remon` on Windows. Configured paths that are relative resolve against the data directory and absolute ones are honoured as given, so the database can sit on its own volume. Adds `config.toml` to the layer order — the file an installed server edits, as distinct from `default.toml`, which mirrors the compiled-in defaults. No schema change.
+
 ## [0.17.2] - 2026-07-22
 
 ### Security
