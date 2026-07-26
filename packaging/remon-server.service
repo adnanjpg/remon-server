@@ -1,0 +1,46 @@
+[Unit]
+Description=Remon monitoring server
+Documentation=https://github.com/adnanjpg/remon-server
+# The collectors, the SMART poller and the notification channels all want a
+# resolvable network before they start reporting failures.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/remon-server --config-dir /etc/remon --data-dir /var/lib/remon
+Restart=on-failure
+RestartSec=5s
+# SIGTERM drains the SSE streams and records a clean shutdown, which the next
+# boot reads to tell a restart apart from a crash. Give it room to finish.
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+
+# Runs as root deliberately. Restarting units, killing processes and reading
+# SMART data are the product, and none of them work from an unprivileged
+# account — so User=/DynamicUser= are not available here, and NoNewPrivileges
+# would break probe scripts that legitimately escalate. What remains are the
+# restrictions that cost nothing for this workload:
+ProtectHome=read-only
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+
+# Creates and owns /var/lib/remon. Root-only: the database holds device token
+# hashes, the JWT secret and the VAPID keypair.
+StateDirectory=remon
+StateDirectoryMode=0700
+
+# The pairing code and the getting-started block are written to stdout, so
+# they land in the journal: journalctl -fu remon-server
+StandardOutput=journal
+StandardError=journal
+
+# A metrics database, a process table walk and a handful of long-lived SSE
+# streams. The ceiling catches a runaway; it is not a sizing of the workload.
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
