@@ -24,6 +24,7 @@ mod doctor;
 mod error;
 mod middleware;
 mod models;
+mod onboarding;
 mod paths;
 mod platform;
 mod probes;
@@ -301,6 +302,10 @@ async fn run(
     let listener = TcpListener::bind(bind_addr)
         .await
         .with_context(|| format!("bind on {bind_addr}"))?;
+
+    // Printed once the socket is up, so the addresses it names are ones that
+    // actually answer.
+    onboarding::print_if_unpaired(&app_state.db, bind_addr).await;
 
     // Flip `state.shutdown` inside the future handed to axum, before its
     // graceful-drain phase starts waiting on in-flight responses. The
