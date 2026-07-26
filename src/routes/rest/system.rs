@@ -1,11 +1,13 @@
 //! `GET /system/info`, `GET /system/smart`, and `GET /summary`.
 
-use axum::{Json, extract::State};
+use axum::{Json, extract::State, http::StatusCode};
+use log::error;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crate::error::AppResult;
 use crate::models::system::{DiskInfo, HardwareInfo, NetworkInterfaceInfo};
+use crate::routes::dtos::system::LifecycleResponse;
 use crate::routes::dtos::system::{
     DiskInfoDto, HardwareInfoDto, NetworkInterfaceInfoDto, SmartDeviceDto, SmartResponse,
     SummaryResponse, SystemDescriptionDto, SystemInfoResponse,
@@ -13,6 +15,7 @@ use crate::routes::dtos::system::{
 use crate::routes::extractors::Claims;
 use crate::services::system as system_svc;
 use crate::state::AppState;
+use crate::state::ExitIntent;
 use crate::storage::repositories::{AlertRepository, SmartRepository};
 
 pub async fn get_system_info(
@@ -150,6 +153,128 @@ fn hardware_info_to_dto(hw: &HardwareInfo) -> HardwareInfoDto {
             .map(network_interface_info_to_dto)
             .collect(),
     }
+}
+
+// ===== Lifecycle =====
+//
+// The deliberate counterparts to what `/processes/{pid}` and
+// `/services/{name}` now refuse. Both say what they do in their name, both
+// land in the ledger as lifecycle events rather than as an action against some
+// unrelated unit, and both answer before they act — a handler that ended the
+// process inline would never get its response out.
+
+/// `POST /system/restart` — end this process so the supervisor starts a fresh
+/// one. The way to apply boot-time configuration (listen port, log format,
+/// CORS origins) without shell access to the host.
+///
+/// Answers 202 and then drains: in-flight requests finish, the SSE streams
+/// close, and the clean-shutdown marker is written so the next boot does not
+/// report a crash.
+pub async fn restart_server(
+    claims: Claims,
+    State(state): State<Arc<AppState>>,
+) -> AppResult<(StatusCode, Json<LifecycleResponse>)> {
+    crate::services::events::record_operator(
+        &state,
+        &claims.device_id,
+        "server_lifecycle",
+        "Server restart requested".to_string(),
+        Some("server"),
+        None,
+        Some(serde_json::json!({ "action": "restart" })),
+    );
+
+    request_exit(&state, ExitIntent::Restart);
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(LifecycleResponse {
+            message: "Restarting. The supervisor will start a fresh process.".to_string(),
+        }),
+    ))
+}
+
+/// `POST /system/shutdown` — stop monitoring this host and stay stopped.
+///
+/// Every supervisor is configured to restart the agent however it went down,
+/// so exiting is not enough: the supervisor has to be told. That is only
+/// possible when the server knows which unit it runs under, which is why this
+/// refuses rather than pretending when it does not — a 202 followed by the
+/// agent coming back anyway would be worse than an error.
+pub async fn shutdown_server(
+    claims: Claims,
+    State(state): State<Arc<AppState>>,
+) -> AppResult<(StatusCode, Json<LifecycleResponse>)> {
+    let unit = crate::platform::identity::service_name();
+
+    crate::services::events::record_operator(
+        &state,
+        &claims.device_id,
+        "server_lifecycle",
+        match unit {
+            Some(u) => format!("Server shutdown requested (unit '{u}')"),
+            None => "Server shutdown requested".to_string(),
+        },
+        Some("server"),
+        None,
+        Some(serde_json::json!({ "action": "shutdown", "unit": unit })),
+    );
+
+    let Some(unit) = unit else {
+        // Nothing supervising us, so simply ending the process is enough and
+        // is the whole of what "shutdown" can mean here.
+        request_exit(&state, ExitIntent::Shutdown);
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(LifecycleResponse {
+                message: "Shutting down. Nothing will restart this process.".to_string(),
+            }),
+        ));
+    };
+
+    // Hand the decision to the supervisor: it stops us with SIGTERM, which
+    // drains exactly like the signal path, and records the stop as deliberate
+    // so it does not undo it. The task issuing the call is killed partway
+    // through, which is expected and harmless.
+    let manager = Arc::clone(&state.service_manager);
+    let state_for_failure = Arc::clone(&state);
+    let unit_name = unit.to_string();
+    tokio::spawn(async move {
+        if let Err(e) = manager.stop(&unit_name).await {
+            error!("shutdown requested but stopping unit '{unit_name}' failed: {e}");
+            // The caller got a 202 and is entitled to know it did not happen.
+            crate::services::events::record(
+                &state_for_failure,
+                crate::storage::repositories::NewHostEvent {
+                    source: "system",
+                    kind: "server_lifecycle",
+                    severity: "warn",
+                    message: format!(
+                        "Shutdown was requested but stopping unit '{unit_name}' failed: {e}"
+                    ),
+                    ref_type: Some("server"),
+                    ..Default::default()
+                },
+            );
+        }
+    });
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(LifecycleResponse {
+            message: format!("Stopping unit '{unit}'. Starting it again needs access to the host."),
+        }),
+    ))
+}
+
+/// Record why we are ending and let the shutdown signal pick it up. Setting it
+/// twice is harmless — the first value is the one that took effect.
+///
+/// `send_replace`, not `send`: the latter refuses when no receiver is
+/// listening and leaves the value unchanged, which would silently drop the
+/// reason for the exit on any build that has not subscribed yet.
+fn request_exit(state: &Arc<AppState>, intent: ExitIntent) {
+    state.exit_intent.send_replace(Some(intent));
 }
 
 fn disk_info_to_dto(d: &DiskInfo) -> DiskInfoDto {

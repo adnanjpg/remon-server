@@ -83,7 +83,13 @@ Guard rails on the endpoints that change the host rather than report on it.
 
 Knowing its own identity lets the server refuse requests that name it. `DELETE /processes/{pid}` on its own pid and `POST /services/{name}/stop|restart|disable` on its own unit return **409** rather than switching monitoring off — the caller is working from a process or unit list and almost never means the agent. `start`, `enable` and `reload` are unaffected, since none of them can end the process.
 
-This is accident prevention, not a security boundary: any paired device already holds full control of the host. The deliberate paths are `POST /system/restart` and `POST /system/shutdown`.
+This is accident prevention, not a security boundary: any paired device already holds full control of the host.
+
+The deliberate paths are:
+- `POST /system/restart` — ends the process so the supervisor starts a fresh one. How to apply boot-time configuration (listen port, log format, CORS origins) without shell access. Exits **75** rather than 0, because a Windows scheduled task only restarts an action that failed.
+- `POST /system/shutdown` — stops and stays stopped. Every supervisor is configured to restart the agent however it went down, so this asks the supervisor to stop the unit; starting it again needs access to the host. Where nothing supervises the process it simply exits.
+
+Both answer `202` before acting, drain in-flight requests and SSE streams, and write the clean-shutdown marker so the next boot does not report a crash.
 
 ### `[cors]`
 CORS is a browser mechanism. Native clients (mobile app, curl) authenticate with bearer tokens and are unaffected by anything here.

@@ -132,3 +132,13 @@ pub struct SummaryResponse {
     pub alerts_pending: u32,
     pub alerts_firing: u32,
 }
+
+/// Reply to `POST /system/restart` and `POST /system/shutdown`.
+///
+/// The message carries the part a status code cannot: whether the agent is
+/// coming back on its own, and — when it is not — that starting it again
+/// needs access to the host.
+#[derive(Debug, Serialize)]
+pub struct LifecycleResponse {
+    pub message: String,
+}

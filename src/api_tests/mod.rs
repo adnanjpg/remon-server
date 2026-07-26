@@ -17,6 +17,7 @@ mod config_api;
 mod events_api;
 mod heartbeats_api;
 mod incidents_api;
+mod lifecycle_api;
 mod logs_api;
 mod probes_api;
 mod process_api;

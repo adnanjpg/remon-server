@@ -80,12 +80,27 @@ async fn main() -> std::process::ExitCode {
     };
 
     if let Err(e) = run(config, log_rx).await {
+        // A requested restart comes back as an error only so it can carry an
+        // exit code out; it is not a failure and must not be logged as one.
+        if e.downcast_ref::<RestartRequested>().is_some() {
+            info!("exiting for restart; the supervisor will start a fresh process");
+            return std::process::ExitCode::from(EXIT_RESTART);
+        }
         error!("fatal during startup: {:#}", e);
         return std::process::ExitCode::FAILURE;
     }
 
     std::process::ExitCode::SUCCESS
 }
+
+/// Exit code for `POST /system/restart`.
+///
+/// Non-zero on purpose. Under systemd the unit restarts on any exit so the
+/// value is cosmetic, but a Windows scheduled task only restarts an action
+/// that *failed* — a clean exit there would leave the agent down. 75 is
+/// sysexits.h's EX_TEMPFAIL, "temporary failure, retry invited", which is
+/// exactly the request being made.
+const EXIT_RESTART: u8 = 75;
 
 /// `config check` — parse every layer, validate, and report where the values
 /// came from. Exits non-zero on anything that would stop a boot, so an
@@ -319,8 +334,9 @@ async fn run(
     // `routes::sse::until_shutdown`) so they end promptly instead of
     // blocking shutdown forever.
     let shutdown_state = app_state.clone();
+    let intent_rx = app_state.exit_intent.subscribe();
     let graceful_shutdown = async move {
-        shutdown::signal().await;
+        shutdown::signal(intent_rx).await;
         let _ = shutdown_state.shutdown.send(true);
     };
 
@@ -335,9 +351,31 @@ async fn run(
     }
 
     // Reached only on orderly drain — a crash/kill skips this, which is
-    // exactly what the next boot's unclean-exit detection keys on.
+    // exactly what the next boot's unclean-exit detection keys on. A requested
+    // restart is still an orderly stop, so it marks clean too.
     services::events::mark_clean_shutdown(&app_state).await;
 
+    let intent = *app_state.exit_intent.borrow();
     info!("shutdown complete");
+
+    if intent == Some(state::ExitIntent::Restart) {
+        return Err(RestartRequested.into());
+    }
+
     Ok(())
 }
+
+/// Marker for "end this process so the supervisor starts a new one".
+///
+/// Travels back through `run`'s error type purely so `main` can pick the exit
+/// code, and is filtered out of the error log on the way — nothing failed.
+#[derive(Debug)]
+struct RestartRequested;
+
+impl std::fmt::Display for RestartRequested {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "restart requested")
+    }
+}
+
+impl std::error::Error for RestartRequested {}

@@ -151,6 +151,12 @@ pub struct AppState {
     /// item against this so they end promptly instead of blocking axum's
     /// graceful shutdown forever — see `routes::sse::until_shutdown`.
     pub shutdown: watch::Sender<bool>,
+
+    /// Set when the server is asked to end itself through `/system/restart`
+    /// or `/system/shutdown`. Watched by the shutdown signal alongside
+    /// SIGTERM, and read once serving stops to pick the exit code — which is
+    /// what tells the supervisor whether to bring the agent back.
+    pub exit_intent: watch::Sender<Option<ExitIntent>>,
 }
 
 impl AppState {
@@ -179,6 +185,7 @@ impl AppState {
         let (processes_tx, _) = broadcast::channel(16);
         let (stats_signal, _) = watch::channel(0u64);
         let (shutdown, _) = watch::channel(false);
+        let (exit_intent, _) = watch::channel(None);
 
         Self {
             db,
@@ -208,6 +215,22 @@ impl AppState {
             notify,
             vapid_keys,
             shutdown,
+            exit_intent,
         }
     }
+}
+
+/// Why the server is ending, when it was asked to rather than signalled.
+///
+/// The distinction is entirely about what happens next: every supervisor is
+/// configured to restart the agent however it went down, so "come back" is the
+/// default and "stay down" is the one that needs arranging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitIntent {
+    /// Exit so the supervisor starts a fresh process. Used to apply
+    /// boot-time configuration without shell access to the host.
+    Restart,
+    /// Stop and stay stopped. Only reachable where something outside the
+    /// process can be told not to restart it.
+    Shutdown,
 }
