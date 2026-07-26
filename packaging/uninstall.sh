@@ -16,6 +16,7 @@ CONFIG_DIR="/etc/remon"
 DATA_DIR="/var/lib/remon"
 SERVICE_NAME="remon-server"
 UNIT_PATH="/etc/systemd/system/$SERVICE_NAME.service"
+INITD_PATH="/etc/init.d/$SERVICE_NAME"
 
 PURGE=0
 for arg in "$@"; do
@@ -39,6 +40,16 @@ if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
         printf '==> Removing %s\n' "$UNIT_PATH"
         rm -f "$UNIT_PATH"
         systemctl daemon-reload
+    fi
+elif command -v rc-service >/dev/null 2>&1; then
+    if rc-service --quiet "$SERVICE_NAME" status >/dev/null 2>&1; then
+        printf '==> Stopping %s\n' "$SERVICE_NAME"
+        rc-service "$SERVICE_NAME" stop >/dev/null
+    fi
+    rc-update del "$SERVICE_NAME" default >/dev/null 2>&1 || true
+    if [ -f "$INITD_PATH" ]; then
+        printf '==> Removing %s\n' "$INITD_PATH"
+        rm -f "$INITD_PATH"
     fi
 fi
 

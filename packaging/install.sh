@@ -14,19 +14,25 @@
 # else on them yet, and /bin/sh is dash on Debian and Ubuntu.
 #
 # Environment:
-#   REMON_VERSION=v0.17.2   install a specific tag (default: latest release)
-#   REMON_PREFIX=/usr/local install somewhere else
-#   REMON_NO_SERVICE=1      install the binary only, skip the service
+#   REMON_VERSION=v0.18.0      install a specific tag (default: latest release)
+#   REMON_PREFIX=/usr/local    install the binary somewhere else
+#   REMON_CONFIG_DIR=/etc/remon
+#   REMON_DATA_DIR=/var/lib/remon
+#   REMON_NO_SERVICE=1         install the binary only, skip the service
+#
+# The config and data variables are the same ones the server itself reads, so
+# a layout chosen here is the layout it will use when started by hand too.
 
 set -eu
 
 REPO="adnanjpg/remon-server"
 PREFIX="${REMON_PREFIX:-/usr/local}"
 BIN_DIR="$PREFIX/bin"
-CONFIG_DIR="/etc/remon"
-DATA_DIR="/var/lib/remon"
+CONFIG_DIR="${REMON_CONFIG_DIR:-/etc/remon}"
+DATA_DIR="${REMON_DATA_DIR:-/var/lib/remon}"
 SERVICE_NAME="remon-server"
 UNIT_PATH="/etc/systemd/system/$SERVICE_NAME.service"
+INITD_PATH="/etc/init.d/$SERVICE_NAME"
 
 # ── output ────────────────────────────────────────────────────────────────
 
@@ -71,6 +77,34 @@ fetch_stdout() { # fetch_stdout <url>
     else
         wget -qO- "$1"
     fi
+}
+
+# The shipped unit and init script are written for the default layout. When
+# REMON_PREFIX points somewhere else, rewrite the paths in the copy we just
+# installed rather than shipping a template nobody can read.
+retarget() { # retarget <installed-file>
+    sed -i \
+        -e "s|/usr/local/bin/remon-server|$BIN_DIR/remon-server|g" \
+        -e "s|/etc/remon|$CONFIG_DIR|g" \
+        -e "s|/var/lib/remon|$DATA_DIR|g" \
+        "$1"
+
+    # systemd's StateDirectory always resolves under /var/lib, so it would
+    # create and hand out a directory the server is not using. The installer
+    # has already made the real one.
+    if [ "$DATA_DIR" != "/var/lib/remon" ]; then
+        sed -i -e '/^StateDirectory/d' -e '/^StateDirectoryMode/d' "$1"
+    fi
+}
+
+# Still up, whichever init is managing it. Used to stop waiting on /health the
+# moment the service has given up instead of burning the full timeout.
+service_alive() {
+    case "$INIT" in
+        systemd) systemctl is-active --quiet "$SERVICE_NAME" ;;
+        openrc)  rc-service --quiet "$SERVICE_NAME" status >/dev/null 2>&1 ;;
+        *)       return 1 ;;
+    esac
 }
 
 [ "$(id -u)" -eq 0 ] || die "must run as root (try: curl ... | sudo sh)"
@@ -130,17 +164,32 @@ tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
 
 # ── stop, install, restart ────────────────────────────────────────────────
 
-have_systemd=0
+# INIT is "systemd", "openrc" or "" — the same two backends the server itself
+# drives through its service endpoints.
+INIT=""
 if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
-    have_systemd=1
+    INIT=systemd
+elif command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
+    INIT=openrc
 fi
 
 was_running=0
-if [ "$have_systemd" -eq 1 ] && systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-    was_running=1
-    step "Stopping $SERVICE_NAME for upgrade"
-    systemctl stop "$SERVICE_NAME"
-fi
+case "$INIT" in
+    systemd)
+        if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+            was_running=1
+            step "Stopping $SERVICE_NAME for upgrade"
+            systemctl stop "$SERVICE_NAME"
+        fi
+        ;;
+    openrc)
+        if rc-service --quiet "$SERVICE_NAME" status >/dev/null 2>&1; then
+            was_running=1
+            step "Stopping $SERVICE_NAME for upgrade"
+            rc-service "$SERVICE_NAME" stop >/dev/null
+        fi
+        ;;
+esac
 
 step "Installing to $BIN_DIR/remon-server"
 install -d -m 0755 "$BIN_DIR"
@@ -197,16 +246,61 @@ if [ -n "${REMON_NO_SERVICE:-}" ]; then
     exit 0
 fi
 
-if [ "$have_systemd" -eq 0 ]; then
+if [ -z "$INIT" ]; then
     say ""
-    warn "systemd not detected — installed the binary only"
+    warn "no supported init system detected — installed the binary only"
     say "Run it with: ${BOLD}remon-server --config-dir $CONFIG_DIR --data-dir $DATA_DIR${RESET}"
     exit 0
 fi
 
+if [ "$INIT" = "openrc" ]; then
+    step "Installing OpenRC service"
+    # Normally present, but minimal images have surprised us before.
+    mkdir -p "$(dirname "$INITD_PATH")"
+    if [ -f "$TMP/remon-server.openrc" ]; then
+        install -m 0755 "$TMP/remon-server.openrc" "$INITD_PATH"
+        retarget "$INITD_PATH"
+    else
+        # Unquoted heredoc so the install paths interpolate; OpenRC's own
+        # runtime variables are escaped so they survive to the service.
+        cat > "$INITD_PATH" <<OPENRC
+#!/sbin/openrc-run
+
+name="remon-server"
+description="Remon monitoring server"
+command="$BIN_DIR/remon-server"
+command_args="--config-dir $CONFIG_DIR --data-dir $DATA_DIR"
+command_background=true
+pidfile="/run/\${RC_SVCNAME}.pid"
+output_log="/var/log/\${RC_SVCNAME}.log"
+error_log="/var/log/\${RC_SVCNAME}.log"
+retry="SIGTERM/30"
+
+depend() {
+	need net
+	after firewall
+}
+
+start_pre() {
+	checkpath --directory --mode 0755 --owner root:root $CONFIG_DIR
+	checkpath --directory --mode 0700 --owner root:root $DATA_DIR
+	checkpath --file --mode 0640 --owner root:root "\$output_log"
+}
+OPENRC
+        chmod 0755 "$INITD_PATH"
+    fi
+
+    rc-update add "$SERVICE_NAME" default >/dev/null 2>&1 || true
+
+    step "Starting $SERVICE_NAME"
+    rc-service "$SERVICE_NAME" restart >/dev/null
+else
+
 step "Installing systemd unit"
+mkdir -p "$(dirname "$UNIT_PATH")"
 if [ -f "$TMP/remon-server.service" ]; then
     install -m 0644 "$TMP/remon-server.service" "$UNIT_PATH"
+    retarget "$UNIT_PATH"
 else
     cat > "$UNIT_PATH" <<UNIT
 [Unit]
@@ -245,6 +339,8 @@ systemctl enable --quiet "$SERVICE_NAME" 2>/dev/null || true
 step "Starting $SERVICE_NAME"
 systemctl restart "$SERVICE_NAME"
 
+fi
+
 # Give it a moment to bind or fail. A crash loop is the one outcome the
 # operator must not have to discover on their own later.
 port=$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{1,\}\).*/\1/p' \
@@ -259,7 +355,7 @@ while [ "$i" -lt 30 ]; do
     else
         wget -q -T 2 -O /dev/null "http://127.0.0.1:$port/health" 2>/dev/null && { ok=1; break; }
     fi
-    systemctl is-active --quiet "$SERVICE_NAME" || break
+    service_alive || break
     i=$((i + 1))
     sleep 1
 done
@@ -269,6 +365,18 @@ done
 host_addr=$(hostname -I 2>/dev/null | awk '{print $1}')
 [ -n "$host_addr" ] || host_addr=$(ip -4 route get 1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p')
 [ -n "$host_addr" ] || host_addr="127.0.0.1"
+
+# Where the pairing code will show up, and how to look at the service — both
+# differ per init, and both are the next thing the operator needs.
+if [ "$INIT" = "openrc" ]; then
+    log_cmd="tail -f /var/log/$SERVICE_NAME.log"
+    status_cmd="rc-service $SERVICE_NAME status"
+    recent_cmd="tail -n 50 /var/log/$SERVICE_NAME.log"
+else
+    log_cmd="journalctl -fu $SERVICE_NAME"
+    status_cmd="systemctl status $SERVICE_NAME"
+    recent_cmd="journalctl -u $SERVICE_NAME -n 50"
+fi
 
 say ""
 if [ "$ok" -eq 1 ]; then
@@ -280,7 +388,7 @@ if [ "$ok" -eq 1 ]; then
         say "  ${DIM}upgraded in place; configuration and database untouched${RESET}"
     else
         say "  ${DIM}add the address above in the Remon app, then start pairing${RESET}"
-        say "  ${DIM}the 8-digit code appears in: journalctl -fu $SERVICE_NAME${RESET}"
+        say "  ${DIM}the 8-digit code appears in: $log_cmd${RESET}"
     fi
     say ""
     say "  ${DIM}config   $CONFIG_DIR/config.toml${RESET}"
@@ -289,8 +397,8 @@ if [ "$ok" -eq 1 ]; then
 else
     warn "the service did not answer on http://127.0.0.1:$port/health"
     say ""
-    say "  ${BOLD}systemctl status $SERVICE_NAME${RESET}"
-    say "  ${BOLD}journalctl -u $SERVICE_NAME -n 50${RESET}"
+    say "  ${BOLD}$status_cmd${RESET}"
+    say "  ${BOLD}$recent_cmd${RESET}"
     say "  ${BOLD}remon-server --config-dir $CONFIG_DIR --data-dir $DATA_DIR doctor${RESET}"
     exit 1
 fi

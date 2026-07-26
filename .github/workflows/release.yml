@@ -106,6 +106,7 @@ jobs:
           else
             cp "target/${{ matrix.target }}/release/remon-server" "$stage/"
             cp packaging/remon-server.service "$stage/"
+            cp packaging/remon-server.openrc "$stage/"
             cp packaging/install.sh "$stage/"
             cp packaging/uninstall.sh "$stage/"
           fi

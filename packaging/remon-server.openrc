@@ -1,0 +1,37 @@
+#!/sbin/openrc-run
+# OpenRC service for remon-server (Alpine and other OpenRC distributions).
+# Installed to /etc/init.d/remon-server.
+
+name="remon-server"
+description="Remon monitoring server"
+
+command="/usr/local/bin/remon-server"
+command_args="--config-dir /etc/remon --data-dir /var/lib/remon"
+
+# The server has no daemonize mode of its own — OpenRC backgrounds it and
+# owns the pidfile.
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+
+# The pairing code and the getting-started block go to stdout, so they have to
+# land somewhere an operator can read them back.
+output_log="/var/log/${RC_SVCNAME}.log"
+error_log="/var/log/${RC_SVCNAME}.log"
+
+# SIGTERM drains the SSE streams and records a clean shutdown, which the next
+# boot reads to tell a restart apart from a crash. Give it room to finish
+# rather than letting the default retry escalate to SIGKILL early.
+retry="SIGTERM/30"
+
+depend() {
+	need net
+	after firewall
+}
+
+start_pre() {
+	checkpath --directory --mode 0755 --owner root:root /etc/remon
+	# Root-only: the database holds device token hashes, the JWT secret and
+	# the VAPID keypair.
+	checkpath --directory --mode 0700 --owner root:root /var/lib/remon
+	checkpath --file --mode 0640 --owner root:root "$output_log"
+}
