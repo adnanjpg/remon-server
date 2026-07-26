@@ -227,6 +227,12 @@ async fn run(
         retention_tick_interval_ms: overrides.retention_tick_interval_ms,
     };
 
+    // Before anything can ask "is this request naming me?".
+    platform::identity::set_service_name(&config.control.own_service);
+    if let Some(unit) = platform::identity::service_name() {
+        info!("running as service unit: {}", unit);
+    }
+
     let init_system = platform::init::detect();
     info!("init system detected: {:?}", init_system);
     let service_manager = platform::services::factory::create(&init_system).await;

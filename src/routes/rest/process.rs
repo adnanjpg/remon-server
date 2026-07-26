@@ -184,6 +184,28 @@ pub async fn delete_process(
             signal
         )));
     }
+
+    // This endpoint renders the process list the caller is picking from, and
+    // the server is in it — usually near the top, since it just did the work
+    // to build the list. Killing it from here is a mistake often enough that
+    // the deliberate version gets its own endpoint.
+    if crate::platform::identity::is_own_pid(pid) {
+        return Err(AppError::Conflict(
+            "that pid is remon-server itself; use POST /system/restart, or \
+             POST /system/shutdown to stop monitoring this host"
+                .to_string(),
+        ));
+    }
+
+    // Signalling init is never what a request handler should be doing: on
+    // Linux the kernel drops signals PID 1 has no handler for, and the cases
+    // where it does not are unrecoverable.
+    if pid == 1 {
+        return Err(AppError::Conflict(
+            "refusing to signal pid 1 (init)".to_string(),
+        ));
+    }
+
     process::kill_process(pid, signal).map_err(AppError::ProcessKillFailed)?;
 
     // The name makes the audit row readable after the pid is recycled;

@@ -77,6 +77,14 @@ The poll interval is runtime config, not TOML: `PATCH /config { collector_smart_
 
 Note: `smartctl` needs root/Administrator to reach the devices — the same privilege level the service/process endpoints already require.
 
+### `[control]`
+Guard rails on the endpoints that change the host rather than report on it.
+- `own_service` — the service unit supervising this process. Auto-detected from `RC_SVCNAME` (OpenRC) or the cgroup path (systemd); set it explicitly only when neither is available.
+
+Knowing its own identity lets the server refuse requests that name it. `DELETE /processes/{pid}` on its own pid and `POST /services/{name}/stop|restart|disable` on its own unit return **409** rather than switching monitoring off — the caller is working from a process or unit list and almost never means the agent. `start`, `enable` and `reload` are unaffected, since none of them can end the process.
+
+This is accident prevention, not a security boundary: any paired device already holds full control of the host. The deliberate paths are `POST /system/restart` and `POST /system/shutdown`.
+
 ### `[cors]`
 CORS is a browser mechanism. Native clients (mobile app, curl) authenticate with bearer tokens and are unaffected by anything here.
 - `allow_any_origin` — `true` in dev, `false` in production

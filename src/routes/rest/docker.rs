@@ -39,6 +39,21 @@ fn audit(
     );
 }
 
+/// Ledger entry for an action with no single container to name. Prune deletes
+/// an unbounded set in one call, so "who ran this and what did it take" is the
+/// only record there will ever be of what was on the host.
+fn audit_bulk(state: &Arc<AppState>, claims: &Claims, action: &'static str, message: &str) {
+    events::record_operator(
+        state,
+        &claims.device_id,
+        "container_action",
+        message.to_string(),
+        Some("docker"),
+        None,
+        Some(serde_json::json!({ "action": action })),
+    );
+}
+
 // ===== Status =====
 
 /// GET /docker/status — check if Docker is available.
@@ -224,11 +239,24 @@ pub async fn get_container_stats(
 }
 
 /// POST /docker/containers/prune
-pub async fn prune_containers(_claims: Claims) -> AppResult<Json<PruneResult>> {
+pub async fn prune_containers(
+    claims: Claims,
+    State(state): State<Arc<AppState>>,
+) -> AppResult<Json<PruneResult>> {
     let result = docker::prune_containers().await.map_err(|e| {
         error!("failed to prune containers: {}", e);
         e
     })?;
+    audit_bulk(
+        &state,
+        &claims,
+        "prune_containers",
+        &format!(
+            "Pruned {} stopped container(s), reclaiming {} bytes",
+            result.containers_deleted.len(),
+            result.space_reclaimed
+        ),
+    );
     Ok(Json(result))
 }
 
@@ -253,23 +281,47 @@ pub async fn list_images(_claims: Claims) -> AppResult<Json<ListImagesResponse>>
 
 /// DELETE /docker/images/{id}
 pub async fn delete_image(
-    _claims: Claims,
+    claims: Claims,
+    State(state): State<Arc<AppState>>,
     Path(image_id): Path<String>,
     Query(params): Query<ForceDeleteRequest>,
 ) -> AppResult<Json<DockerActionResponse>> {
     docker::delete_image(&image_id, params.force).await?;
+    let msg = format!("Image {} deleted", image_id);
+    events::record_operator(
+        &state,
+        &claims.device_id,
+        "container_action",
+        msg.clone(),
+        Some("image"),
+        Some(image_id.clone()),
+        Some(serde_json::json!({ "action": "delete_image", "force": params.force })),
+    );
     Ok(Json(DockerActionResponse {
         success: true,
-        message: format!("Image {} deleted", image_id),
+        message: msg,
     }))
 }
 
 /// POST /docker/images/prune
-pub async fn prune_images(_claims: Claims) -> AppResult<Json<PruneResult>> {
+pub async fn prune_images(
+    claims: Claims,
+    State(state): State<Arc<AppState>>,
+) -> AppResult<Json<PruneResult>> {
     let result = docker::prune_images().await.map_err(|e| {
         error!("failed to prune images: {}", e);
         e
     })?;
+    audit_bulk(
+        &state,
+        &claims,
+        "prune_images",
+        &format!(
+            "Pruned {} image(s), reclaiming {} bytes",
+            result.containers_deleted.len(),
+            result.space_reclaimed
+        ),
+    );
     Ok(Json(result))
 }
 

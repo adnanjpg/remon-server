@@ -85,6 +85,16 @@ smartctl_path = ""
 # Poll interval is runtime config: PATCH /config { collector_smart_interval_ms }
 # (default 30 min, floor 60 s). See CONFIG.md.
 
+[control]
+# The service unit supervising this process. Lets /services/{name}/stop and
+# friends recognise a request that names the agent itself and refuse it —
+# stopping yourself through the generic endpoint is almost always a mistake,
+# and the deliberate version is POST /system/shutdown.
+# Auto-detected under systemd and OpenRC; set it only when detection cannot
+# see the name.
+# Env: REMON__CONTROL__OWN_SERVICE
+own_service = ""
+
 [assistant]
 # Read-only operator assistant. Answers plain-language questions ("why is my
 # server slow?") by calling read-only tools over this host's own telemetry.

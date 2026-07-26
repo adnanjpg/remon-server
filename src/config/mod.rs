@@ -31,6 +31,21 @@ pub struct Config {
     pub smart: SmartConfig,
     #[serde(default)]
     pub assistant: AssistantConfig,
+    #[serde(default)]
+    pub control: ControlConfig,
+}
+
+/// Guard rails on the endpoints that change the host rather than report on it.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct ControlConfig {
+    /// The service unit supervising this process, used so `/services/{name}`
+    /// can tell when a request names the agent itself and refuse it.
+    ///
+    /// Detected automatically from `RC_SVCNAME` (OpenRC) or the cgroup path
+    /// (systemd); set it explicitly when the server is supervised by something
+    /// that leaves neither — the installer knows the name it wrote.
+    #[serde(default)]
+    pub own_service: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]

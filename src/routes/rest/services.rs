@@ -42,6 +42,24 @@ fn audit(
 /// almost certainly an injection probe (`;`, `\``, `$()`, quotes, …) and
 /// rejecting it here means our shell-quoting bugs (if any) can't be reached.
 /// Empty names and >256-char names are also rejected.
+/// Refuse an action that would take this server down through the generic unit
+/// endpoint. `systemctl stop` is not something the supervisor undoes, so a
+/// self-stop here is permanent and silent — and the caller reaching for
+/// `/services/{name}/stop` is working from a unit list, not deciding to switch
+/// monitoring off. The deliberate versions live at `/system/restart` and
+/// `/system/shutdown`, which say what they do and record it as such.
+///
+/// `start`, `enable` and `reload` are left alone: none of them can end the
+/// process, and enabling ourselves at boot is a reasonable thing to ask for.
+fn reject_self(name: &str, alternative: &str) -> AppResult<()> {
+    if crate::platform::identity::is_own_service(name) {
+        return Err(AppError::Conflict(format!(
+            "'{name}' is remon-server itself; use {alternative}"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_name(name: &str) -> AppResult<()> {
     if name.is_empty() || name.len() > 256 {
         return Err(AppError::BadRequest(
@@ -107,6 +125,7 @@ pub async fn stop_service(
     Path(name): Path<String>,
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
+    reject_self(&name, "POST /system/shutdown")?;
     state.service_manager.stop(&name).await?;
     let msg = format!("Service '{}' stopped", name);
     audit(&state, &claims, "service", &name, "stop", &msg);
@@ -120,6 +139,7 @@ pub async fn restart_service(
     Path(name): Path<String>,
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
+    reject_self(&name, "POST /system/restart")?;
     state.service_manager.restart(&name).await?;
     let msg = format!("Service '{}' restarted", name);
     audit(&state, &claims, "service", &name, "restart", &msg);
@@ -159,6 +179,9 @@ pub async fn disable_service(
     Path(name): Path<String>,
 ) -> AppResult<Json<ServiceActionResponse>> {
     validate_name(&name)?;
+    // Survives a reboot, so the damage outlives the request: the host comes
+    // back with no agent and nothing to report that it is missing.
+    reject_self(&name, "POST /system/shutdown to stop monitoring this host")?;
     state.service_manager.disable_at_boot(&name).await?;
     let msg = format!("Service '{}' disabled at boot", name);
     audit(&state, &claims, "service", &name, "disable", &msg);
