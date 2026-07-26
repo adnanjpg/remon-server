@@ -6,7 +6,6 @@
 //! - `POST   /probes/reload`                          — re-scan `probes/`
 //! - `GET    /metrics/probe/{probe}/{metric}?…`       — probe metric time-series
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
@@ -31,7 +30,6 @@ const MAX_HISTORY_LIMIT: u32 = 1000;
 /// Sanity cap on `?offset=` — see alerts.rs MAX_EVENT_OFFSET for the
 /// reasoning. probe_runs follows the same retention model.
 const MAX_HISTORY_OFFSET: u32 = 100_000;
-const PROBES_DIR: &str = "probes";
 
 const DEFAULT_METRIC_SPAN_SECS: i64 = 3600;
 const DEFAULT_METRIC_LIMIT: u32 = 1000;
@@ -143,9 +141,9 @@ pub async fn reload_probes(
     claims: Claims,
     State(state): State<Arc<AppState>>,
 ) -> AppResult<Json<ReloadProbesResponse>> {
-    let dir = PathBuf::from(PROBES_DIR);
+    let dir = &crate::paths::get().probes_dir;
     let report =
-        scheduler::load_and_spawn(&dir, Arc::clone(&state.probe_registry), state.db.clone()).await;
+        scheduler::load_and_spawn(dir, Arc::clone(&state.probe_registry), state.db.clone()).await;
     crate::services::events::record_operator(
         &state,
         &claims.device_id,

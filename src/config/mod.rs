@@ -313,17 +313,29 @@ fn default_assistant_max_tokens() -> u32 {
 
 impl Config {
     pub fn new() -> Result<Self, ConfigError> {
+        Self::load(&crate::paths::get().config_dir)
+    }
+
+    /// Layer the config sources over the baked-in defaults. Every file is
+    /// optional — an installed server with an empty `/etc/remon` is a valid,
+    /// fully-defaulted configuration.
+    pub fn load(config_dir: &std::path::Path) -> Result<Self, ConfigError> {
         // Determine the run environment (default to "development")
         let run_env = env::var("RUN_ENV").unwrap_or_else(|_| "development".into());
+
+        let in_dir =
+            |stem: &str| -> String { config_dir.join(stem).to_string_lossy().into_owned() };
 
         let config = ConfigBuilder::builder()
             // Baked-in defaults — the only layer guaranteed to exist.
             .add_source(File::from_str(EMBEDDED_DEFAULTS, FileFormat::Toml))
             // On-disk copy of the same file, when there is one. Optional: a
             // bare binary has no `config/` directory next to it.
-            .add_source(File::with_name("config/default").required(false))
+            .add_source(File::with_name(&in_dir("default")).required(false))
+            // The file an installed server is meant to edit.
+            .add_source(File::with_name(&in_dir("config")).required(false))
             // Layer on environment-specific configuration
-            .add_source(File::with_name(&format!("config/{}", run_env)).required(false))
+            .add_source(File::with_name(&in_dir(&run_env)).required(false))
             // Override with environment variables (prefix: REMON).
             // `__` separates both the prefix and the nested keys, so
             // REMON__SERVER__PORT=9000 overrides server.port.

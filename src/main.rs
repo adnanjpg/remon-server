@@ -18,10 +18,13 @@ mod auth;
 #[cfg(test)]
 mod api_tests;
 
+mod cli;
 mod collectors;
+mod doctor;
 mod error;
 mod middleware;
 mod models;
+mod paths;
 mod platform;
 mod probes;
 mod request_log;
@@ -32,7 +35,30 @@ mod storage;
 use crate::services::system as system_svc;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> std::process::ExitCode {
+    let invocation = match cli::parse() {
+        cli::Parsed::Run(cli) => cli,
+        cli::Parsed::Exit(code) => return code,
+    };
+
+    // Resolve the filesystem layout before anything reads a path from it.
+    paths::init(invocation.config_dir, invocation.data_dir);
+
+    // Diagnostics report on their own and never boot the server, so they run
+    // before the subscriber is installed — their output is the product, and
+    // log lines interleaved with it would only be noise.
+    match invocation.command {
+        cli::Command::Doctor => {
+            return if doctor::run() {
+                std::process::ExitCode::SUCCESS
+            } else {
+                std::process::ExitCode::FAILURE
+            };
+        }
+        cli::Command::ConfigCheck => return config_check(),
+        cli::Command::Run => {}
+    }
+
     // Config load and logging install both run before the tracing subscriber
     // exists, so their failures go to stderr + exit rather than through the
     // log macros. Everything past this point logs via `error!`.
@@ -40,7 +66,7 @@ async fn main() {
         Ok(cfg) => cfg,
         Err(e) => {
             eprintln!("Failed to load configuration: {}", e);
-            std::process::exit(1);
+            return std::process::ExitCode::FAILURE;
         }
     };
 
@@ -48,13 +74,40 @@ async fn main() {
         Ok(rx) => rx,
         Err(e) => {
             eprintln!("Failed to initialize logging: {:#}", e);
-            std::process::exit(1);
+            return std::process::ExitCode::FAILURE;
         }
     };
 
     if let Err(e) = run(config, log_rx).await {
         error!("fatal during startup: {:#}", e);
-        std::process::exit(1);
+        return std::process::ExitCode::FAILURE;
+    }
+
+    std::process::ExitCode::SUCCESS
+}
+
+/// `config check` — parse every layer, validate, and report where the values
+/// came from. Exits non-zero on anything that would stop a boot, so an
+/// installer can gate `systemctl enable` on it.
+fn config_check() -> std::process::ExitCode {
+    let paths = paths::get();
+    match config::Config::new() {
+        Ok(cfg) => {
+            println!("configuration ok");
+            println!("  config dir   {}", paths.config_dir.display());
+            println!("  data dir     {}", paths.data_dir.display());
+            println!("  probes dir   {}", paths.probes_dir.display());
+            println!(
+                "  database     {}",
+                paths.resolve_data(&cfg.database.path).display()
+            );
+            println!("  listen       {}:{}", cfg.server.host, cfg.server.port);
+            std::process::ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("configuration invalid: {e}");
+            std::process::ExitCode::FAILURE
+        }
     }
 }
 
@@ -129,11 +182,21 @@ async fn run(
     #[cfg(feature = "docker")]
     services::docker::set_socket_path(&config.docker.socket_path);
 
-    tokio::fs::create_dir_all(&config.database.folder_path)
-        .await
-        .with_context(|| format!("create database folder {}", config.database.folder_path))?;
+    let paths = paths::get();
+    info!(
+        "config dir: {} | data dir: {} | probes dir: {}",
+        paths.config_dir.display(),
+        paths.data_dir.display(),
+        paths.probes_dir.display()
+    );
 
-    let db_url = format!("sqlite:{}", config.database.path);
+    let db_folder = paths.resolve_data(&config.database.folder_path);
+    tokio::fs::create_dir_all(&db_folder)
+        .await
+        .with_context(|| format!("create database folder {}", db_folder.display()))?;
+
+    let db_path = paths.resolve_data(&config.database.path);
+    let db_url = format!("sqlite:{}", db_path.display());
     let db = storage::Database::connect(&db_url, config.database.max_connections)
         .await
         .context("database connection")?;
@@ -221,9 +284,8 @@ async fn run(
     services::sessions::spawn(app_state.clone());
     info!("rollup, retention, alert evaluator, and session cleanup workers spawned");
 
-    let probe_dir = std::path::PathBuf::from("probes");
     let _ = probes::scheduler::load_and_spawn(
-        &probe_dir,
+        &paths.probes_dir,
         Arc::clone(&app_state.probe_registry),
         app_state.db.clone(),
     )
