@@ -20,24 +20,39 @@ Server component of Remon — a self-hosted system monitoring platform. Exposes 
 
 ## Install
 
+**Linux** (systemd or OpenRC):
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/adnanjpg/remon-server/dev/packaging/install.sh | sudo sh
 ```
 
+**Windows** (elevated PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/adnanjpg/remon-server/dev/packaging/install-windows.ps1 | iex
+```
+
 Resolves the build for your machine, verifies it against the published
-checksums, and — where systemd is running — leaves an enabled service behind.
-Re-run it to upgrade; configuration and the database are never touched.
+checksums, and leaves it running and set to start at boot. Re-run to upgrade;
+configuration and the database are never touched.
 
 Linux amd64 and arm64 are statically linked, so there is no glibc floor and no
-runtime dependency to install. Windows builds are published as a zip.
+runtime dependency to install.
 
-| | |
-|---|---|
-| binary | `/usr/local/bin/remon-server` |
-| config | `/etc/remon/config.toml` |
-| data | `/var/lib/remon` |
-| logs | `journalctl -fu remon-server` |
-| remove | `curl -fsSL .../packaging/uninstall.sh \| sudo sh` |
+| | Linux | Windows |
+|---|---|---|
+| binary | `/usr/local/bin/remon-server` | `%ProgramFiles%\remon` |
+| config | `/etc/remon/config.toml` | `%ProgramData%\remon\config.toml` |
+| data | `/var/lib/remon` | `%ProgramData%\remon` |
+| logs | `journalctl -fu remon-server` (systemd)<br>`/var/log/remon-server.log` (OpenRC) | `%ProgramData%\remon\remon-server.log` |
+| runs as | systemd unit / OpenRC service | scheduled task as SYSTEM, at startup |
+| remove | `uninstall.sh` (`--purge` to drop data) | `uninstall-windows.ps1` (`-Purge`) |
+
+On Windows it is a startup task rather than a true service: a Windows service
+has to speak the Service Control Manager protocol from inside the process, and
+remon-server is a plain console program — registering it with `sc.exe` would
+fail with error 1053. The task runs as SYSTEM at boot and restarts on failure,
+which is what the service was wanted for.
 
 Prefer to place it yourself? Grab the tarball from
 [Releases](https://github.com/adnanjpg/remon-server/releases) — the binary

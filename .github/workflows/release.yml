@@ -103,6 +103,8 @@ jobs:
 
           if [ "${{ matrix.archive }}" = "zip" ]; then
             cp "target/${{ matrix.target }}/release/remon-server.exe" "$stage/"
+            cp packaging/install-windows.ps1 "$stage/"
+            cp packaging/uninstall-windows.ps1 "$stage/"
           else
             cp "target/${{ matrix.target }}/release/remon-server" "$stage/"
             cp packaging/remon-server.service "$stage/"
