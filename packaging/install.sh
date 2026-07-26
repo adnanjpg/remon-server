@@ -270,10 +270,10 @@ name="remon-server"
 description="Remon monitoring server"
 command="$BIN_DIR/remon-server"
 command_args="--config-dir $CONFIG_DIR --data-dir $DATA_DIR"
-command_background=true
-pidfile="/run/\${RC_SVCNAME}.pid"
-output_log="/var/log/\${RC_SVCNAME}.log"
-error_log="/var/log/\${RC_SVCNAME}.log"
+supervisor="supervise-daemon"
+respawn_delay=5
+respawn_max=0
+supervise_daemon_args="--stdout /var/log/\${RC_SVCNAME}.log --stderr /var/log/\${RC_SVCNAME}.log"
 retry="SIGTERM/30"
 
 depend() {
@@ -284,7 +284,7 @@ depend() {
 start_pre() {
 	checkpath --directory --mode 0755 --owner root:root $CONFIG_DIR
 	checkpath --directory --mode 0700 --owner root:root $DATA_DIR
-	checkpath --file --mode 0640 --owner root:root "\$output_log"
+	checkpath --file --mode 0640 --owner root:root "/var/log/\${RC_SVCNAME}.log"
 }
 OPENRC
         chmod 0755 "$INITD_PATH"
@@ -311,8 +311,9 @@ Wants=network-online.target
 [Service]
 Type=exec
 ExecStart=$BIN_DIR/remon-server --config-dir $CONFIG_DIR --data-dir $DATA_DIR
-Restart=on-failure
+Restart=always
 RestartSec=5s
+StartLimitIntervalSec=0
 KillSignal=SIGTERM
 TimeoutStopSec=30s
 ProtectHome=read-only

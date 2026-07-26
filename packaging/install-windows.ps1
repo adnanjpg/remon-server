@@ -226,8 +226,13 @@ for %%A in ("%LOG%") do if exist "%LOG%" if %%~zA GTR 10485760 move /y "%LOG%" "
         -LogonType ServiceAccount -RunLevel Highest
     # ExecutionTimeLimit zero means "no limit" — without it the task is killed
     # after three days. The restart count is the ceiling Task Scheduler allows,
-    # chosen to approximate systemd's Restart=on-failure rather than giving up
-    # on a monitoring agent after a handful of attempts.
+    # so the agent keeps coming back rather than giving up after a handful of
+    # attempts; the counter resets at each boot.
+    #
+    # Task Scheduler only restarts an action that *failed*, so this covers a
+    # crash and covers being killed (the kill path exits 1). It does not cover
+    # a deliberate clean exit — which is why the server exits non-zero when it
+    # restarts itself, so every supervisor treats that as restart-worthy.
     $settings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -MultipleInstances IgnoreNew `

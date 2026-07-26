@@ -8,15 +8,20 @@ description="Remon monitoring server"
 command="/usr/local/bin/remon-server"
 command_args="--config-dir /etc/remon --data-dir /var/lib/remon"
 
-# The server has no daemonize mode of its own — OpenRC backgrounds it and
-# owns the pidfile.
-command_background=true
-pidfile="/run/${RC_SVCNAME}.pid"
+# supervise-daemon, not the default start-stop-daemon: the latter forks the
+# process and forgets it, so a crash — or someone killing the agent's pid from
+# its own process list — would leave monitoring off until a human noticed.
+supervisor="supervise-daemon"
+
+# Retry forever, five seconds apart. A start limit would turn a transient
+# problem (full disk, volume not mounted yet) into monitoring that is
+# permanently off and silent about it; this recovers on its own instead.
+respawn_delay=5
+respawn_max=0
 
 # The pairing code and the getting-started block go to stdout, so they have to
 # land somewhere an operator can read them back.
-output_log="/var/log/${RC_SVCNAME}.log"
-error_log="/var/log/${RC_SVCNAME}.log"
+supervise_daemon_args="--stdout /var/log/${RC_SVCNAME}.log --stderr /var/log/${RC_SVCNAME}.log"
 
 # SIGTERM drains the SSE streams and records a clean shutdown, which the next
 # boot reads to tell a restart apart from a crash. Give it room to finish
@@ -33,5 +38,5 @@ start_pre() {
 	# Root-only: the database holds device token hashes, the JWT secret and
 	# the VAPID keypair.
 	checkpath --directory --mode 0700 --owner root:root /var/lib/remon
-	checkpath --file --mode 0640 --owner root:root "$output_log"
+	checkpath --file --mode 0640 --owner root:root "/var/log/${RC_SVCNAME}.log"
 }

@@ -179,6 +179,10 @@ check "installed the unit"              '[ -f "$UNIT" ]'
 check "unit points at the real binary"  'grep -q "ExecStart=$ROOT/target/usr/local/bin/remon-server" "$UNIT"'
 check "unit points at the real dirs"    'grep -q -- "--config-dir $ROOT/target/etc/remon" "$UNIT"'
 check "dropped a misleading StateDir"   '! grep -q "^StateDirectory" "$UNIT"'
+# A monitoring agent that exits for any reason has stopped monitoring, so the
+# supervisor must bring it back regardless of how it went down.
+check "restarts unconditionally"        'grep -q "^Restart=always" "$UNIT"'
+check "has no start rate limit"         'grep -q "^StartLimitIntervalSec=0" "$UNIT"'
 check "enabled the service"             'grep -q "systemctl enable" "$ROOT/state/init.log"'
 check "started the service"             'grep -q "systemctl restart" "$ROOT/state/init.log"'
 check "installed the binary"            '[ -x "$ROOT/target/usr/local/bin/remon-server" ]'
@@ -196,6 +200,10 @@ check "init points at the real binary"  'grep -q "command=\"$ROOT/target/usr/loc
 check "init points at the real dirs"    'grep -q -- "--config-dir $ROOT/target/etc/remon" "$INITD"'
 check "kept OpenRC runtime variables"   'grep -q "RC_SVCNAME" "$INITD"'
 check "retargeted checkpath too"        '! grep -qE "checkpath.* /etc/remon$" "$INITD"'
+# start-stop-daemon forks and forgets; only supervise-daemon brings a crashed
+# agent back.
+check "is actually supervised"          'grep -q "supervisor=\"supervise-daemon\"" "$INITD"'
+check "respawns without a limit"        'grep -q "respawn_max=0" "$INITD"'
 check "added to the default runlevel"   'grep -q "rc-update add remon-server" "$ROOT/state/init.log"'
 check "started the service"             'grep -q "rc-service remon-server restart" "$ROOT/state/init.log"'
 check "reported the log file for logs"  'grep -q "tail -f /var/log/remon-server.log" <<<"$out"'
@@ -239,6 +247,7 @@ out=$(run_install systemd) || true
 check "generated a unit from scratch"   '[ -f "$UNIT" ]'
 check "generated unit has real paths"   'grep -q "ExecStart=$ROOT/target/usr/local/bin/remon-server" "$UNIT"'
 check "generated unit is complete"      'grep -q "WantedBy=multi-user.target" "$UNIT"'
+check "generated unit restarts always"  'grep -q "^Restart=always" "$UNIT"'
 check "wrote a config from scratch"     'grep -q "allow_any_origin" "$ROOT/target/etc/remon/config.toml"'
 check "still reported success"          'grep -q "is running" <<<"$out"'
 
@@ -247,6 +256,7 @@ check "generated an init from scratch"  '[ -x "$INITD" ]'
 check "generated init has real paths"   'grep -q "command=\"$ROOT/target/usr/local/bin/remon-server\"" "$INITD"'
 check "generated init kept RC_SVCNAME"  'grep -q "RC_SVCNAME" "$INITD"'
 check "generated init has depend()"     'grep -q "need net" "$INITD"'
+check "generated init is supervised"    'grep -q "supervise-daemon" "$INITD"'
 
 printf '\n\033[1mResults\033[0m\n'
 printf '  %d passed, %d failed\n\n' "$PASS" "$FAIL"
