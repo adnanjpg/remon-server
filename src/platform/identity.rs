@@ -82,22 +82,43 @@ fn normalize(name: &str) -> String {
     lower.strip_suffix(".service").unwrap_or(&lower).to_string()
 }
 
+/// Detection is skipped in tests. It asks the host's service manager who we
+/// are, and an answer that depends on whether the machine running the suite
+/// happens to be under systemd — a CI runner is — is not something a test can
+/// assert against. Cases that need an identity set one explicitly.
+#[cfg(test)]
+fn detect_service_name() -> Option<String> {
+    None
+}
+
 /// OpenRC exports the service name into the daemon's environment, and systemd
 /// records the unit in the process's cgroup path. Neither is available when
 /// the binary is run by hand, which is the case where there is nothing to
 /// protect anyway.
-#[cfg(target_os = "linux")]
+#[cfg(all(not(test), target_os = "linux"))]
 fn detect_service_name() -> Option<String> {
-    // OpenRC: set for every service it starts.
+    // OpenRC: set for every service it starts, and only for that service.
     if let Ok(name) = std::env::var("RC_SVCNAME")
         && !name.trim().is_empty()
     {
         return Some(name);
     }
 
-    // systemd: /proc/self/cgroup ends with the unit under cgroup v2, e.g.
-    //   0::/system.slice/remon-server.service
     let cgroup = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+    let candidate = cgroup_unit(&cgroup)?;
+
+    // Being inside a unit's cgroup is not the same as being that unit. A
+    // process started by another service inherits its cgroup, so the name
+    // found above may belong to something else entirely — and acting on that
+    // would make `/system/shutdown` stop the wrong unit. Only systemd can say
+    // whose main process this is.
+    is_main_process_of(&candidate).then_some(candidate)
+}
+
+/// Extract the unit from a `/proc/self/cgroup` body. Under cgroup v2 the path
+/// ends with the unit, e.g. `0::/system.slice/remon-server.service`.
+#[cfg(any(test, target_os = "linux"))]
+fn cgroup_unit(cgroup: &str) -> Option<String> {
     cgroup.lines().find_map(|line| {
         let path = line.rsplit(':').next()?;
         path.rsplit('/')
@@ -106,7 +127,26 @@ fn detect_service_name() -> Option<String> {
     })
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Ask systemd whether this process is the named unit's main process.
+/// Anything short of a clear yes — no systemctl, a failed call, a different
+/// pid — is a no, since the whole point is to avoid claiming an identity we
+/// cannot confirm.
+#[cfg(all(not(test), target_os = "linux"))]
+fn is_main_process_of(unit: &str) -> bool {
+    let output = std::process::Command::new("systemctl")
+        .args(["show", "--property=MainPID", "--value", unit])
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<u32>()
+            .is_ok_and(|main_pid| main_pid == std::process::id()),
+        _ => false,
+    }
+}
+
+#[cfg(all(not(test), not(target_os = "linux")))]
 fn detect_service_name() -> Option<String> {
     // The Windows install is a scheduled task, not an SCM service, so there is
     // no unit for /services/{name} to name in the first place.
@@ -162,30 +202,41 @@ mod tests {
     /// it, so exercise the shape it actually produces.
     #[test]
     fn the_unit_is_read_out_of_a_cgroup_v2_line() {
-        let extract = |cgroup: &str| -> Option<String> {
-            cgroup.lines().find_map(|line| {
-                let path = line.rsplit(':').next()?;
-                path.rsplit('/')
-                    .find(|segment| segment.ends_with(".service"))
-                    .map(str::to_string)
-            })
-        };
-
         assert_eq!(
-            extract("0::/system.slice/remon-server.service"),
+            cgroup_unit("0::/system.slice/remon-server.service"),
             Some("remon-server.service".to_string())
         );
         // cgroup v1 emits several lines; the unit is still in there.
         assert_eq!(
-            extract(
+            cgroup_unit(
                 "12:pids:/system.slice/remon-server.service\n0::/system.slice/remon-server.service"
             ),
             Some("remon-server.service".to_string())
         );
         // A process started by hand sits in a user slice with no unit.
         assert_eq!(
-            extract("0::/user.slice/user-1000.slice/session-3.scope"),
+            cgroup_unit("0::/user.slice/user-1000.slice/session-3.scope"),
             None
         );
+    }
+
+    /// A cgroup is inherited by children, so this line is what a process
+    /// launched *by* another service sees — a CI runner's job, for instance.
+    /// The name is real, but it is not ours, and claiming it would point
+    /// `/system/shutdown` at somebody else's unit. Extraction still finds it;
+    /// the main-pid check downstream is what rejects it.
+    #[test]
+    fn an_inherited_cgroup_still_yields_a_name_that_must_be_confirmed() {
+        assert_eq!(
+            cgroup_unit("0::/system.slice/actions.runner.service"),
+            Some("actions.runner.service".to_string())
+        );
+    }
+
+    /// Detection is compiled out under test, so nothing can pick up an
+    /// identity from whatever host the suite runs on.
+    #[test]
+    fn tests_never_inherit_an_identity_from_the_host() {
+        assert_eq!(detect_service_name(), None);
     }
 }
