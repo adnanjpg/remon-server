@@ -1,8 +1,35 @@
 # Configuration
 
-remon-server uses layered config: `config/default.toml` → `config/<RUN_ENV>.toml` → `REMON__*` env vars.
+Every configuration file is optional. The defaults are compiled into the
+binary, so `./remon-server` in an empty directory is a valid, fully configured
+server. Files layer on top, each overriding the last:
 
-Set `RUN_ENV=production` to load `config/production.toml` (optional file, create as needed).
+1. built-in defaults — the contents of `config/default.toml` as of the build
+2. `<config-dir>/default.toml`
+3. `<config-dir>/config.toml` — the file an installed server is meant to edit
+4. `<config-dir>/<RUN_ENV>.toml` — `RUN_ENV` defaults to `development`
+5. `REMON__<SECTION>__<KEY>` environment variables
+
+## Paths
+
+Resolved once at startup, in this order:
+
+1. `--config-dir` / `--data-dir`, or `REMON_CONFIG_DIR` / `REMON_DATA_DIR`
+2. a working directory containing `config/default.toml` — a repo checkout, so
+   paths stay relative to it (`./config`, `./db`, `./probes`)
+3. otherwise `/etc/remon` and `/var/lib/remon` when running as root, the
+   per-user XDG directories when not, `%ProgramData%\remon` on Windows
+
+Probes live in `<config-dir>/probes`, or `./probes` in a checkout;
+`REMON_PROBES_DIR` overrides it independently.
+
+Paths inside the config are resolved against the data directory when relative
+and honoured as-is when absolute, so `database.path` can point at another
+volume without moving anything else.
+
+Run `remon-server config check` to print what a given invocation resolved to,
+or `remon-server doctor` for that plus port availability, writability,
+privileges and host tooling.
 
 ## Key fields
 
@@ -12,8 +39,8 @@ Set `RUN_ENV=production` to load `config/production.toml` (optional file, create
 - `trusted_proxy` — set `true` only when behind a reverse proxy that controls `X-Forwarded-For` (Caddy/nginx with the standard forwarded-for directive). When `true`, per-IP rate limiting and the `devices.last_ip` audit field read from `X-Forwarded-For` / `X-Real-IP`; when `false`, they use the TCP peer. Leaving this `false` while behind a proxy works but collapses every client into the proxy's IP — the auth-endpoint rate limit then applies globally instead of per-client. Setting it `true` while exposed directly lets any caller spoof the header.
 
 ### `[database]`
-- `path` — SQLite file path
-- `folder_path` — created at boot if missing
+- `path` — SQLite file path. Relative paths resolve against the data directory; absolute ones are used as given.
+- `folder_path` — created at boot if missing, resolved the same way
 - `max_connections` — pool size (default: 5). WAL serialises writes but reads run concurrently, so keep this above 1 — with a single connection every short query queues behind long metrics-history scans.
 
 ### `[auth]`
@@ -51,8 +78,13 @@ The poll interval is runtime config, not TOML: `PATCH /config { collector_smart_
 Note: `smartctl` needs root/Administrator to reach the devices — the same privilege level the service/process endpoints already require.
 
 ### `[cors]`
+CORS is a browser mechanism. Native clients (mobile app, curl) authenticate with bearer tokens and are unaffected by anything here.
 - `allow_any_origin` — `true` in dev, `false` in production
-- `allowed_origins` — required when `allow_any_origin = false`, e.g. `["https://app.example.com"]`
+- `allowed_origins` — e.g. `["https://app.example.com"]`
+
+The shipped default (`allow_any_origin = false`, empty list) is the tightest policy: no browser origin can reach the API. The server boots and logs a warning rather than refusing to start, since a fresh install has no frontend origin to name yet.
+
+Note that a web UI served over HTTPS cannot call a server over plain HTTP — browsers block the mixed content outright, with no override. Either terminate TLS in front of the server, or serve the UI from the same origin.
 
 ## Runtime config (DB-backed, no restart)
 
@@ -74,7 +106,7 @@ This disables all `/docker/*` endpoints and removes the bollard dependency.
 ## Production example
 
 ```toml
-# config/production.toml
+# /etc/remon/config.toml
 [server]
 host = "0.0.0.0"
 trusted_proxy = true   # only if behind Caddy/nginx; see [server] above

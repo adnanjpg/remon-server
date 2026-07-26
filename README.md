@@ -18,39 +18,65 @@ Server component of Remon — a self-hosted system monitoring platform. Exposes 
 - **Heartbeat checks** — push-model dead-man's switches for cron jobs and external services: `curl` a capability URL on schedule, alert when it goes quiet (`heartbeat.up < 1`); pause windows for planned downtime, service-announced via the same URL
 - **Device pairing** — 8-digit code, Argon2-hashed token, JWT access+refresh with JTI revocation
 
-## Requirements
-
-Rust toolchain (stable).
-
-## Quickstart
+## Install
 
 ```sh
-# 1. Copy env file
-cp .env.example .env
+curl -fsSL https://raw.githubusercontent.com/adnanjpg/remon-server/dev/packaging/install.sh | sudo sh
+```
 
-# 2. (Optional) Left unset, the server generates and persists a JWT secret on
-#    first boot. Override only to share/rotate one across instances:
-#    REMON__AUTH__JWT_SECRET="your-secret-here"
+Resolves the build for your machine, verifies it against the published
+checksums, and — where systemd is running — leaves an enabled service behind.
+Re-run it to upgrade; configuration and the database are never touched.
 
-# 3. Run
-cargo run
+Linux amd64 and arm64 are statically linked, so there is no glibc floor and no
+runtime dependency to install. Windows builds are published as a zip.
 
-# Production build
+| | |
+|---|---|
+| binary | `/usr/local/bin/remon-server` |
+| config | `/etc/remon/config.toml` |
+| data | `/var/lib/remon` |
+| logs | `journalctl -fu remon-server` |
+| remove | `curl -fsSL .../packaging/uninstall.sh \| sudo sh` |
+
+Prefer to place it yourself? Grab the tarball from
+[Releases](https://github.com/adnanjpg/remon-server/releases) — the binary
+carries its own defaults, so it runs with no config file at all:
+
+```sh
+./remon-server                       # uses built-in defaults
+./remon-server doctor                # paths, config, port, host tooling
+./remon-server --help
+```
+
+## Running from source
+
+```sh
+cargo run              # development
 cargo run --release
 ```
 
-Set `RUN_ENV=production` to load `config/production.toml` (create as needed).
+A checkout keeps everything relative to it (`config/`, `db/`, `probes/`), so
+this is unchanged by the install layout above. Set `RUN_ENV=production` to
+load `config/production.toml` (create as needed).
 
 ## Configuration
 
-See [CONFIG.md](CONFIG.md) for all options. The layered system:
-1. `config/default.toml` — base defaults
-2. `config/<RUN_ENV>.toml` — environment overrides
-3. `REMON__*` environment variables — runtime overrides
+See [CONFIG.md](CONFIG.md) for all options. Every file is optional — defaults
+are compiled into the binary. Layers, applied in order:
+
+1. built-in defaults (the contents of `config/default.toml` at build time)
+2. `<config-dir>/default.toml`
+3. `<config-dir>/config.toml` — the file an installed server edits
+4. `<config-dir>/<RUN_ENV>.toml`
+5. `REMON__*` environment variables
+
+`<config-dir>` is `./config` in a checkout, `/etc/remon` when installed, or
+whatever `--config-dir` / `REMON_CONFIG_DIR` says.
 
 Key values to set in production:
 ```toml
-# config/production.toml
+# /etc/remon/config.toml
 # [auth] jwt_secret is optional — auto-generated and persisted on first boot.
 # Set it only to share or rotate the secret across instances.
 
@@ -58,9 +84,20 @@ Key values to set in production:
 format = "json"
 
 [cors]
+# Browser clients only; native apps use bearer tokens and ignore this.
 allow_any_origin = false
 allowed_origins = ["https://your-frontend.com"]
 ```
+
+## Diagnostics
+
+```sh
+remon-server doctor         # resolved paths, config, port, privileges, tooling
+remon-server config check   # validate and print the effective layout
+```
+
+`doctor` never opens the database or mutates anything, so it is safe to run
+against a live install.
 
 ## FCM Push Notifications
 
@@ -73,7 +110,8 @@ allowed_origins = ["https://your-frontend.com"]
 
 ## Custom Probes
 
-Drop a shell script into `probes/` with an inline header:
+Drop a shell script into the probes directory (`./probes` in a checkout,
+`/etc/remon/probes` when installed) with an inline header:
 
 ```sh
 # @probe name=my-check
