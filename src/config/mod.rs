@@ -1,7 +1,19 @@
-use config::{Config as ConfigBuilder, ConfigError, Environment, File};
+use config::{Config as ConfigBuilder, ConfigError, Environment, File, FileFormat};
 use serde::Deserialize;
 use std::env;
 use std::net::SocketAddr;
+
+/// `config/default.toml`, compiled into the binary.
+///
+/// The released artifact is a single executable — it has no repo checkout to
+/// read defaults from. Baking the file in makes `./remon-server` bootable on
+/// its own; the on-disk copy stays a normal (optional) override layer, so the
+/// dev workflow of editing `config/default.toml` is unchanged.
+///
+/// This file is also the authoritative record of every default: the comments
+/// in it are the documentation. `#[serde(default = ...)]` attributes below are
+/// only a backstop for keys an operator deletes from their own config.
+const EMBEDDED_DEFAULTS: &str = include_str!("../../config/default.toml");
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
@@ -305,8 +317,11 @@ impl Config {
         let run_env = env::var("RUN_ENV").unwrap_or_else(|_| "development".into());
 
         let config = ConfigBuilder::builder()
-            // Start with default configuration
-            .add_source(File::with_name("config/default"))
+            // Baked-in defaults — the only layer guaranteed to exist.
+            .add_source(File::from_str(EMBEDDED_DEFAULTS, FileFormat::Toml))
+            // On-disk copy of the same file, when there is one. Optional: a
+            // bare binary has no `config/` directory next to it.
+            .add_source(File::with_name("config/default").required(false))
             // Layer on environment-specific configuration
             .add_source(File::with_name(&format!("config/{}", run_env)).required(false))
             // Override with environment variables (prefix: REMON).

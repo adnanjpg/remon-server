@@ -56,7 +56,11 @@ allow_private_targets = false
 # allowed_private_hosts = []
 
 [cors]
-# Set false in production and list allowed origins below.
+# CORS is a browser mechanism — it does not gate native clients (mobile app,
+# curl), which authenticate with bearer tokens regardless of what is set here.
+# Shipped default (any_origin = false, empty list) allows no browser origin at
+# all; the server boots and logs a warning. Add your web UI's origin to talk to
+# it from a browser, or set allow_any_origin = true for local development.
 # Env: REMON__CORS__ALLOW_ANY_ORIGIN
 allow_any_origin = false
 # allowed_origins = ["https://app.example.com"]
