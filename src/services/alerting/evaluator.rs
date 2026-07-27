@@ -89,10 +89,36 @@ impl Live {
         }
     }
 
-    fn from_row(r: &AlertStateRow) -> Self {
+    /// Restore from a persisted row, discounting the time nobody was watching.
+    ///
+    /// `state_since` anchors the `for` window, and that window means "the
+    /// condition held continuously *while being evaluated*". A row can sit
+    /// untouched for a long time — the process was down, or the rule was
+    /// disabled and enabled again days later — and its `state_since` says
+    /// nothing about that gap, so restoring it verbatim hands a rule a `for`
+    /// window that elapsed without a single sample behind it: the next breach
+    /// fires immediately, on one sample, with a notification claiming it was
+    /// sustained.
+    ///
+    /// `last_eval_at` bounds what was actually observed, so the anchor moves
+    /// forward by the unobserved gap instead of being reset. A two-second
+    /// restart keeps the evidence it had; a three-day gap keeps none of it.
+    ///
+    /// Only `Pending` is adjusted. For `Firing`, `state_since` is not a
+    /// countdown but the answer to "since when" — reported in the UI badge and
+    /// carried into the resolve event — and moving it would misstate a fact
+    /// about the incident rather than protect a deadline.
+    fn from_row(r: &AlertStateRow, now: i64) -> Self {
+        let state_since = match r.state {
+            AlertLifecycle::Pending => {
+                let unobserved = (now - r.last_eval_at).max(0);
+                (r.state_since + unobserved).min(now)
+            }
+            AlertLifecycle::Ok | AlertLifecycle::Firing => r.state_since,
+        };
         Self {
             state: r.state,
-            state_since: r.state_since,
+            state_since,
             last_value: r.last_value,
             last_eval_at: r.last_eval_at,
             last_notified_at: r.last_notified_at,
@@ -132,12 +158,13 @@ async fn run(state: Arc<AppState>) {
     // Hydrate lifecycle so firing/pending survives a restart without
     // re-firing from Ok. Keyed rule_id → label_set → Live.
     let mut live: HashMap<i64, HashMap<String, Live>> = HashMap::new();
+    let hydrated_at = Utc::now().timestamp();
     match repo.list_all_state().await {
         Ok(rows) => {
             for r in rows {
                 live.entry(r.rule_id)
                     .or_default()
-                    .insert(r.label_set.clone(), Live::from_row(&r));
+                    .insert(r.label_set.clone(), Live::from_row(&r, hydrated_at));
             }
             info!(
                 "alert evaluator hydrated {} lifecycle row(s)",
@@ -172,7 +199,7 @@ async fn run(state: Arc<AppState>) {
             last_reload = now;
             // Drop in-memory lifecycle for rules that no longer exist.
             live.retain(|rid, _| rules.contains_key(rid));
-            rehydrate_missing(&repo, rules.keys().copied(), &mut live).await;
+            rehydrate_missing(&repo, rules.keys().copied(), &mut live, now).await;
         }
 
         for compiled in rules.values_mut() {
@@ -214,6 +241,7 @@ async fn rehydrate_missing(
     repo: &AlertRepository,
     rule_ids: impl IntoIterator<Item = i64>,
     live: &mut HashMap<i64, HashMap<String, Live>>,
+    now: i64,
 ) {
     for rid in rule_ids {
         if live.contains_key(&rid) {
@@ -223,7 +251,7 @@ async fn rehydrate_missing(
             Ok(rows) if !rows.is_empty() => {
                 let hydrated: HashMap<String, Live> = rows
                     .iter()
-                    .map(|r| (r.label_set.clone(), Live::from_row(r)))
+                    .map(|r| (r.label_set.clone(), Live::from_row(r, now)))
                     .collect();
                 live.insert(rid, hydrated);
             }
@@ -535,23 +563,17 @@ pub(crate) async fn evaluate_once(
     state: &Arc<AppState>,
 ) -> Result<(), String> {
     let repo = AlertRepository::new(state.db.clone());
+    // One instant for both the rehydrate discount and the evaluation, so a
+    // row cannot be restored against a different "now" than it is judged by.
+    let now = Utc::now().timestamp();
     let mut live: HashMap<String, Live> = repo
         .list_state_for_rule(rule.id)
         .await
         .map_err(|e| e.to_string())?
         .into_iter()
-        .map(|r| (r.label_set.clone(), Live::from_row(&r)))
+        .map(|r| (r.label_set.clone(), Live::from_row(&r, now)))
         .collect();
-    evaluate_rule(
-        state,
-        &repo,
-        rule,
-        expr,
-        &mut live,
-        true,
-        Utc::now().timestamp(),
-    )
-    .await
+    evaluate_rule(state, &repo, rule, expr, &mut live, true, now).await
 }
 
 /// Test-only: one in-memory evaluation (`persist_all = false`) from the given
@@ -872,7 +894,7 @@ mod tests {
         // Simulate: the rule just reappeared in `rules` after re-enable, but
         // `live` has nothing for it (exactly what disabling left behind).
         let mut live: HashMap<i64, HashMap<String, Live>> = HashMap::new();
-        rehydrate_missing(&repo, [rule_id], &mut live).await;
+        rehydrate_missing(&repo, [rule_id], &mut live, Utc::now().timestamp()).await;
 
         let restored = live
             .get(&rule_id)
@@ -909,7 +931,7 @@ mod tests {
             )]),
         );
 
-        rehydrate_missing(&repo, [rule_id], &mut live).await;
+        rehydrate_missing(&repo, [rule_id], &mut live, Utc::now().timestamp()).await;
 
         let entry = live.get(&rule_id).and_then(|m| m.get("{}")).unwrap();
         assert_eq!(entry.state, AlertLifecycle::Pending);
@@ -928,9 +950,51 @@ mod tests {
         let rule_id = insert_test_rule(&repo).await;
         let mut live: HashMap<i64, HashMap<String, Live>> = HashMap::new();
 
-        rehydrate_missing(&repo, [rule_id], &mut live).await;
+        rehydrate_missing(&repo, [rule_id], &mut live, Utc::now().timestamp()).await;
 
         assert!(!live.contains_key(&rule_id));
+    }
+
+    fn pending_row(state_since: i64, last_eval_at: i64) -> AlertStateRow {
+        AlertStateRow {
+            rule_id: 1,
+            label_set: "{}".to_string(),
+            state: AlertLifecycle::Pending,
+            state_since,
+            last_value: Some(95.0),
+            last_eval_at,
+            last_notified_at: None,
+        }
+    }
+
+    /// A `for` window means "held continuously while being evaluated", so time
+    /// nobody was evaluating cannot count toward it. Restoring `state_since`
+    /// verbatim let a rule that sat Pending while disabled come back with its
+    /// window already elapsed and fire on the very first sample.
+    #[test]
+    fn rehydrated_pending_does_not_inherit_an_unwatched_for_window() {
+        let now = 1_000_000;
+        let three_days = 3 * 86_400;
+        let live = Live::from_row(&pending_row(now - three_days, now - three_days), now);
+
+        assert_eq!(live.state_since, now, "an unwatched gap cannot count");
+        // So the debounce is actually served rather than skipped.
+        let s = transition(live.state, live.state_since, true, 600, now + 1);
+        assert_eq!(s.state, AlertLifecycle::Pending);
+    }
+
+    /// The other end of the same rule: a two-second restart must not throw away
+    /// evidence the rule had already accumulated.
+    #[test]
+    fn rehydrated_pending_keeps_evidence_across_a_short_restart() {
+        let now = 1_000_000;
+        let live = Live::from_row(&pending_row(now - 500, now - 2), now);
+
+        assert_eq!(live.state_since, now - 498, "only the 2s gap is discounted");
+        let s = transition(live.state, live.state_since, true, 600, now);
+        assert_eq!(s.state, AlertLifecycle::Pending, "498s of 600s served");
+        let s = transition(live.state, live.state_since, true, 600, now + 102);
+        assert_eq!(s.state, AlertLifecycle::Firing, "fires on the remainder");
     }
 
     #[test]
