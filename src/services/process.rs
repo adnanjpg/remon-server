@@ -76,9 +76,23 @@ pub fn get_processes(sys: &System) -> ProcessList {
 /// entire process group; on Windows that's the System Idle Process,
 /// which can't be terminated. Either way it isn't something we want a
 /// request handler to do.
+///
+/// Anything above `i32::MAX` is rejected for the same reason one step
+/// removed: on Unix the `u32` narrows to `pid_t` (`i32`), so those values
+/// wrap *negative*, and a negative pid is a broadcast rather than a target
+/// — `-1` signals every process the caller is permitted to signal (running
+/// as root, that is the entire machine), `-N` the whole process group `N`.
+/// The range costs nothing to give up: Linux caps `pid_max` at 2^22 and no
+/// Unix allocates pids anywhere near `i32::MAX`. Checked here rather than in
+/// the handler so every caller inherits it.
 pub fn kill_process(pid: u32, signal: i32) -> Result<(), String> {
     if pid == 0 {
         return Err("refusing to signal pid 0".to_string());
+    }
+    if pid > i32::MAX as u32 {
+        return Err(format!(
+            "refusing to signal pid {pid}: out of range for a process id"
+        ));
     }
     kill_process_native(pid, signal)
 }

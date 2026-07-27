@@ -80,3 +80,43 @@ async fn kill_refuses_pid_1() {
         .await;
     assert_eq!(st, StatusCode::CONFLICT);
 }
+
+/// The pid arrives as a `u32` but Unix `kill(2)` takes a signed `pid_t`, so
+/// anything above `i32::MAX` narrows to a *negative* pid — and negative pids
+/// broadcast instead of targeting: 4294967295 becomes -1, "every process the
+/// caller is permitted to signal", which for the root-running daemon is the
+/// whole machine. The pid 0 / pid 1 / own-pid guards all wave these through,
+/// so the range needs a refusal of its own.
+#[tokio::test]
+async fn kill_refuses_out_of_range_pid() {
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+
+    // Signal 9 so the signal validation cannot be what rejects this.
+    let (st, body) = app
+        .request(
+            "DELETE",
+            "/processes/4294967295?signal=9",
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body.to_string().contains("out of range"),
+        "expected an out-of-range refusal, got: {body}"
+    );
+
+    // First value past the signed range — wraps to i32::MIN rather than -1,
+    // still a broadcast.
+    let over = i32::MAX as u32 + 1;
+    let (st, _) = app
+        .request(
+            "DELETE",
+            &format!("/processes/{over}?signal=9"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
+}
