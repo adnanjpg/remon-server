@@ -30,7 +30,7 @@
 
 use std::sync::Arc;
 
-use log::{info, warn};
+use log::{debug, info, warn};
 use serde_json::json;
 
 use crate::notify::{Notification, NotificationEvent, Severity};
@@ -296,8 +296,43 @@ const SWEEP_INTERVAL_SECS: u64 = 300;
 
 /// First-run lookback: long enough to catch the crash/OOM that likely
 /// preceded an unclean restart, short enough not to replay ancient history.
+/// That crash is by definition in the *previous* boot, which is why the Linux
+/// scan must not restrict itself to the current one.
 #[cfg(any(target_os = "linux", windows))]
 const SWEEP_FIRST_LOOKBACK_SECS: i64 = 900;
+
+/// Furthest back any single scan will reach, however stale the cursor is.
+/// Without it, a host that was off for a month would ask the journal for a
+/// month of history on its first tick and time out doing it.
+#[cfg(any(target_os = "linux", windows))]
+const SWEEP_MAX_LOOKBACK_SECS: i64 = 86_400;
+
+/// How far behind `now` the cursor is left when a tick records nothing. The
+/// scan and the log writer race: an entry stamped a moment before the scan ran
+/// may not have been flushed in time to appear in it, and a cursor parked at
+/// `now` would step straight over it.
+#[cfg(any(target_os = "linux", windows))]
+const SWEEP_FLUSH_GRACE_SECS: i64 = 60;
+
+/// Most events recorded in one tick. A safety valve against a pathological
+/// journal, not a budget — whatever is left stays ahead of the cursor and is
+/// picked up on the next tick rather than dropped.
+#[cfg(any(target_os = "linux", windows))]
+const SWEEP_MAX_EVENTS_PER_TICK: usize = 500;
+
+/// Why a scan produced nothing usable.
+///
+/// The distinction is the whole difference between "this host will never do
+/// this" and "not this time": only the former is worth switching the sweep
+/// off for, and conflating them is what silently disabled it before.
+#[cfg(any(target_os = "linux", windows))]
+enum ScanError {
+    /// The tool this platform needs is not installed. Retrying cannot help.
+    Unsupported(String),
+    /// This attempt failed — a timeout, a busy journal, a transient read
+    /// error. The next tick may well succeed.
+    Transient(String),
+}
 
 /// One detected system event, platform-agnostic. The scan functions parse
 /// their native log format into this; the loop turns it into a `NewHostEvent`.
@@ -328,30 +363,38 @@ async fn system_event_sweep_loop(state: Arc<AppState>) {
 
     let mut ticker = tokio::time::interval(Duration::from_secs(SWEEP_INTERVAL_SECS));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // The interval fires immediately; that first sweep doubles as the
-    // platform-availability probe (journalctl / Get-WinEvent present?).
-    let mut first = true;
 
     loop {
         ticker.tick().await;
         let now = chrono::Utc::now().timestamp();
-        let events = match scan_system_events(cursor).await {
+        // However far behind the cursor is, never ask for more than a day.
+        let since = cursor.max(now - SWEEP_MAX_LOOKBACK_SECS);
+
+        let events = match scan_system_events(since).await {
             Ok(e) => e,
-            Err(e) => {
-                if first {
-                    info!("system-event sweep: unavailable, disabling ({e})");
-                    return;
-                }
-                warn!("system-event sweep failed: {e}");
+            // Only a missing tool ends the sweep. Anything else gets another
+            // tick: the first one lands during boot, with the log daemon still
+            // replaying, which is exactly when a transient failure is likely
+            // and exactly when giving up costs the most.
+            Err(ScanError::Unsupported(e)) => {
+                info!("system-event sweep: unavailable on this host, disabling ({e})");
+                return;
+            }
+            Err(ScanError::Transient(e)) => {
+                warn!("system-event sweep failed, retrying next tick: {e}");
                 continue;
             }
         };
-        first = false;
 
-        for ev in events {
-            if ev.ts <= cursor {
-                continue;
-            }
+        let plan = plan_sweep(events, cursor, now);
+        if plan.truncated {
+            warn!(
+                "system-event sweep: more than {} events in one window; \
+                 recording the oldest and resuming next tick",
+                SWEEP_MAX_EVENTS_PER_TICK
+            );
+        }
+        for ev in plan.record {
             let event = NewHostEvent {
                 created_at: Some(ev.ts),
                 source: "system",
@@ -364,8 +407,48 @@ async fn system_event_sweep_loop(state: Arc<AppState>) {
             };
             insert_and_maybe_notify(&state, &event).await;
         }
-        cursor = now;
+        cursor = plan.next_cursor;
         let _ = rs.set(KEY_SYSEVENT_CURSOR, &cursor.to_string()).await;
+    }
+}
+
+/// What a tick should record, and where the cursor lands afterwards.
+#[cfg(any(target_os = "linux", windows))]
+struct SweepPlan {
+    record: Vec<SysEvent>,
+    next_cursor: i64,
+    /// More matched than one tick will take; the rest is still ahead of the
+    /// cursor and will be picked up next time.
+    truncated: bool,
+}
+
+/// Decide what to record and where the cursor lands.
+///
+/// Split out because both halves of this used to be wrong in ways nothing
+/// surfaced: events past the per-tick cap were dropped, and the cursor jumped
+/// to wall-clock `now` regardless of what was actually read — so anything the
+/// log daemon flushed while the scan was running was stepped over. The cursor
+/// is a high-water mark of what was *handled*, never a clock reading.
+#[cfg(any(target_os = "linux", windows))]
+fn plan_sweep(events: Vec<SysEvent>, cursor: i64, now: i64) -> SweepPlan {
+    let mut record: Vec<SysEvent> = events.into_iter().filter(|e| e.ts > cursor).collect();
+    record.sort_by_key(|e| e.ts);
+
+    let truncated = record.len() > SWEEP_MAX_EVENTS_PER_TICK;
+    record.truncate(SWEEP_MAX_EVENTS_PER_TICK);
+
+    let next_cursor = match record.last() {
+        Some(last) => last.ts,
+        // Nothing recorded, so there is no high-water mark to move to. Advance
+        // anyway or a quiet host rescans an ever-growing window, but stay a
+        // grace period behind `now` so a late-flushed entry is not skipped.
+        None => (now - SWEEP_FLUSH_GRACE_SECS).max(cursor),
+    };
+
+    SweepPlan {
+        record,
+        next_cursor,
+        truncated,
     }
 }
 
@@ -373,16 +456,15 @@ async fn system_event_sweep_loop(state: Arc<AppState>) {
 
 /// One bounded kernel-journal read since the cursor, classified into events.
 #[cfg(target_os = "linux")]
-async fn scan_system_events(cursor: i64) -> Result<Vec<SysEvent>, String> {
+async fn scan_system_events(since_ts: i64) -> Result<Vec<SysEvent>, ScanError> {
     // PCRE union of the message families we record. journald's -g uses PCRE2
     // (standard on modern systemd), so one read covers every detector.
     const PATTERN: &str = "Killed process|segfault|general protection|I/O error|EXT4-fs error|Buffer I/O error|critical (medium|target) error";
-    let since = format!("@{}", cursor);
+    let since = format!("@{}", since_ts);
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         tokio::process::Command::new("journalctl")
             .args([
-                "-k",
                 "--no-pager",
                 "-o",
                 "short-unix",
@@ -390,33 +472,57 @@ async fn scan_system_events(cursor: i64) -> Result<Vec<SysEvent>, String> {
                 PATTERN,
                 "--since",
                 &since,
+                // The kernel filter written out rather than `-k`, which is
+                // documented to imply `-b` — restricting every read to the
+                // current boot. The startup lookback exists to find the OOM or
+                // panic behind an unclean restart, and that record is in the
+                // boot before this one, so `-k` made it unreachable by
+                // construction.
+                "_TRANSPORT=kernel",
             ])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            // Nothing owns this child once the timeout above fires.
+            .kill_on_drop(true)
             .output(),
     )
     .await
-    .map_err(|_| "journalctl timed out after 10s".to_string())?
-    .map_err(|e| format!("journalctl spawn failed: {e}"))?;
+    .map_err(|_| ScanError::Transient("journalctl timed out after 10s".to_string()))?
+    .map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => {
+            ScanError::Unsupported("journalctl is not installed".to_string())
+        }
+        _ => ScanError::Transient(format!("journalctl spawn failed: {e}")),
+    })?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
     // `-g` with no matches exits 1 but still prints a "-- No entries --"
-    // banner to stdout — that's normal, not a failure, so the exit status
-    // alone is not a reliable signal (a status-only check here previously
-    // meant "no OOM this window" was misread as "journalctl is unavailable",
-    // permanently disabling the sweep on the very first empty tick). A real
-    // failure (bad regex, no journal, permission denied, …) writes to
-    // stderr; that's the only signal trusted here.
-    if !output.stderr.is_empty() {
-        return Err(format!(
-            "journalctl exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+    // banner to stdout, so the exit status alone says nothing. stderr is a
+    // better signal but not a decisive one either: journald reports a damaged
+    // or rotated file there ("journal file ... is truncated, ignoring file")
+    // while still serving every intact entry on stdout. Treating that as fatal
+    // blinded the sweep on exactly the hosts most likely to have something
+    // worth reporting. So stderr only fails the scan when nothing came back
+    // with it.
+    if !stderr.trim().is_empty() {
+        if stdout.trim().is_empty() {
+            return Err(ScanError::Transient(format!(
+                "journalctl exited with {}: {}",
+                output.status,
+                stderr.trim()
+            )));
+        }
+        debug!(
+            "journalctl warned while still returning entries: {}",
+            stderr.trim()
+        );
     }
-    Ok(String::from_utf8_lossy(&output.stdout)
+
+    Ok(stdout
         .lines()
         .filter(|l| !l.trim().is_empty() && !l.starts_with("--"))
-        .take(100)
         .filter_map(classify_kernel_line)
         .collect())
 }
@@ -529,7 +635,7 @@ fn kernel_message(line: &str) -> String {
 /// to runtime-test this against. The provider list is deliberately narrow so a
 /// misfit can't page (`disk_error` is the only Windows kind that notifies).
 #[cfg(windows)]
-async fn scan_system_events(cursor: i64) -> Result<Vec<SysEvent>, String> {
+async fn scan_system_events(since_ts: i64) -> Result<Vec<SysEvent>, ScanError> {
     // Braces are unescaped because we substitute the cursor by string replace
     // rather than format!, so the PCRE-free script stays readable.
     const SCRIPT: &str = r#"
@@ -538,33 +644,50 @@ $since=[System.DateTimeOffset]::FromUnixTimeSeconds(__CURSOR__).LocalDateTime
 Emit 'disk_error' (Get-WinEvent -FilterHashtable @{LogName='System';Level=1,2;StartTime=$since;ProviderName='disk','Disk','Ntfs','Microsoft-Windows-Ntfs','volmgr','Microsoft-Windows-DiskDiagnosticResolver','storahci','stornvme'} -ErrorAction SilentlyContinue)
 Emit 'app_crash' (Get-WinEvent -FilterHashtable @{LogName='Application';StartTime=$since;ProviderName='Application Error'} -ErrorAction SilentlyContinue)
 "#;
-    let script = SCRIPT.replace("__CURSOR__", &cursor.to_string());
+    let script = SCRIPT.replace("__CURSOR__", &since_ts.to_string());
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(15),
         tokio::process::Command::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            // Nothing owns this child once the timeout above fires.
+            .kill_on_drop(true)
             .output(),
     )
     .await
-    .map_err(|_| "Get-WinEvent timed out after 15s".to_string())?
-    .map_err(|e| format!("powershell spawn failed: {e}"))?;
+    .map_err(|_| ScanError::Transient("Get-WinEvent timed out after 15s".to_string()))?
+    .map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => {
+            ScanError::Unsupported("powershell.exe is not available".to_string())
+        }
+        _ => ScanError::Transient(format!("powershell spawn failed: {e}")),
+    })?;
 
-    // `-ErrorAction SilentlyContinue` already swallows "no events matched" at
-    // the Get-WinEvent level, so any stderr here is a genuine script/host
-    // failure (syntax error, log inaccessible), not "nothing new".
-    if !output.stderr.is_empty() {
-        return Err(format!(
-            "powershell exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // `-ErrorAction SilentlyContinue` swallows "no events matched" at the
+    // Get-WinEvent level, so stderr here means a real script or host problem.
+    // Still only fatal when it came back alone: one inaccessible provider must
+    // not discard the events the others returned.
+    if !stderr.trim().is_empty() {
+        if stdout.trim().is_empty() {
+            return Err(ScanError::Transient(format!(
+                "powershell exited with {}: {}",
+                output.status,
+                stderr.trim()
+            )));
+        }
+        debug!(
+            "Get-WinEvent warned while still returning entries: {}",
+            stderr.trim()
+        );
     }
-    Ok(String::from_utf8_lossy(&output.stdout)
+
+    Ok(stdout
         .lines()
         .filter(|l| !l.trim().is_empty())
-        .take(100)
         .filter_map(classify_win_line)
         .collect())
 }
@@ -749,6 +872,93 @@ mod tests {
         assert_eq!(notify_severity("service_action", "info"), None);
         assert_eq!(notify_severity("config_changed", "info"), None);
         assert_eq!(notify_severity("process_killed", "info"), None);
+    }
+
+    #[cfg(any(target_os = "linux", windows))]
+    fn sys_event(ts: i64) -> SysEvent {
+        SysEvent {
+            ts,
+            kind: "oom_kill",
+            severity: "error",
+            message: format!("event at {ts}"),
+            ref_type: None,
+            ref_id: None,
+        }
+    }
+
+    /// The cursor is a high-water mark of what was recorded, not a clock
+    /// reading. Parked at `now`, it stepped over anything the log daemon
+    /// flushed while the scan was running — the entry existed, was never read,
+    /// and was then behind the cursor forever.
+    #[cfg(any(target_os = "linux", windows))]
+    #[test]
+    fn cursor_follows_what_was_recorded_not_the_clock() {
+        let now = 10_000;
+        let plan = plan_sweep(vec![sys_event(100), sys_event(250)], 50, now);
+
+        assert_eq!(plan.record.len(), 2);
+        assert_eq!(
+            plan.next_cursor, 250,
+            "must land on the last recorded event, not on now"
+        );
+    }
+
+    /// Nothing to record still has to advance, or a quiet host rescans an
+    /// ever-widening window — but only to a grace period behind `now`.
+    #[cfg(any(target_os = "linux", windows))]
+    #[test]
+    fn an_empty_tick_advances_but_stays_behind_now() {
+        let now = 10_000;
+        let plan = plan_sweep(vec![], 50, now);
+
+        assert!(plan.record.is_empty());
+        assert_eq!(plan.next_cursor, now - SWEEP_FLUSH_GRACE_SECS);
+    }
+
+    /// And never backwards: a cursor already inside the grace window stays put
+    /// rather than being dragged back into ground it has covered.
+    #[cfg(any(target_os = "linux", windows))]
+    #[test]
+    fn an_empty_tick_never_moves_the_cursor_back() {
+        let now = 10_000;
+        let plan = plan_sweep(vec![], now - 5, now);
+
+        assert_eq!(plan.next_cursor, now - 5);
+    }
+
+    /// Past the per-tick cap the remainder must stay *ahead* of the cursor.
+    /// Truncating the read and then jumping the cursor to `now` is how these
+    /// events used to disappear without a trace.
+    #[cfg(any(target_os = "linux", windows))]
+    #[test]
+    fn overflow_is_deferred_to_the_next_tick_not_dropped() {
+        let now = 10_000;
+        let events: Vec<SysEvent> = (1..=(SWEEP_MAX_EVENTS_PER_TICK as i64 + 20))
+            .map(sys_event)
+            .collect();
+
+        let plan = plan_sweep(events, 0, now);
+
+        assert!(plan.truncated);
+        assert_eq!(plan.record.len(), SWEEP_MAX_EVENTS_PER_TICK);
+        assert_eq!(
+            plan.next_cursor, SWEEP_MAX_EVENTS_PER_TICK as i64,
+            "the cursor stops at the last one recorded, leaving the rest ahead of it"
+        );
+    }
+
+    /// Anything at or before the cursor was handled on an earlier tick.
+    #[cfg(any(target_os = "linux", windows))]
+    #[test]
+    fn already_seen_events_are_filtered_out() {
+        let plan = plan_sweep(
+            vec![sys_event(10), sys_event(20), sys_event(30)],
+            20,
+            10_000,
+        );
+
+        assert_eq!(plan.record.len(), 1);
+        assert_eq!(plan.record[0].ts, 30);
     }
 
     #[test]
