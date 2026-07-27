@@ -16,7 +16,10 @@
 //! - This endpoint still has no per-token scope check — every authenticated
 //!   device that lands here can spawn a shell inside any container. That's
 //!   a known gap; the kill-switch above is the workaround until JWT scope
-//!   claims land.
+//!   claims land. Until then the ledger is what is left: every accepted
+//!   session writes a `container_exec` audit row naming the device, the
+//!   container and the argv, so the most privileged operation in the product
+//!   is at least reviewable after the fact.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -69,7 +72,7 @@ pub async fn docker_exec(
     State(state): State<Arc<AppState>>,
     ws: WebSocketUpgrade,
     Path(container_id): Path<String>,
-    _claims: Claims,
+    claims: Claims,
     Query(params): Query<ExecParams>,
 ) -> Response {
     if !state.docker_exec_enabled.load(Ordering::Relaxed) {
@@ -98,6 +101,24 @@ pub async fn docker_exec(
                 .into_response();
         }
     };
+
+    // Recorded here rather than inside the upgraded socket: this is the point
+    // where the session was authorised, and it is the last point that still
+    // has the caller's identity — the handler runs detached, after the
+    // response has gone out. A session that then fails to start is worth a row
+    // too; the request for a shell is the fact being audited.
+    crate::services::events::record_operator(
+        &state,
+        &claims.device_id,
+        "container_exec",
+        format!(
+            "Exec session opened in container {}: {}",
+            container_id, cmd_str
+        ),
+        Some("container"),
+        Some(container_id.clone()),
+        Some(serde_json::json!({ "cmd": &cmd_argv, "tty": params.tty })),
+    );
 
     ws.max_message_size(WS_MAX_BYTES)
         .max_frame_size(WS_MAX_BYTES)
