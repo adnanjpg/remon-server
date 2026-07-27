@@ -7,13 +7,19 @@
 # configuration are left alone unless --purge is given, because "uninstall"
 # and "throw away my history" are different intentions and only one of them
 # is recoverable.
+#
+# Environment (the same overrides install.sh takes — pass whatever was used to
+# install, or --purge will look for state where this install never put any):
+#   REMON_PREFIX=/usr/local
+#   REMON_CONFIG_DIR=/etc/remon
+#   REMON_DATA_DIR=/var/lib/remon
 
 set -eu
 
 PREFIX="${REMON_PREFIX:-/usr/local}"
 BIN="$PREFIX/bin/remon-server"
-CONFIG_DIR="/etc/remon"
-DATA_DIR="/var/lib/remon"
+CONFIG_DIR="${REMON_CONFIG_DIR:-/etc/remon}"
+DATA_DIR="${REMON_DATA_DIR:-/var/lib/remon}"
 SERVICE_NAME="remon-server"
 UNIT_PATH="/etc/systemd/system/$SERVICE_NAME.service"
 INITD_PATH="/etc/init.d/$SERVICE_NAME"
@@ -61,6 +67,9 @@ fi
 if [ "$PURGE" -eq 1 ]; then
     printf '==> Removing %s and %s\n' "$CONFIG_DIR" "$DATA_DIR"
     rm -rf "$CONFIG_DIR" "$DATA_DIR"
+    # Where OpenRC's supervise-daemon sends the server's output, pairing codes
+    # included. Under systemd this lives in the journal and is not ours to prune.
+    rm -f "/var/log/$SERVICE_NAME.log" "/var/log/$SERVICE_NAME.log."*
     printf '\nremon-server removed, including configuration and metrics history.\n'
 else
     printf '\nremon-server removed.\n'
