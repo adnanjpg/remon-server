@@ -10,6 +10,10 @@
 # operator's config alone, and that a release predating the bundled unit files
 # still installs from the built-in fallbacks.
 #
+# It also pins the two orderings an upgrade can get wrong: a config the new
+# build rejects must cost neither the running service nor the installed binary,
+# and REMON_NO_SERVICE must not leave an agent that was running stopped.
+#
 # Runs anywhere bash does, including from a Windows checkout, which is the
 # point — the installer is the artifact hardest to test on the machine it is
 # written on.
@@ -33,12 +37,15 @@ check() { if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fi; }
 STAGE="$ROOT/stage/remon-server-linux-amd64"
 mkdir -p "$STAGE" "$ROOT/serve"
 
-cat > "$STAGE/remon-server" <<'FAKE'
+cat > "$STAGE/remon-server" <<FAKE
 #!/bin/sh
-for a in "$@"; do
-  case "$a" in
+for a in "\$@"; do
+  case "\$a" in
     --version) echo "remon-server 0.18.0"; exit 0 ;;
-    check)     echo "configuration ok"; exit 0 ;;
+    check)     if [ -f "$ROOT/state/reject-config" ]; then
+                 echo "invalid config" >&2; exit 1
+               fi
+               echo "configuration ok"; exit 0 ;;
   esac
 done
 exit 0
@@ -133,6 +140,7 @@ echo "systemctl \$*" >> "$ROOT/state/init.log"
 case "\$1" in
   is-active) [ -f "$ROOT/state/running" ] ;;
   restart|start) touch "$ROOT/state/running" "$ROOT/state/healthy" ;;
+  stop) rm -f "$ROOT/state/running" "$ROOT/state/healthy" ;;
   *) exit 0 ;;
 esac
 S
@@ -144,6 +152,7 @@ echo "rc-service \$*" >> "$ROOT/state/init.log"
 case "\$2" in
   status) [ -f "$ROOT/state/running" ] ;;
   restart|start) touch "$ROOT/state/running" "$ROOT/state/healthy" ;;
+  stop) rm -f "$ROOT/state/running" "$ROOT/state/healthy" ;;
   *) exit 0 ;;
 esac
 S
@@ -156,17 +165,24 @@ S
 
 chmod +x "$STUB"/*
 
-run_install() { # run_install systemd|openrc
+run_install() { # run_install systemd|openrc [VAR=value ...]
     rm -rf "$ROOT/state" "$ROOT/target" "$ROOT/probe"
     mkdir -p "$ROOT/state" "$ROOT/target"
     # systemd is detected by the presence of its runtime directory.
     [ "$1" = "systemd" ] && mkdir -p "$ROOT/probe/systemd"
+    shift
+    rerun_install "$@"
+}
+
+# The same run without the wipe — an upgrade over whatever is already there,
+# so the stubbed service keeps the running/healthy state the last run left.
+rerun_install() { # rerun_install [VAR=value ...]
     env -i \
         PATH="$STUB:/usr/bin:/bin" HOME="$ROOT" \
         REMON_PREFIX="$ROOT/target/usr/local" \
         REMON_CONFIG_DIR="$ROOT/target/etc/remon" \
         REMON_DATA_DIR="$ROOT/target/var/lib/remon" \
-        NO_COLOR=1 \
+        NO_COLOR=1 "$@" \
         sh "$SUT" 2>&1
 }
 
@@ -213,11 +229,7 @@ check "reported success"                'grep -q "is running" <<<"$out"'
 printf '\n\033[1mupgrade re-run\033[0m\n'
 run_install systemd >/dev/null || true
 echo "# operator edit" >> "$ROOT/target/etc/remon/config.toml"
-out=$(env -i PATH="$STUB:/usr/bin:/bin" HOME="$ROOT" \
-    REMON_PREFIX="$ROOT/target/usr/local" \
-    REMON_CONFIG_DIR="$ROOT/target/etc/remon" \
-    REMON_DATA_DIR="$ROOT/target/var/lib/remon" NO_COLOR=1 \
-    sh "$SUT" 2>&1) || true
+out=$(rerun_install) || true
 check "kept the edited config"          'grep -q "operator edit" "$ROOT/target/etc/remon/config.toml"'
 check "said it kept it"                 'grep -q "kept existing" <<<"$out"'
 check "reported an in-place upgrade"    'grep -q "upgraded in place" <<<"$out"'
@@ -231,6 +243,49 @@ out=$(run_install systemd) && rc=0 || rc=$?
 check "refused to install"              '[ "${rc:-0}" -ne 0 ]'
 check "said why"                        'grep -q "checksum mismatch" <<<"$out"'
 check "installed nothing"               '[ ! -e "$ROOT/target/usr/local/bin/remon-server" ]'
+
+# ── no checksums published at all ─────────────────────────────────────────
+# Being unable to verify is a different thing from verifying and failing, and
+# it used to be a warning. What runs afterwards runs as root.
+printf '\n\033[1munverifiable release\033[0m\n'
+rm -f "$ROOT/serve/SHA256SUMS"
+out=$(run_install systemd) && rc=0 || rc=$?
+check "refused without checksums"       '[ "${rc:-0}" -ne 0 ]'
+check "named the way through"           'grep -q "REMON_ALLOW_UNVERIFIED" <<<"$out"'
+check "installed nothing"               '[ ! -e "$ROOT/target/usr/local/bin/remon-server" ]'
+out=$(run_install systemd REMON_ALLOW_UNVERIFIED=1) || true
+check "override installs anyway"        '[ -x "$ROOT/target/usr/local/bin/remon-server" ]'
+check "said it was unverified"          'grep -q "unverified" <<<"$out"'
+# The checksum-gate section above deliberately corrupted this; the sections
+# below need a release that actually verifies.
+( cd "$ROOT/serve" && sha256sum remon-server-linux-amd64.tar.gz > SHA256SUMS )
+
+# ── a rejected config must not cost the running service ───────────────────
+# The new build validates the existing config *before* anything is stopped or
+# replaced. With the order the other way round, a config the new build refuses
+# leaves a stopped service and a swapped binary behind "nothing was changed".
+printf '\n\033[1mupgrade safety\033[0m\n'
+run_install systemd >/dev/null || true
+echo "sentinel" >> "$ROOT/target/usr/local/bin/remon-server"
+: > "$ROOT/state/init.log"
+touch "$ROOT/state/reject-config"
+out=$(rerun_install) && rc=0 || rc=$?
+check "refused the bad config"          '[ "${rc:-0}" -ne 0 ]'
+check "left the service running"        '[ -f "$ROOT/state/running" ]'
+check "never stopped it"                '! grep -q "systemctl stop" "$ROOT/state/init.log"'
+check "did not swap the binary"         'grep -q sentinel "$ROOT/target/usr/local/bin/remon-server"'
+rm -f "$ROOT/state/reject-config"
+
+# ── REMON_NO_SERVICE must not leave a running agent stopped ───────────────
+# "Skip the service setup" is not "switch off the monitoring that is running".
+printf '\n\033[1mREMON_NO_SERVICE\033[0m\n'
+run_install systemd >/dev/null || true
+: > "$ROOT/state/init.log"
+out=$(rerun_install REMON_NO_SERVICE=1) && rc=0 || rc=$?
+check "succeeded"                       '[ "${rc:-0}" -eq 0 ]'
+check "skipped the service setup"       'grep -q "Service setup skipped" <<<"$out"'
+check "put the service back"            '[ -f "$ROOT/state/running" ]'
+check "started it again"                'grep -q "systemctl start" "$ROOT/state/init.log"'
 
 # ── a tarball from before the unit files shipped ──────────────────────────
 # Existing releases carry only the binary, so the built-in fallbacks are the

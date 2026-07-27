@@ -19,6 +19,7 @@
 #   REMON_CONFIG_DIR=/etc/remon
 #   REMON_DATA_DIR=/var/lib/remon
 #   REMON_NO_SERVICE=1         install the binary only, skip the service
+#   REMON_ALLOW_UNVERIFIED=1   install even when the checksum cannot be checked
 #
 # The config and data variables are the same ones the server itself reads, so
 # a layout chosen here is the layout it will use when started by hand too.
@@ -144,6 +145,16 @@ step "Downloading remon-server $VERSION ($PLATFORM)"
 fetch "$BASE_URL/$ARCHIVE" "$TMP/$ARCHIVE" \
     || die "download failed — does $VERSION have a $PLATFORM build?"
 
+# The checksum is the only thing tying these bytes to the tag that was asked
+# for, and what runs afterwards runs as root — so being unable to check is a
+# stop, not a note. Releases that predate the current pipeline publish no
+# SHA256SUMS, hence a deliberate way through rather than no way at all.
+unverified() { # unverified <reason>
+    [ -n "${REMON_ALLOW_UNVERIFIED:-}" ] \
+        || die "$1; refusing to install unverified (set REMON_ALLOW_UNVERIFIED=1 to override)"
+    warn "$1; installing unverified because REMON_ALLOW_UNVERIFIED is set"
+}
+
 if fetch "$BASE_URL/SHA256SUMS" "$TMP/SHA256SUMS" 2>/dev/null; then
     if command -v sha256sum >/dev/null 2>&1; then
         step "Verifying checksum"
@@ -152,48 +163,19 @@ if fetch "$BASE_URL/SHA256SUMS" "$TMP/SHA256SUMS" 2>/dev/null; then
         actual=$(sha256sum "$TMP/$ARCHIVE" | awk '{print $1}')
         [ "$expected" = "$actual" ] || die "checksum mismatch — refusing to install"
     else
-        warn "sha256sum not found; skipping checksum verification"
+        unverified "sha256sum is not installed"
     fi
 else
-    warn "no SHA256SUMS published for $VERSION; skipping checksum verification"
+    unverified "no SHA256SUMS published for $VERSION"
 fi
 
 step "Unpacking"
 tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
 [ -f "$TMP/remon-server" ] || die "archive did not contain a remon-server binary"
+# Run from the scratch directory below, before it is installed anywhere.
+chmod 0755 "$TMP/remon-server"
 
-# ── stop, install, restart ────────────────────────────────────────────────
-
-# INIT is "systemd", "openrc" or "" — the same two backends the server itself
-# drives through its service endpoints.
-INIT=""
-if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
-    INIT=systemd
-elif command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
-    INIT=openrc
-fi
-
-was_running=0
-case "$INIT" in
-    systemd)
-        if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-            was_running=1
-            step "Stopping $SERVICE_NAME for upgrade"
-            systemctl stop "$SERVICE_NAME"
-        fi
-        ;;
-    openrc)
-        if rc-service --quiet "$SERVICE_NAME" status >/dev/null 2>&1; then
-            was_running=1
-            step "Stopping $SERVICE_NAME for upgrade"
-            rc-service "$SERVICE_NAME" stop >/dev/null
-        fi
-        ;;
-esac
-
-step "Installing to $BIN_DIR/remon-server"
-install -d -m 0755 "$BIN_DIR"
-install -m 0755 "$TMP/remon-server" "$BIN_DIR/remon-server"
+# ── configuration ─────────────────────────────────────────────────────────
 
 install -d -m 0755 "$CONFIG_DIR"
 install -d -m 0700 "$DATA_DIR"
@@ -233,13 +215,58 @@ else
     say "  ${DIM}kept existing $CONFIG_DIR/config.toml${RESET}"
 fi
 
+# Checked with the build about to be installed, and before the running service
+# is stopped. A config this build rejects then leaves the existing install
+# untouched and still serving, instead of stopped and already overwritten.
 step "Validating configuration"
-"$BIN_DIR/remon-server" --config-dir "$CONFIG_DIR" --data-dir "$DATA_DIR" config check \
-    || die "configuration did not validate; nothing was enabled"
+"$TMP/remon-server" --config-dir "$CONFIG_DIR" --data-dir "$DATA_DIR" config check \
+    || die "configuration did not validate; nothing was changed"
+
+# ── stop, install, restart ────────────────────────────────────────────────
+
+# INIT is "systemd", "openrc" or "" — the same two backends the server itself
+# drives through its service endpoints.
+INIT=""
+if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+    INIT=systemd
+elif command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
+    INIT=openrc
+fi
+
+was_running=0
+case "$INIT" in
+    systemd)
+        if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+            was_running=1
+            step "Stopping $SERVICE_NAME for upgrade"
+            systemctl stop "$SERVICE_NAME"
+        fi
+        ;;
+    openrc)
+        if rc-service --quiet "$SERVICE_NAME" status >/dev/null 2>&1; then
+            was_running=1
+            step "Stopping $SERVICE_NAME for upgrade"
+            rc-service "$SERVICE_NAME" stop >/dev/null
+        fi
+        ;;
+esac
+
+step "Installing to $BIN_DIR/remon-server"
+install -d -m 0755 "$BIN_DIR"
+install -m 0755 "$TMP/remon-server" "$BIN_DIR/remon-server"
 
 # ── service ───────────────────────────────────────────────────────────────
 
 if [ -n "${REMON_NO_SERVICE:-}" ]; then
+    # Skipping service *setup* is not a request to leave the host unmonitored.
+    # Whatever was running when this started gets put back on the new binary.
+    if [ "$was_running" -eq 1 ]; then
+        step "Restarting $SERVICE_NAME"
+        case "$INIT" in
+            systemd) systemctl start "$SERVICE_NAME" ;;
+            openrc)  rc-service "$SERVICE_NAME" start >/dev/null ;;
+        esac
+    fi
     say ""
     say "${GREEN}Installed.${RESET} Service setup skipped (REMON_NO_SERVICE)."
     say "Run it with: ${BOLD}remon-server --config-dir $CONFIG_DIR --data-dir $DATA_DIR${RESET}"
