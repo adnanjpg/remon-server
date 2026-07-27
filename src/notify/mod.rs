@@ -39,8 +39,18 @@ impl NotificationManager {
         credentials: NotificationsConfig,
         vapid: Arc<VapidKeyPair>,
     ) -> anyhow::Result<Arc<Self>> {
+        // No redirect following. `check_url` vets the URL we were *configured*
+        // with, but reqwest's default policy follows up to 10 hops and those
+        // hops are never re-checked — so an allowed host answering `302
+        // Location: http://169.254.169.254/…` walks the request straight into
+        // the link-local range the policy exists to block. The response body of
+        // a non-2xx reply is logged at `warn!`, which the default
+        // `log_insertion_level` persists into the `logs` table, so a followed
+        // redirect is readable afterwards as well. Channels that legitimately
+        // need a redirect should be configured with the final URL.
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::none())
             .build()?;
 
         let manager = Arc::new(Self {
