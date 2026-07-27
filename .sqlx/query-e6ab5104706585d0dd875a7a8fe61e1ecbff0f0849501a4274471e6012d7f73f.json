@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT\n                 COALESCE(SUM(state = 'pending'), 0) as \"pending!: i64\",\n                 COALESCE(SUM(state = 'firing'), 0) as \"firing!: i64\"\n               FROM alert_state",
+  "query": "SELECT\n                 COALESCE(SUM(s.state = 'pending'), 0) as \"pending!: i64\",\n                 COALESCE(SUM(s.state = 'firing'), 0) as \"firing!: i64\"\n               FROM alert_state s\n               INNER JOIN alert_rules r ON r.id = s.rule_id\n              WHERE r.enabled = 1",
   "describe": {
     "columns": [
       {
@@ -24,5 +24,5 @@
       false
     ]
   },
-  "hash": "50d043c8aa0c7b883a76d4c766d59c03a0bcc33c57e1ab3e76128795c4bd62e6"
+  "hash": "e6ab5104706585d0dd875a7a8fe61e1ecbff0f0849501a4274471e6012d7f73f"
 }

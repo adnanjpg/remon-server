@@ -248,3 +248,76 @@ async fn evaluator_persists_selectively() {
     );
     assert_eq!(rows[0].state, AlertLifecycle::Pending);
 }
+
+/// Disabling a rule stops the evaluator touching its `alert_state` row but does
+/// not clear it, so both the active-state list and the `/summary` badge have to
+/// filter on `enabled`. Without that, a rule that happened to be firing when it
+/// was switched off keeps a red badge on every dashboard, and nothing short of
+/// deleting the rule can clear it.
+#[tokio::test]
+async fn disabling_a_firing_rule_clears_it_from_state_and_summary() {
+    use crate::storage::repositories::AlertRepository;
+
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+
+    let (st, _) = app
+        .request(
+            "POST",
+            "/alerts",
+            Some(&token),
+            Some(serde_json::json!({
+                "name": "cpu-critical",
+                "expression": "cpu.usage_percent > 90",
+                "severity": "crit"
+            })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::CREATED);
+
+    let repo = AlertRepository::new(app.state.db.clone());
+    let rule = repo.list_enabled().await.unwrap().pop().expect("rule");
+
+    // Firing, exactly as the evaluator would have left it.
+    sqlx::query(
+        "INSERT INTO alert_state (rule_id, label_set, state, state_since, last_value, last_eval_at)
+         VALUES (?, '{}', 'firing', unixepoch(), 95.0, unixepoch())",
+    )
+    .bind(rule.id)
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+
+    let (st, body) = app
+        .request("GET", "/alerts/state", Some(&token), None)
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(body["states"].as_array().expect("states").len(), 1);
+    let (_, body) = app.request("GET", "/summary", Some(&token), None).await;
+    assert_eq!(body["alerts_firing"], 1);
+
+    let (st, _) = app
+        .request(
+            "PUT",
+            &format!("/alerts/{}", rule.id),
+            Some(&token),
+            Some(serde_json::json!({"enabled": false})),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(
+        repo.list_state_for_rule(rule.id).await.unwrap().len(),
+        1,
+        "the stale row is expected to survive — the read filter is what hides it"
+    );
+
+    let (_, body) = app
+        .request("GET", "/alerts/state", Some(&token), None)
+        .await;
+    assert!(
+        body["states"].as_array().expect("states").is_empty(),
+        "a disabled rule must not appear in active state, got: {body}"
+    );
+    let (_, body) = app.request("GET", "/summary", Some(&token), None).await;
+    assert_eq!(body["alerts_firing"], 0, "badge must clear, got: {body}");
+}

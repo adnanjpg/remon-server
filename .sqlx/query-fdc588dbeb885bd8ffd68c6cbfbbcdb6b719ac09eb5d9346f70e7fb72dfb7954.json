@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT s.rule_id as \"rule_id!\", s.label_set as \"label_set!\",\n                    s.state as \"state!\", s.state_since as \"state_since!\",\n                    s.last_value, s.last_eval_at as \"last_eval_at!\", s.last_notified_at,\n                    r.name as \"name!\", r.severity as \"severity!\"\n               FROM alert_state s\n               INNER JOIN alert_rules r ON r.id = s.rule_id\n              WHERE s.state IN ('pending','firing')\n              ORDER BY s.state_since ASC",
+  "query": "SELECT s.rule_id as \"rule_id!\", s.label_set as \"label_set!\",\n                    s.state as \"state!\", s.state_since as \"state_since!\",\n                    s.last_value, s.last_eval_at as \"last_eval_at!\", s.last_notified_at,\n                    r.name as \"name!\", r.severity as \"severity!\"\n               FROM alert_state s\n               INNER JOIN alert_rules r ON r.id = s.rule_id\n              WHERE s.state IN ('pending','firing')\n                AND r.enabled = 1\n              ORDER BY s.state_since ASC",
   "describe": {
     "columns": [
       {
@@ -107,7 +107,7 @@
       "Right": 0
     },
     "nullable": [
-      null,
+      false,
       false,
       false,
       false,
@@ -118,5 +118,5 @@
       false
     ]
   },
-  "hash": "0c15cf6ca7ad9a28cd19c7c1108397575d80544218752f48299409a5859642f3"
+  "hash": "fdc588dbeb885bd8ffd68c6cbfbbcdb6b719ac09eb5d9346f70e7fb72dfb7954"
 }

@@ -81,7 +81,7 @@ pub async fn get_smart(
 
 /// One-call host overview for multi-server clients. Reads the latest
 /// collector tick from the in-memory cache (no DB round trip for gauges)
-/// plus a single COUNT over `alert_state`.
+/// plus a single COUNT over `alert_state` joined to its rules.
 pub async fn get_summary(
     _claims: Claims,
     State(state): State<Arc<AppState>>,

@@ -254,6 +254,8 @@ impl AlertRepository {
             .collect())
     }
 
+    /// Active (`pending`/`firing`) state rows for *enabled* rules, oldest
+    /// first. See `count_active_state` for why disabled rules are excluded.
     pub async fn list_active_state(
         &self,
     ) -> AppResult<Vec<(AlertStateRow, String, AlertSeverity)>> {
@@ -266,6 +268,7 @@ impl AlertRepository {
                FROM alert_state s
                INNER JOIN alert_rules r ON r.id = s.rule_id
               WHERE s.state IN ('pending','firing')
+                AND r.enabled = 1
               ORDER BY s.state_since ASC"#
         )
         .fetch_all(&self.pool)
@@ -279,12 +282,20 @@ impl AlertRepository {
     /// Count active state rows per lifecycle — `(pending, firing)`. Backs
     /// the lightweight `GET /summary` endpoint so a fleet view can show an
     /// alert badge without pulling the full active-state list.
+    ///
+    /// Joined and filtered on `enabled` to stay consistent with
+    /// `list_active_state`: disabling a rule stops the evaluator from touching
+    /// its `alert_state` row but does not clear it, so a rule disabled while
+    /// firing would otherwise keep its count in the badge with nothing in the
+    /// UI able to clear it.
     pub async fn count_active_state(&self) -> AppResult<(u32, u32)> {
         let row = sqlx::query!(
             r#"SELECT
-                 COALESCE(SUM(state = 'pending'), 0) as "pending!: i64",
-                 COALESCE(SUM(state = 'firing'), 0) as "firing!: i64"
-               FROM alert_state"#
+                 COALESCE(SUM(s.state = 'pending'), 0) as "pending!: i64",
+                 COALESCE(SUM(s.state = 'firing'), 0) as "firing!: i64"
+               FROM alert_state s
+               INNER JOIN alert_rules r ON r.id = s.rule_id
+              WHERE r.enabled = 1"#
         )
         .fetch_one(&self.pool)
         .await?;
