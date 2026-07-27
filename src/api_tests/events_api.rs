@@ -169,6 +169,110 @@ async fn events_filter_by_kind_and_source() {
     assert_eq!(body["count"], 1, "got: {body}");
 }
 
+/// Every store caps at `limit` rows, so a filter applied to the merged result
+/// instead of in SQL returns an empty page as soon as the unwanted kind fills
+/// the window on its own — while matching events sit just outside it. The
+/// resolved rows are seeded last so they are the newest and would take the
+/// whole limit for themselves.
+#[tokio::test]
+async fn kind_filter_survives_a_window_full_of_the_other_kind() {
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let rule_id = seed_rule(&app, "cpu crit").await;
+    let repo = AlertRepository::new(app.state.db.clone());
+
+    for _ in 0..3 {
+        repo.insert_event(
+            rule_id,
+            "{}",
+            AlertEventType::Fired,
+            AlertSeverity::Crit,
+            Some(93.5),
+            true,
+        )
+        .await
+        .expect("insert fired");
+    }
+    for _ in 0..12 {
+        repo.insert_event(
+            rule_id,
+            "{}",
+            AlertEventType::Resolved,
+            AlertSeverity::Crit,
+            Some(10.0),
+            true,
+        )
+        .await
+        .expect("insert resolved");
+    }
+
+    let (st, body) = app
+        .request(
+            "GET",
+            "/events?kinds=alert_fired&limit=10",
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(
+        body["count"], 3,
+        "the fired rows must survive the cap: {body}"
+    );
+    assert!(
+        body["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["kind"] == "alert_fired"),
+        "got: {body}"
+    );
+}
+
+/// Same shape for the incident projection, where the filter is on the trigger
+/// rather than the kind: `system` means alert-triggered, `operator` everything
+/// else. The manual rows are seeded last so they would fill the window.
+#[tokio::test]
+async fn source_filter_survives_a_window_full_of_the_other_source() {
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+
+    for (trigger, count) in [("alert", 3), ("manual", 12)] {
+        for _ in 0..count {
+            sqlx::query(
+                "INSERT INTO incident_snapshots (trigger_kind, category, bundle)
+                 VALUES (?, 'resource', '{}')",
+            )
+            .bind(trigger)
+            .execute(&app.state.db)
+            .await
+            .expect("insert incident");
+        }
+    }
+
+    let (st, body) = app
+        .request(
+            "GET",
+            "/events?kinds=incident_captured&sources=system&limit=10",
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(
+        body["count"], 3,
+        "the alert-triggered rows must survive: {body}"
+    );
+    assert!(
+        body["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["source"] == "system" && e["details"]["trigger"] == "alert"),
+        "got: {body}"
+    );
+}
+
 #[tokio::test]
 async fn events_validate_range_and_source() {
     let app = TestApp::spawn().await;

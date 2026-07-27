@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT e.occurred_at as \"occurred_at!\", e.event_type as \"event_type!\",\n                      e.severity as \"severity!\", e.rule_id as \"rule_id!\",\n                      r.name as \"rule_name!\", e.label_set as \"label_set!\",\n                      e.metric_value\n               FROM alert_events e\n               JOIN alert_rules r ON r.id = e.rule_id\n              WHERE e.occurred_at >= ? AND e.occurred_at <= ?\n              ORDER BY e.occurred_at DESC, e.id DESC\n              LIMIT ?",
+  "query": "SELECT e.occurred_at as \"occurred_at!\", e.event_type as \"event_type!\",\n                      e.severity as \"severity!\", e.rule_id as \"rule_id!\",\n                      r.name as \"rule_name!\", e.label_set as \"label_set!\",\n                      e.metric_value\n               FROM alert_events e\n               JOIN alert_rules r ON r.id = e.rule_id\n              WHERE e.occurred_at >= ?1 AND e.occurred_at <= ?2\n                AND (?3 IS NULL OR instr(?3, ',' || e.event_type || ',') > 0)\n              ORDER BY e.occurred_at DESC, e.id DESC\n              LIMIT ?4",
   "describe": {
     "columns": [
       {
@@ -82,7 +82,7 @@
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 4
     },
     "nullable": [
       false,
@@ -94,5 +94,5 @@
       true
     ]
   },
-  "hash": "5eaa0abf2bd2e2db565e76365a513161b6379cefa4231eba26062cdd5c1bb992"
+  "hash": "4b1f0b5e7ca16a9657e20ce8d308b6fe3cc3b9bed11f637c0db1c5cea6f12551"
 }

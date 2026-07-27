@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id as \"id!\", created_at as \"created_at!\",\n                      trigger_kind as \"trigger_kind!\", category as \"category!\",\n                      rule_name, label_set, metric_value, reason,\n                      (after_bundle IS NOT NULL) as \"has_after!: bool\"\n               FROM incident_snapshots\n              WHERE created_at >= ? AND created_at <= ?\n              ORDER BY created_at DESC, id DESC\n              LIMIT ?",
+  "query": "SELECT id as \"id!\", created_at as \"created_at!\",\n                      trigger_kind as \"trigger_kind!\", category as \"category!\",\n                      rule_name, label_set, metric_value, reason,\n                      (after_bundle IS NOT NULL) as \"has_after!: bool\"\n               FROM incident_snapshots\n              WHERE created_at >= ?1 AND created_at <= ?2\n                AND (?3 IS NULL\n                     OR (?3 = 1 AND trigger_kind =  'alert')\n                     OR (?3 = 0 AND trigger_kind <> 'alert'))\n              ORDER BY created_at DESC, id DESC\n              LIMIT ?4",
   "describe": {
     "columns": [
       {
@@ -99,7 +99,7 @@
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 4
     },
     "nullable": [
       false,
@@ -113,5 +113,5 @@
       false
     ]
   },
-  "hash": "a7dbba6f33ff5cc40acddd490ab04d5a41566026acc36faeba82ee9b3ed42d39"
+  "hash": "b983fcf202e9d5a7657d7be756bfafcb2864b4bec4bca061a375682e049d0b52"
 }

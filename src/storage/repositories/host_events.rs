@@ -7,6 +7,7 @@
 
 use sqlx::SqlitePool;
 
+use super::wrap_csv;
 use crate::error::AppResult;
 
 /// A new ledger entry. `created_at = None` stamps the row with "now";
@@ -124,9 +125,4 @@ impl HostEventRepository {
             })
             .collect())
     }
-}
-
-/// `["a","b"]` → `",a,b,"` — the shape the `instr` membership test expects.
-fn wrap_csv(items: &[String]) -> String {
-    format!(",{},", items.join(","))
 }

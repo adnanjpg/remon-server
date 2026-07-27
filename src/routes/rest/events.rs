@@ -64,7 +64,13 @@ pub async fn list_events(
 
     let mut events: Vec<EventDto> = Vec::new();
 
-    // ── host_events ledger (filters push down into SQL) ──
+    // Every store below applies `kinds`/`sources` in its own SQL. Filtering
+    // the merged result instead would be wrong rather than merely slower: each
+    // store returns at most `limit` rows, so a window in which the unwanted
+    // kind alone exceeds the limit yields an empty page while matching events
+    // sit just outside it.
+
+    // ── host_events ledger ──
     let ledger = HostEventRepository::new(state.db.clone())
         .list_range(start, end, kinds.as_deref(), sources.as_deref(), limit)
         .await?;
@@ -89,10 +95,23 @@ pub async fn list_events(
 
     // ── alert fire/resolve (source: system) ──
     if source_wanted("system") && ALERT_KINDS.iter().any(|k| kind_wanted(k)) {
+        // Stored as `fired`/`resolved` and projected to `alert_fired`/
+        // `alert_resolved`, so a `kinds` filter has to be translated back into
+        // the stored vocabulary before it can be pushed down.
+        let event_types: Option<Vec<String>> = kinds.as_ref().map(|_| {
+            let mut wanted = Vec::new();
+            if kind_wanted("alert_fired") {
+                wanted.push("fired".to_string());
+            }
+            if kind_wanted("alert_resolved") {
+                wanted.push("resolved".to_string());
+            }
+            wanted
+        });
         let rows = AlertRepository::new(state.db.clone())
-            .events_in_range(start, end, limit)
+            .events_in_range(start, end, event_types.as_deref(), limit)
             .await?;
-        events.extend(rows.into_iter().filter_map(|e| {
+        events.extend(rows.into_iter().map(|e| {
             let (kind, severity, verb) = match e.event_type.as_str() {
                 "fired" => (
                     "alert_fired",
@@ -107,15 +126,12 @@ pub async fn list_events(
                 ),
                 _ => ("alert_resolved", "info", "resolved"),
             };
-            if !kind_wanted(kind) {
-                return None;
-            }
             let labels = if e.label_set != "{}" {
                 format!(" {}", e.label_set)
             } else {
                 String::new()
             };
-            Some(EventDto {
+            EventDto {
                 ts: e.occurred_at,
                 source: "system".to_string(),
                 kind: kind.to_string(),
@@ -131,30 +147,35 @@ pub async fn list_events(
                     "label_set": e.label_set,
                     "metric_value": e.metric_value,
                 })),
-            })
+            }
         }));
     }
 
     // ── incident captures (source follows the trigger) ──
     if kind_wanted(INCIDENT_KIND) && (source_wanted("system") || source_wanted("operator")) {
+        // Alert-triggered captures read as `system`, everything else as
+        // `operator`, so a `sources` filter is a restriction on the trigger.
+        // The guard above guarantees at least one of the two is wanted.
+        let alert_triggered = if source_wanted("system") && source_wanted("operator") {
+            None
+        } else {
+            Some(source_wanted("system"))
+        };
         let rows = IncidentRepository::new(state.db.clone())
-            .list_range(start, end, limit)
+            .list_range(start, end, alert_triggered, limit)
             .await?;
-        events.extend(rows.into_iter().filter_map(|i| {
+        events.extend(rows.into_iter().map(|i| {
             let source = if i.trigger_kind == "alert" {
                 "system"
             } else {
                 "operator"
             };
-            if !source_wanted(source) {
-                return None;
-            }
             let subject = i
                 .rule_name
                 .as_deref()
                 .or(i.reason.as_deref())
                 .unwrap_or("host snapshot");
-            Some(EventDto {
+            EventDto {
                 ts: i.created_at,
                 source: source.to_string(),
                 kind: INCIDENT_KIND.to_string(),
@@ -170,7 +191,7 @@ pub async fn list_events(
                     "category": i.category,
                     "has_after": i.has_after,
                 })),
-            })
+            }
         }));
     }
 

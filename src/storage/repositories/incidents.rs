@@ -142,10 +142,19 @@ impl IncidentRepository {
 
     /// Range slice for the `GET /events` union timeline — summary rows only,
     /// newest first; the bundle stays behind the incident detail endpoint.
+    /// Snapshots in a range, newest first. `alert_triggered` restricts to
+    /// alert-driven (`Some(true)`) or everything else (`Some(false)`), which is
+    /// how `/events` splits these between the `system` and `operator` sources.
+    /// Expressed as `= 'alert'` / `<> 'alert'` rather than a list of the other
+    /// kinds, so a trigger kind added later keeps landing on the same side of
+    /// the split as the projection puts it. Applied here rather than by the
+    /// caller: filtering after `LIMIT` returns nothing at all once the unwanted
+    /// side fills the window on its own.
     pub async fn list_range(
         &self,
         start: i64,
         end: i64,
+        alert_triggered: Option<bool>,
         limit: u32,
     ) -> AppResult<Vec<IncidentSummaryRow>> {
         let rows = sqlx::query!(
@@ -154,11 +163,15 @@ impl IncidentRepository {
                       rule_name, label_set, metric_value, reason,
                       (after_bundle IS NOT NULL) as "has_after!: bool"
                FROM incident_snapshots
-              WHERE created_at >= ? AND created_at <= ?
+              WHERE created_at >= ?1 AND created_at <= ?2
+                AND (?3 IS NULL
+                     OR (?3 = 1 AND trigger_kind =  'alert')
+                     OR (?3 = 0 AND trigger_kind <> 'alert'))
               ORDER BY created_at DESC, id DESC
-              LIMIT ?"#,
+              LIMIT ?4"#,
             start,
             end,
+            alert_triggered,
             limit,
         )
         .fetch_all(&self.pool)

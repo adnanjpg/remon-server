@@ -35,3 +35,11 @@ pub use retention::RetentionRepository;
 pub use rollup_state::RollupStateRepository;
 pub use runtime_state::RuntimeStateRepository;
 pub use smart::{SmartDeviceRow, SmartRepository};
+
+/// `["a","b"]` → `",a,b,"` — the shape the `instr(csv, ',' || col || ',')`
+/// membership test expects. One bound parameter instead of an `IN` list built
+/// by string concatenation, so the query stays a checked `query!` macro and no
+/// caller-supplied text ever reaches the SQL text itself.
+pub(crate) fn wrap_csv(items: &[String]) -> String {
+    format!(",{},", items.join(","))
+}

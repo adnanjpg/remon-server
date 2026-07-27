@@ -9,6 +9,7 @@
 
 use sqlx::SqlitePool;
 
+use super::wrap_csv;
 use crate::error::AppResult;
 use crate::models::alert::{
     AlertEvent, AlertEventType, AlertLifecycle, AlertRule, AlertSeverity, AlertStateRow,
@@ -361,12 +362,18 @@ impl AlertRepository {
     /// joined with their rule's name and newest first. Inner join is safe —
     /// `alert_events.rule_id` cascades on rule deletion, so an event's rule
     /// always exists.
+    /// Fire/resolve rows in a range, newest first. `event_types` restricts to
+    /// `fired` / `resolved` and must be applied here rather than by the caller:
+    /// filtering after `LIMIT` returns nothing at all once the unwanted type
+    /// fills the window on its own.
     pub async fn events_in_range(
         &self,
         start: i64,
         end: i64,
+        event_types: Option<&[String]>,
         limit: u32,
     ) -> AppResult<Vec<AlertEventWithRule>> {
+        let types_csv = event_types.map(wrap_csv);
         let rows = sqlx::query!(
             r#"SELECT e.occurred_at as "occurred_at!", e.event_type as "event_type!",
                       e.severity as "severity!", e.rule_id as "rule_id!",
@@ -374,11 +381,13 @@ impl AlertRepository {
                       e.metric_value
                FROM alert_events e
                JOIN alert_rules r ON r.id = e.rule_id
-              WHERE e.occurred_at >= ? AND e.occurred_at <= ?
+              WHERE e.occurred_at >= ?1 AND e.occurred_at <= ?2
+                AND (?3 IS NULL OR instr(?3, ',' || e.event_type || ',') > 0)
               ORDER BY e.occurred_at DESC, e.id DESC
-              LIMIT ?"#,
+              LIMIT ?4"#,
             start,
             end,
+            types_csv,
             limit,
         )
         .fetch_all(&self.pool)
