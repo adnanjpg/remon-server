@@ -362,6 +362,19 @@ impl AlertRepository {
     /// joined with their rule's name and newest first. Inner join is safe —
     /// `alert_events.rule_id` cascades on rule deletion, so an event's rule
     /// always exists.
+    /// Raise `notified` on an event whose notification a channel accepted.
+    ///
+    /// Written separately from the insert because delivery is asynchronous:
+    /// the row exists the moment the transition does, and only turns
+    /// `notified` once something actually took it. Never lowered — a row that
+    /// was delivered stays delivered.
+    pub async fn mark_event_notified(&self, id: i64) -> AppResult<()> {
+        sqlx::query!("UPDATE alert_events SET notified = 1 WHERE id = ?", id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Fire/resolve rows in a range, newest first. `event_types` restricts to
     /// `fired` / `resolved` and must be applied here rather than by the caller:
     /// filtering after `LIMIT` returns nothing at all once the unwanted type

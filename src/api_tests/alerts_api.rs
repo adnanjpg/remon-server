@@ -249,6 +249,63 @@ async fn evaluator_persists_selectively() {
     assert_eq!(rows[0].state, AlertLifecycle::Pending);
 }
 
+/// Delivery is asynchronous, so an event row is written claiming nothing and
+/// the flag is raised only once a channel has accepted the notification.
+/// Under-claiming is the safe direction for this field: an operator reads it
+/// while asking "was anyone told about this?", and every failure — a dropped
+/// queue entry, a dead channel, the process dying mid-flight — leaves it false.
+#[tokio::test]
+async fn notified_starts_false_and_is_raised_by_receipt() {
+    use crate::models::alert::{AlertEventType, AlertSeverity};
+    use crate::storage::repositories::AlertRepository;
+
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+
+    let (st, body) = app
+        .request(
+            "POST",
+            "/alerts",
+            Some(&token),
+            Some(serde_json::json!({
+                "name": "cpu crit",
+                "expression": "cpu.usage_percent > 90",
+                "severity": "crit"
+            })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::CREATED);
+    let rule_id = body["id"].as_i64().expect("rule id");
+    let repo = AlertRepository::new(app.state.db.clone());
+
+    let event_id = repo
+        .insert_event(
+            rule_id,
+            "{}",
+            AlertEventType::Fired,
+            AlertSeverity::Crit,
+            Some(93.5),
+            false,
+        )
+        .await
+        .expect("insert event");
+
+    let (st, body) = app
+        .request("GET", "/alerts/events", Some(&token), None)
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(body["events"][0]["notified"], false, "got: {body}");
+
+    repo.mark_event_notified(event_id)
+        .await
+        .expect("mark notified");
+
+    let (_, body) = app
+        .request("GET", "/alerts/events", Some(&token), None)
+        .await;
+    assert_eq!(body["events"][0]["notified"], true, "got: {body}");
+}
+
 /// Disabling a rule stops the evaluator touching its `alert_state` row but does
 /// not clear it, so both the active-state list and the `/summary` badge have to
 /// filter on `enabled`. Without that, a rule that happened to be firing when it

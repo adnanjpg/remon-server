@@ -478,10 +478,31 @@ async fn evaluate_rule(
         }
 
         if let Some(et) = event_type {
-            let notified = if notify_intent {
-                match et {
+            // The row is written first and claims nothing: delivery is
+            // asynchronous now, so `notified` is raised later by the worker
+            // holding the receipt. A ledger failure must not swallow the page,
+            // so the notification still goes out — just without a receipt.
+            let receipt = match repo
+                .insert_event(
+                    rule.id,
+                    &sample.label_set,
+                    et,
+                    rule.severity,
+                    Some(sample.value),
+                    false,
+                )
+                .await
+            {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    warn!("alert_events insert failed: {:?}", e);
+                    None
+                }
+            };
+            if notify_intent {
+                let n = match et {
                     AlertEventType::Fired => {
-                        fire_notify(
+                        fire_notification(
                             state,
                             rule,
                             &sample.label_set,
@@ -491,7 +512,7 @@ async fn evaluate_rule(
                         .await
                     }
                     AlertEventType::Resolved => {
-                        resolve_notify(
+                        resolve_notification(
                             state,
                             rule,
                             &sample.label_set,
@@ -500,22 +521,8 @@ async fn evaluate_rule(
                         )
                         .await
                     }
-                }
-            } else {
-                false
-            };
-            if let Err(e) = repo
-                .insert_event(
-                    rule.id,
-                    &sample.label_set,
-                    et,
-                    rule.severity,
-                    Some(sample.value),
-                    notified,
-                )
-                .await
-            {
-                warn!("alert_events insert failed: {:?}", e);
+                };
+                state.notify_queue.dispatch(n, receipt);
             }
         }
     }
@@ -536,21 +543,27 @@ async fn evaluate_rule(
         match repo.delete_state_if(rule.id, &label_set, prior.state).await {
             Ok(true) if prior.state == AlertLifecycle::Firing => {
                 let value = prior.last_value.unwrap_or(0.0);
-                let notified =
-                    resolve_notify(state, rule, &label_set, value, Some("target removed")).await;
-                if let Err(e) = repo
+                let receipt = match repo
                     .insert_event(
                         rule.id,
                         &label_set,
                         AlertEventType::Resolved,
                         rule.severity,
                         prior.last_value,
-                        notified,
+                        false,
                     )
                     .await
                 {
-                    warn!("alert_events insert failed: {:?}", e);
-                }
+                    Ok(id) => Some(id),
+                    Err(e) => {
+                        warn!("alert_events insert failed: {:?}", e);
+                        None
+                    }
+                };
+                let n =
+                    resolve_notification(state, rule, &label_set, value, Some("target removed"))
+                        .await;
+                state.notify_queue.dispatch(n, receipt);
                 live.remove(&label_set);
             }
             Ok(_) => {
@@ -683,36 +696,34 @@ impl Step {
 
 // ===== Notification helpers =====
 
-async fn fire_notify(
+async fn fire_notification(
     state: &AppState,
     rule: &AlertRule,
     label_set: &str,
     value: f64,
     meta: Option<&str>,
-) -> bool {
-    let n = Notification {
+) -> Notification {
+    Notification {
         title: titled(state, &rule.name).await,
         body: format_fire_body(rule, label_set, value, meta),
         severity: alert_severity(rule.severity),
         event: NotificationEvent::Fired,
-    };
-    state.notify.fanout(&n).await > 0
+    }
 }
 
-async fn resolve_notify(
+async fn resolve_notification(
     state: &AppState,
     rule: &AlertRule,
     label_set: &str,
     value: f64,
     meta: Option<&str>,
-) -> bool {
-    let n = Notification {
+) -> Notification {
+    Notification {
         title: titled(state, &rule.name).await,
         body: format_resolve_body(rule, label_set, value, meta),
         severity: alert_severity(rule.severity),
         event: NotificationEvent::Resolved,
-    };
-    state.notify.fanout(&n).await > 0
+    }
 }
 
 /// `[server_name] rule name` — lets one Telegram chat / ntfy topic receiving

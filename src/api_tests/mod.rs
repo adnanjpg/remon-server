@@ -116,6 +116,8 @@ impl TestApp {
         .await
         .expect("notification manager");
 
+        let (notify_queue, notify_rx) = crate::notify::worker::channel();
+
         let state = Arc::new(AppState::new(
             db.pool().clone(),
             auth_config,
@@ -132,8 +134,19 @@ impl TestApp {
             service_manager,
             probe_registry,
             notify,
+            notify_queue,
             vapid,
         ));
+
+        // Started like production: without it, dispatched notifications would
+        // pile up unread and `notified` would never be raised, so a test could
+        // pass against a delivery path that does not run.
+        crate::notify::worker::spawn(
+            notify_rx,
+            Arc::clone(&state.notify),
+            state.db.clone(),
+            state.shutdown.subscribe(),
+        );
 
         // Mirror `build_app`: the assistant lives outside `create_routes`
         // (it gets a longer timeout there), so mount it here too — with the

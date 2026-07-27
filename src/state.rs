@@ -140,6 +140,12 @@ pub struct AppState {
     /// operation via the REST API. Credentials stay in server config.
     pub notify: Arc<NotificationManager>,
 
+    /// Where producers hand notifications for delivery. Sending is
+    /// non-blocking, so an alert transition or a ledger write never waits on a
+    /// relay; one owned task does the fan-out and flushes on shutdown. See
+    /// `notify::worker`.
+    pub notify_queue: crate::notify::NotifyQueue,
+
     /// VAPID keypair for Web Push. Generated on first boot and persisted
     /// in `vapid_keys`. The public half is served to clients via
     /// `GET /push/vapid-public-key`; the private half signs the JWT we
@@ -179,6 +185,7 @@ impl AppState {
         service_manager: Arc<dyn ServiceManager>,
         probe_registry: ProbeRegistry,
         notify: Arc<NotificationManager>,
+        notify_queue: crate::notify::NotifyQueue,
         vapid_keys: Arc<crate::services::webpush::VapidKeyPair>,
     ) -> Self {
         let (stats_tx, _) = broadcast::channel(64);
@@ -213,6 +220,7 @@ impl AppState {
             service_manager,
             probe_registry,
             notify,
+            notify_queue,
             vapid_keys,
             shutdown,
             exit_intent,

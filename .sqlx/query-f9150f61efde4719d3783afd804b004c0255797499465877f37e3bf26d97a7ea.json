@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE alert_events SET notified = 1 WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "f9150f61efde4719d3783afd804b004c0255797499465877f37e3bf26d97a7ea"
+}

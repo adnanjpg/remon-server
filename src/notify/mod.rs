@@ -2,8 +2,10 @@ pub mod channel;
 pub mod channels;
 pub mod types;
 pub mod url_policy;
+pub mod worker;
 
 pub use types::{Notification, NotificationEvent, Severity};
+pub use worker::NotifyQueue;
 
 use std::sync::Arc;
 use std::time::Duration;

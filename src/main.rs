@@ -1,5 +1,5 @@
 use anyhow::Context;
-use log::{error, info};
+use log::{error, info, warn};
 use std::io::IsTerminal;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -269,6 +269,10 @@ async fn run(
     .await
     .context("initialize notification manager")?;
 
+    // Queue first, task after the state exists: the task needs the shutdown
+    // channel `AppState` owns, the producers need the queue handle.
+    let (notify_queue, notify_rx) = notify::worker::channel();
+
     let app_state = Arc::new(state::AppState::new(
         db.pool().clone(),
         config.auth.clone(),
@@ -285,9 +289,17 @@ async fn run(
         service_manager,
         probe_registry,
         notify,
+        notify_queue,
         vapid_keys,
     ));
     info!("app state initialized with broadcast channels and layered config");
+
+    let notify_worker = notify::worker::spawn(
+        notify_rx,
+        Arc::clone(&app_state.notify),
+        app_state.db.clone(),
+        app_state.shutdown.subscribe(),
+    );
 
     services::logging::start_db_writer(log_rx, db.pool().clone());
 
@@ -348,6 +360,14 @@ async fn run(
     .await
     {
         error!("server error: {}", e);
+    }
+
+    // Serving has stopped, so nothing new will be queued; let the delivery
+    // task flush what is. It bounds its own wait, so this cannot hang the
+    // stop. Notifications produced during the drain above — a rule resolving
+    // as the last requests finish — would otherwise die with the process.
+    if let Err(e) = notify_worker.await {
+        warn!("notification worker did not shut down cleanly: {e}");
     }
 
     // Reached only on orderly drain — a crash/kill skips this, which is

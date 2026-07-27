@@ -80,7 +80,10 @@ async fn insert_and_maybe_notify(state: &Arc<AppState>, event: &NewHostEvent) {
         severity: sev,
         event: NotificationEvent::HostEvent,
     };
-    state.notify.fanout(&n).await;
+    // Queued, not awaited: this runs inside the system-event sweep loop, and a
+    // relay taking its full budget would hold up both the remaining events of
+    // this tick and the cursor write that follows them.
+    state.notify_queue.dispatch(n, None);
 }
 
 /// Which host-event kinds page an operator by default, and at what severity.
