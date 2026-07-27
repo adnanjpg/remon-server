@@ -29,9 +29,11 @@
 //! alarming kinds push.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use serde_json::json;
+use tokio::sync::{mpsc, watch};
 
 use crate::notify::{Notification, NotificationEvent, Severity};
 use crate::state::AppState;
@@ -48,14 +50,130 @@ const KEY_SYSEVENT_CURSOR: &str = "sysevent_sweep_cursor";
 /// only a difference beyond this is a real reboot.
 const BOOT_JITTER_SECS: i64 = 120;
 
-/// Fire-and-forget ledger write. Failures are logged, never surfaced —
-/// an audit row must not fail the action it records. Notification-worthy
-/// system events (see [`notify_severity`]) also page the configured channels.
+/// Ledger queue depth. Audit rows are written at human-action rate; the only
+/// producer that can burst is the system-event sweep, whose per-tick cap fits
+/// several times over. A drop here is a hole in the audit trail, so the bound
+/// is set to make one unreachable in practice rather than merely unlikely.
+const LEDGER_CAPACITY: usize = 1024;
+
+/// Total time shutdown will spend flushing the ledger.
+const LEDGER_DRAIN_BUDGET: Duration = Duration::from_secs(5);
+
+/// How long the drain waits for another row before calling it done. The queue
+/// is not closed on shutdown: `/system/shutdown` reports the outcome of
+/// stopping its own unit *while* the drain is running, and that row — the one
+/// hardest to reconstruct afterwards — is exactly the one worth waiting for.
+const LEDGER_DRAIN_QUIET: Duration = Duration::from_millis(200);
+
+/// Producer handle for the ledger. Cheap to clone; lives on `AppState`.
+#[derive(Clone)]
+pub struct LedgerQueue {
+    tx: mpsc::Sender<NewHostEvent>,
+}
+
+impl LedgerQueue {
+    /// Queue a ledger write. Never blocks and never fails the caller — an
+    /// audit row must not be able to fail the action it records.
+    ///
+    /// The timestamp is taken here, not in the writer, so a row says when the
+    /// thing happened rather than when the queue got round to it.
+    pub fn record(&self, mut event: NewHostEvent) {
+        event
+            .created_at
+            .get_or_insert_with(|| chrono::Utc::now().timestamp());
+
+        match self.tx.try_send(event) {
+            Ok(()) => {}
+            // Louder than the notification queue's equivalent: a dropped
+            // notification is a missed page, a dropped row is a missing fact.
+            Err(mpsc::error::TrySendError::Full(ev)) => error!(
+                "ledger queue full ({} deep), dropped a '{}' row",
+                LEDGER_CAPACITY, ev.kind
+            ),
+            Err(mpsc::error::TrySendError::Closed(ev)) => {
+                debug!("ledger queue closed, dropped a '{}' row", ev.kind)
+            }
+        }
+    }
+}
+
+/// Create the ledger queue and its receiving end. Split from
+/// [`spawn_ledger_writer`] for the same reason the notification queue is: the
+/// handle belongs to `AppState`, the task needs what `AppState` owns.
+pub fn ledger_channel() -> (LedgerQueue, mpsc::Receiver<NewHostEvent>) {
+    let (tx, rx) = mpsc::channel(LEDGER_CAPACITY);
+    (LedgerQueue { tx }, rx)
+}
+
+/// Start the ledger writer.
+///
+/// Await the returned handle after serving stops and **before** the
+/// notification worker's: rows written during the flush can page, and their
+/// notifications have to reach a queue that is still being served.
+pub fn spawn_ledger_writer(
+    rx: mpsc::Receiver<NewHostEvent>,
+    state: Arc<AppState>,
+) -> tokio::task::JoinHandle<()> {
+    let shutdown = state.shutdown.subscribe();
+    tokio::spawn(ledger_writer(rx, state, shutdown))
+}
+
+async fn ledger_writer(
+    mut rx: mpsc::Receiver<NewHostEvent>,
+    state: Arc<AppState>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    loop {
+        let event = tokio::select! {
+            biased;
+            _ = shutdown.changed() => break,
+            ev = rx.recv() => match ev {
+                Some(ev) => ev,
+                // Every producer is gone; nothing more can arrive.
+                None => return,
+            },
+        };
+        write_one(&state, event).await;
+    }
+
+    let flush = async {
+        let mut written = 0usize;
+        // Quiet-period rather than `close()`, so a producer still finishing its
+        // work during shutdown can still be recorded.
+        while let Ok(Some(ev)) = tokio::time::timeout(LEDGER_DRAIN_QUIET, rx.recv()).await {
+            write_one(&state, ev).await;
+            written += 1;
+        }
+        written
+    };
+    match tokio::time::timeout(LEDGER_DRAIN_BUDGET, flush).await {
+        Ok(0) => {}
+        Ok(n) => info!("ledger flushed {n} pending row(s) on shutdown"),
+        Err(_) => warn!("ledger still draining after {LEDGER_DRAIN_BUDGET:?}, giving up"),
+    }
+}
+
+async fn write_one(state: &Arc<AppState>, mut event: NewHostEvent) {
+    // Name resolution lives here, off the request path: one indexed lookup per
+    // operator action, and the producer only has to know the device id.
+    if let Some(id) = event.actor_device_id.clone()
+        && event.actor_name.is_none()
+    {
+        event.actor_name = DeviceRepository::new(state.db.clone())
+            .get_by_id(&id)
+            .await
+            .ok()
+            .flatten()
+            .map(|d| d.name);
+    }
+    insert_and_maybe_notify(state, &event).await;
+}
+
+/// Queue a ledger write. Failures are logged, never surfaced — an audit row
+/// must not fail the action it records. Notification-worthy system events (see
+/// [`notify_severity`]) also page the configured channels.
 pub fn record(state: &Arc<AppState>, event: NewHostEvent) {
-    let state = Arc::clone(state);
-    tokio::spawn(async move {
-        insert_and_maybe_notify(&state, &event).await;
-    });
+    state.ledger.record(event);
 }
 
 /// Insert a host event, then page an operator if it's notification-worthy.
@@ -119,8 +237,8 @@ fn host_event_subject(kind: &str) -> &'static str {
 }
 
 /// Audit entry for an operator action, attributed to the calling device.
-/// Name resolution happens inside the spawned task — one indexed lookup,
-/// off the request path.
+/// The actor's display name is left for the writer to resolve, so the request
+/// path costs one non-blocking send and no database lookup.
 pub fn record_operator(
     state: &Arc<AppState>,
     device_id: &str,
@@ -130,30 +248,17 @@ pub fn record_operator(
     ref_id: Option<String>,
     details: Option<serde_json::Value>,
 ) {
-    let state = Arc::clone(state);
-    let device_id = device_id.to_string();
-    tokio::spawn(async move {
-        let actor_name = DeviceRepository::new(state.db.clone())
-            .get_by_id(&device_id)
-            .await
-            .ok()
-            .flatten()
-            .map(|d| d.name);
-        let event = NewHostEvent {
-            created_at: None,
-            source: "operator",
-            kind,
-            severity: "info",
-            message,
-            actor_device_id: Some(device_id),
-            actor_name,
-            ref_type,
-            ref_id,
-            details: details.map(|d| d.to_string()),
-        };
-        // Operator kinds are never notification-worthy, but routing through
-        // the shared path keeps the insert/notify logic in one place.
-        insert_and_maybe_notify(&state, &event).await;
+    state.ledger.record(NewHostEvent {
+        created_at: None,
+        source: "operator",
+        kind,
+        severity: "info",
+        message,
+        actor_device_id: Some(device_id.to_string()),
+        actor_name: None,
+        ref_type,
+        ref_id,
+        details: details.map(|d| d.to_string()),
     });
 }
 
@@ -872,6 +977,49 @@ mod tests {
         assert_eq!(notify_severity("service_action", "info"), None);
         assert_eq!(notify_severity("config_changed", "info"), None);
         assert_eq!(notify_severity("process_killed", "info"), None);
+    }
+
+    /// The row is stamped when it is queued, not when the writer reaches it.
+    /// Under a backlog the two differ, and a ledger that files events under the
+    /// moment it got round to them is not a timeline.
+    #[tokio::test]
+    async fn record_stamps_the_moment_it_was_queued() {
+        let (queue, mut rx) = ledger_channel();
+        let before = chrono::Utc::now().timestamp();
+
+        queue.record(NewHostEvent {
+            source: "operator",
+            kind: "config_changed",
+            severity: "info",
+            message: "runtime configuration updated".to_string(),
+            ..Default::default()
+        });
+
+        let queued = rx.recv().await.expect("queued");
+        let ts = queued.created_at.expect("stamped on the way in");
+        assert!(
+            ts >= before && ts <= chrono::Utc::now().timestamp(),
+            "stamped outside the window it was queued in: {ts}"
+        );
+    }
+
+    /// A producer that knows when the thing actually happened — the sweep
+    /// reading a journal timestamp, boot detection working back from uptime —
+    /// keeps its own value rather than being restamped.
+    #[tokio::test]
+    async fn record_keeps_a_timestamp_the_producer_already_knows() {
+        let (queue, mut rx) = ledger_channel();
+
+        queue.record(NewHostEvent {
+            created_at: Some(1_000),
+            source: "system",
+            kind: "oom_kill",
+            severity: "error",
+            message: "killed".to_string(),
+            ..Default::default()
+        });
+
+        assert_eq!(rx.recv().await.expect("queued").created_at, Some(1_000));
     }
 
     #[cfg(any(target_os = "linux", windows))]

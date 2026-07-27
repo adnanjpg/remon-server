@@ -146,6 +146,12 @@ pub struct AppState {
     /// `notify::worker`.
     pub notify_queue: crate::notify::NotifyQueue,
 
+    /// Where producers hand host-event and operator-audit rows. Sending is
+    /// non-blocking, so a request never waits on the ledger, and one owned
+    /// writer flushes on shutdown — which is what keeps the restart/shutdown
+    /// audit row from dying with the process. See `services::events`.
+    pub ledger: crate::services::events::LedgerQueue,
+
     /// VAPID keypair for Web Push. Generated on first boot and persisted
     /// in `vapid_keys`. The public half is served to clients via
     /// `GET /push/vapid-public-key`; the private half signs the JWT we
@@ -186,6 +192,7 @@ impl AppState {
         probe_registry: ProbeRegistry,
         notify: Arc<NotificationManager>,
         notify_queue: crate::notify::NotifyQueue,
+        ledger: crate::services::events::LedgerQueue,
         vapid_keys: Arc<crate::services::webpush::VapidKeyPair>,
     ) -> Self {
         let (stats_tx, _) = broadcast::channel(64);
@@ -221,6 +228,7 @@ impl AppState {
             probe_registry,
             notify,
             notify_queue,
+            ledger,
             vapid_keys,
             shutdown,
             exit_intent,

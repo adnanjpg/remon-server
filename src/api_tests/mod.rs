@@ -117,6 +117,7 @@ impl TestApp {
         .expect("notification manager");
 
         let (notify_queue, notify_rx) = crate::notify::worker::channel();
+        let (ledger_queue, ledger_rx) = crate::services::events::ledger_channel();
 
         let state = Arc::new(AppState::new(
             db.pool().clone(),
@@ -135,6 +136,7 @@ impl TestApp {
             probe_registry,
             notify,
             notify_queue,
+            ledger_queue,
             vapid,
         ));
 
@@ -147,6 +149,7 @@ impl TestApp {
             state.db.clone(),
             state.shutdown.subscribe(),
         );
+        crate::services::events::spawn_ledger_writer(ledger_rx, state.clone());
 
         // Mirror `build_app`: the assistant lives outside `create_routes`
         // (it gets a longer timeout there), so mount it here too — with the

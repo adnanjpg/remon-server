@@ -269,9 +269,10 @@ async fn run(
     .await
     .context("initialize notification manager")?;
 
-    // Queue first, task after the state exists: the task needs the shutdown
-    // channel `AppState` owns, the producers need the queue handle.
+    // Queues first, tasks after the state exists: the tasks need the shutdown
+    // channel `AppState` owns, the producers need the queue handles.
     let (notify_queue, notify_rx) = notify::worker::channel();
+    let (ledger_queue, ledger_rx) = services::events::ledger_channel();
 
     let app_state = Arc::new(state::AppState::new(
         db.pool().clone(),
@@ -290,6 +291,7 @@ async fn run(
         probe_registry,
         notify,
         notify_queue,
+        ledger_queue,
         vapid_keys,
     ));
     info!("app state initialized with broadcast channels and layered config");
@@ -300,6 +302,7 @@ async fn run(
         app_state.db.clone(),
         app_state.shutdown.subscribe(),
     );
+    let ledger_writer = services::events::spawn_ledger_writer(ledger_rx, app_state.clone());
 
     services::logging::start_db_writer(log_rx, db.pool().clone());
 
@@ -362,10 +365,13 @@ async fn run(
         error!("server error: {}", e);
     }
 
-    // Serving has stopped, so nothing new will be queued; let the delivery
-    // task flush what is. It bounds its own wait, so this cannot hang the
-    // stop. Notifications produced during the drain above — a rule resolving
-    // as the last requests finish — would otherwise die with the process.
+    // Serving has stopped; flush the owned workers before the process ends.
+    // Ledger first: a row written during its drain can page, and that
+    // notification needs a delivery task still running to take it. Both bound
+    // their own wait, so neither can hang the stop.
+    if let Err(e) = ledger_writer.await {
+        warn!("ledger writer did not shut down cleanly: {e}");
+    }
     if let Err(e) = notify_worker.await {
         warn!("notification worker did not shut down cleanly: {e}");
     }
