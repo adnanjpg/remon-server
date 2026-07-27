@@ -3,6 +3,18 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.18.1] - 2026-07-27
+
+### Security
+
+- **`DELETE /processes/{pid}` could kill every process on the host.** The path segment is parsed as `u32`, but Unix `kill(2)` takes a signed `pid_t`, so any value above `i32::MAX` narrowed to a *negative* pid — and a negative pid is a broadcast, not a target. `DELETE /processes/4294967295` became `kill(-1, …)`: every process the caller may signal, which for a unit that deliberately runs as root is the entire machine. The three guards added in 0.18.0 all waved it through — it is not pid 0, not pid 1, and not the server's own pid — and the request read as an ordinary kill of a process that had already exited, so a client-side integer bug reached it as easily as a deliberate call. Rejected in `kill_process` rather than the handler, so every caller inherits the check; Linux caps `pid_max` at 2^22 and no Unix allocates pids near `i32::MAX`, so no reachable process is lost to the range.
+- **Notification deliveries followed redirects, walking straight past the outbound URL policy.** `check_url` vets the URL a channel is *configured* with — rejecting loopback, link-local, and private ranges unless the operator allows them — but the shared `reqwest` client was built without a redirect policy, so it followed the default ten hops and none of them were re-checked. An allowed host answering `302 Location: http://169.254.169.254/…` reached exactly the range the policy exists to block. The response body of a non-2xx reply is logged at `warn!`, which the default `log_insertion_level` persists into the `logs` table, so what came back was readable afterwards through the API. The client now refuses redirects outright; a channel that needs one should be configured with the final URL.
+
+### Fixed
+
+- **The assistant's answer stream could still block shutdown for minutes.** 0.17.2 made every infinite SSE stream shutdown-aware and explicitly exempted this one, on the grounds that it terminates on its own — which is true, but "on its own" means the whole tool-use loop draining, up to the step cap times the per-step provider timeout. That outlives systemd's stop timeout, so a restart with one question in flight got SIGKILLed, `mark_clean_shutdown` never ran, and the next boot was misfiled as an unclean exit — the precise failure 0.17.2 set out to close, left open in the one stream it excluded. The router's `TimeoutLayer` was no help: tower-http races the response future, not the body. Now wrapped in `until_shutdown` like the other seven.
+- **A rule disabled while firing kept its badge forever.** `list_active_state` joined `alert_rules` without filtering on `enabled`, and the `/summary` count did not join at all. Disabling a rule stops the evaluator from touching its `alert_state` row but does not clear it, so the stale row stayed active in both — leaving a red badge on every dashboard that nothing short of deleting the rule could clear. Both now filter on `enabled`; the row is still kept, so re-enabling the rule resumes where it left off.
+
 ## [0.18.0] - 2026-07-26
 
 ### Fixed
