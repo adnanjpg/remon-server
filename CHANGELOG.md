@@ -3,6 +3,19 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.18.2] - 2026-07-27
+
+### Security
+
+- **The Windows data directory was readable by every local user, and reachable before the installer ever ran.** `%ProgramData%\remon` was created with `New-Item` and left on ProgramData's inherited ACL, which on a stock Windows 11 grants `BUILTIN\Users:(OI)(CI)(RX)` — read and execute on everything in it, files included. That directory holds the database, so the JWT signing secret and every token hash were readable by any account on the box, as was the log the pairing code is printed to. The Linux installer has always made its data directory `0700`; Windows had no equivalent. The same inherited ACL also carries `BUILTIN\Users:(CI)(WD,AD,WEA,WA)` — any user may create entries under ProgramData — and `CREATOR OWNER:(OI)(CI)(IO)(F)` gives whoever creates a directory there full control of its contents. So a user who created `%ProgramData%\remon` before an administrator ever ran the installer owned the wrapper script that the startup task then executed as SYSTEM. The directory now gets an explicit ACL — inheritance broken, SYSTEM and Administrators only, applied before anything is written into it — and an existing directory owned by neither those nor the installing account is refused rather than adopted, since a `config.toml` planted in it would otherwise be honoured (`smart.smartctl_path` alone is enough to run a chosen binary as SYSTEM). Well-known SIDs are used rather than account names, which are localised.
+- **A release that published no checksums installed anyway.** Both installers warned and continued when `SHA256SUMS` could not be fetched — and the Linux one did the same when `sha256sum` was not present — which left nothing tying the downloaded bytes to the tag that was asked for, on a path that then runs as root or SYSTEM. Someone installing through `curl … | sudo sh` never sees the warning. Being unable to verify is now a stop; `REMON_ALLOW_UNVERIFIED=1` (or `-AllowUnverified`) is the deliberate way through, needed only for releases that predate the current pipeline. Verifying and *failing* was already fatal and is unchanged.
+
+### Fixed
+
+- **A failed upgrade left the service stopped and the binary already replaced.** The order was stop, replace, then validate the configuration — so a config the new build rejected exited with "configuration did not validate; nothing was enabled" after the old binary was gone and the service was down, and nothing restarted it. `was_running` was tracked but only ever used to pick a closing message. Validation now runs against the new binary, from the scratch directory, before anything is stopped or overwritten: a rejected config leaves the existing install running and untouched, and says so.
+- **`REMON_NO_SERVICE=1` switched off a running agent and reported success.** The stop happened before the flag was read, and the flag's branch exits without starting anything — so an operator asking to refresh only the binary got a green "Installed." and a host that was no longer being monitored. Skipping service *setup* now leaves a service that was running running, on the new binary. `-NoService` on Windows had the same shape and the same fix.
+- **`uninstall.sh --purge` deleted the wrong directories.** It honoured `REMON_PREFIX` but hardcoded `/etc/remon` and `/var/lib/remon`, while the installer accepts `REMON_CONFIG_DIR` and `REMON_DATA_DIR` — so on a host installed with either of those, `--purge` removed paths that install had never used, left the real database and configuration in place, and reported that it had removed "configuration and metrics history". Both overrides are read now, and the OpenRC log, which purge never touched, is removed with them.
+
 ## [0.18.1] - 2026-07-27
 
 ### Security
