@@ -23,8 +23,14 @@ async fn run(state: Arc<AppState>) {
     // Eagerly clean up on boot before the first hour elapses.
     sweep(&repo).await;
 
-    loop {
-        tokio::time::sleep(CLEANUP_INTERVAL).await;
+    let mut ticker = tokio::time::interval(CLEANUP_INTERVAL);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // An interval's first tick is immediate, and the boot sweep above already
+    // did that pass.
+    ticker.tick().await;
+    let mut shutdown = state.shutdown.subscribe();
+
+    while crate::shutdown::tick_or_stop(&mut ticker, &mut shutdown).await {
         sweep(&repo).await;
     }
 }

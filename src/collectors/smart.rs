@@ -101,10 +101,9 @@ async fn run(state: Arc<AppState>, cfg: SmartConfig) {
     let mut current_interval_ms = effective_interval_ms(&state);
     let mut ticker = tokio::time::interval(Duration::from_millis(current_interval_ms));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut shutdown = state.shutdown.subscribe();
 
-    loop {
-        ticker.tick().await;
-
+    while crate::shutdown::tick_or_stop(&mut ticker, &mut shutdown).await {
         let new_interval_ms = effective_interval_ms(&state);
         if new_interval_ms != current_interval_ms {
             current_interval_ms = new_interval_ms;

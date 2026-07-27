@@ -468,9 +468,9 @@ async fn system_event_sweep_loop(state: Arc<AppState>) {
 
     let mut ticker = tokio::time::interval(Duration::from_secs(SWEEP_INTERVAL_SECS));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut shutdown = state.shutdown.subscribe();
 
-    loop {
-        ticker.tick().await;
+    while crate::shutdown::tick_or_stop(&mut ticker, &mut shutdown).await {
         let now = chrono::Utc::now().timestamp();
         // However far behind the cursor is, never ask for more than a day.
         let since = cursor.max(now - SWEEP_MAX_LOOKBACK_SECS);

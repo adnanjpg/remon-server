@@ -46,10 +46,9 @@ async fn run(state: Arc<AppState>) {
 
     let mut current_ms = interval_ms(&state);
     let mut ticker = new_ticker(current_ms);
+    let mut shutdown = state.shutdown.subscribe();
 
-    loop {
-        ticker.tick().await;
-
+    while crate::shutdown::tick_or_stop(&mut ticker, &mut shutdown).await {
         match collect_once(&mut prev).await {
             Ok(rows) if !rows.is_empty() => {
                 let now = Utc::now().timestamp();

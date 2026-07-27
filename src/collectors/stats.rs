@@ -78,9 +78,9 @@ pub async fn run(state: Arc<AppState>) {
         .max(1000);
     let mut ticker = tokio::time::interval(Duration::from_millis(current_interval_ms));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut shutdown = state.shutdown.subscribe();
 
-    loop {
-        ticker.tick().await;
+    while crate::shutdown::tick_or_stop(&mut ticker, &mut shutdown).await {
         let now = Instant::now();
         let interval_secs = match last_refresh {
             Some(prev) => (now - prev).as_secs_f64(),

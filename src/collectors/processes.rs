@@ -71,9 +71,9 @@ pub async fn run(state: Arc<AppState>) {
     let series_top_k = state.assistant_config.process_series_top_k as usize;
     let series_repo = ProcessMetricsRepository::new(state.db.clone());
     let mut last_series_write: i64 = 0;
+    let mut shutdown = state.shutdown.subscribe();
 
-    loop {
-        ticker.tick().await;
+    while crate::shutdown::tick_or_stop(&mut ticker, &mut shutdown).await {
         // ── Phase: refresh ──────────────────────────────────────────────
         // Surgical: only process info, not CPU/memory/disks/networks/
         // components inside `sys` — those get re-read by the stats collector.

@@ -190,11 +190,18 @@ async fn run(state: Arc<AppState>) {
     let mut signal = state.stats_signal.subscribe();
     let mut fallback = tokio::time::interval(FALLBACK_TICK);
     fallback.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut shutdown = state.shutdown.subscribe();
 
     loop {
+        if *shutdown.borrow() {
+            break;
+        }
         // Wake on a fresh stats tick or the fallback timer, whichever fires
-        // first.
+        // first — or stop, if the server is on its way out. Evaluating during
+        // shutdown would fire rules on a half-stopped host and page about it.
         tokio::select! {
+            biased;
+            _ = shutdown.changed() => break,
             _ = signal.changed() => {}
             _ = fallback.tick() => {}
         }
