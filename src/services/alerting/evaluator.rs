@@ -39,7 +39,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use log::{debug, info, warn};
@@ -60,7 +60,7 @@ const FALLBACK_TICK: Duration = Duration::from_secs(2);
 
 /// How often the rule set is reloaded from the DB, so `POST/PUT/DELETE
 /// /alerts` and enable/disable take effect within one cycle.
-const RELOAD_SECS: i64 = 30;
+const RELOAD_EVERY: Duration = Duration::from_secs(30);
 
 pub fn spawn(state: Arc<AppState>) {
     tokio::spawn(async move { run(state).await });
@@ -139,12 +139,19 @@ impl Live {
 }
 
 /// A loaded, enabled rule with its parsed expression and per-rule throttle
-/// clock (`last_eval_at`), so a rule keeps evaluating at its own
-/// `eval_interval` even though every rule shares one task.
+/// clock, so a rule keeps evaluating at its own `eval_interval` even though
+/// every rule shares one task.
+///
+/// The throttle runs on [`Instant`], not the wall clock. Wall time can move
+/// backwards — an NTP correction, a VM resuming from a snapshot — and a
+/// `now - last_eval` written against it goes negative, holding every rule
+/// below its interval until real time catches up: alerting stops for the
+/// length of the jump and nothing reports that it has. `None` means "never
+/// evaluated", which is how a freshly loaded or changed rule runs immediately.
 struct Compiled {
     rule: AlertRule,
     expr: Expression,
-    last_eval_at: i64,
+    last_eval: Option<Instant>,
 }
 
 /// The evaluator task. Event-driven off the stats collector, holding all
@@ -178,7 +185,7 @@ async fn run(state: Arc<AppState>) {
     }
 
     let mut rules: HashMap<i64, Compiled> = HashMap::new();
-    let mut last_reload = 0i64;
+    let mut last_reload: Option<Instant> = None;
 
     let mut signal = state.stats_signal.subscribe();
     let mut fallback = tokio::time::interval(FALLBACK_TICK);
@@ -192,21 +199,28 @@ async fn run(state: Arc<AppState>) {
             _ = fallback.tick() => {}
         }
 
+        // Wall clock for everything recorded or compared against stored
+        // timestamps; the monotonic tick only decides when to look again.
         let now = Utc::now().timestamp();
+        let tick = Instant::now();
 
-        if now - last_reload >= RELOAD_SECS {
+        if last_reload.is_none_or(|t| tick.duration_since(t) >= RELOAD_EVERY) {
             reload_rules(&repo, &mut rules).await;
-            last_reload = now;
+            last_reload = Some(tick);
             // Drop in-memory lifecycle for rules that no longer exist.
             live.retain(|rid, _| rules.contains_key(rid));
             rehydrate_missing(&repo, rules.keys().copied(), &mut live, now).await;
         }
 
         for compiled in rules.values_mut() {
-            if now - compiled.last_eval_at < compiled.rule.eval_interval_secs.max(1) {
+            let interval = Duration::from_secs(compiled.rule.eval_interval_secs.max(1) as u64);
+            if compiled
+                .last_eval
+                .is_some_and(|t| tick.duration_since(t) < interval)
+            {
                 continue;
             }
-            compiled.last_eval_at = now;
+            compiled.last_eval = Some(tick);
             let rule_live = live.entry(compiled.rule.id).or_default();
             if let Err(e) = evaluate_rule(
                 &state,
@@ -305,7 +319,7 @@ async fn reload_rules(repo: &AlertRepository, rules: &mut HashMap<i64, Compiled>
                         rule,
                         expr,
                         // Re-evaluate immediately on load/change.
-                        last_eval_at: 0,
+                        last_eval: None,
                     },
                 );
             }
