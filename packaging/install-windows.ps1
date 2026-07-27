@@ -32,6 +32,10 @@
 .PARAMETER NoService
     Install the binary only; do not register the startup task.
 
+.PARAMETER AllowUnverified
+    Install even when the release publishes no SHA256SUMS to check against.
+    Needed only for releases that predate the current pipeline.
+
 .EXAMPLE
     irm https://raw.githubusercontent.com/adnanjpg/remon-server/dev/packaging/install-windows.ps1 | iex
 
@@ -44,7 +48,8 @@ param(
     [string] $Version,
     [string] $InstallDir = (Join-Path $env:ProgramFiles 'remon'),
     [string] $DataDir = (Join-Path $env:ProgramData 'remon'),
-    [switch] $NoService
+    [switch] $NoService,
+    [switch] $AllowUnverified
 )
 
 $ErrorActionPreference = 'Stop'
@@ -97,15 +102,20 @@ try {
         Fail "download failed — does $Version have a windows-amd64 build?"
     }
 
-    # The checksums file is part of the release, not a nicety: without it there
-    # is nothing tying the bytes on disk to the tag that was asked for.
+    # The checksum is the only thing tying these bytes to the tag that was asked
+    # for, and what runs afterwards runs as SYSTEM — so being unable to check is
+    # a stop, not a note. Releases that predate the current pipeline publish no
+    # SHA256SUMS, hence a deliberate way through rather than no way at all.
     $sumsPath = Join-Path $tmp 'SHA256SUMS'
     $haveSums = $true
     try {
         Invoke-WebRequest -Uri "$baseUrl/SHA256SUMS" -OutFile $sumsPath -UseBasicParsing
     } catch {
         $haveSums = $false
-        Write-Warning "no SHA256SUMS published for $Version; skipping checksum verification"
+        if (-not $AllowUnverified) {
+            Fail "no SHA256SUMS published for $Version; refusing to install unverified (pass -AllowUnverified to override)"
+        }
+        Write-Warning "no SHA256SUMS published for $Version; installing unverified because -AllowUnverified was passed"
     }
 
     if ($haveSums) {
@@ -129,30 +139,43 @@ try {
         Select-Object -First 1
     if (-not $newBinary) { Fail 'archive did not contain remon-server.exe' }
 
-    # ── stop, install, restart ────────────────────────────────────────────
+    # ── data directory ────────────────────────────────────────────────────
 
-    $existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    $wasRunning = $false
-    if ($existingTask -and $existingTask.State -eq 'Running') {
-        $wasRunning = $true
-        Write-Step "Stopping $TaskName for upgrade"
-        Stop-ScheduledTask -TaskName $TaskName
-        # The task hosts a wrapper that owns the server as a child, so wait for
-        # the binary itself rather than the task's own state.
-        $deadline = (Get-Date).AddSeconds(30)
-        while ((Get-Date) -lt $deadline -and
-               (Get-Process -Name 'remon-server' -ErrorAction SilentlyContinue)) {
-            Start-Sleep -Milliseconds 500
+    # ProgramData hands every local user read access to what it holds and the
+    # right to create entries in it, and whoever creates a directory there keeps
+    # full control of that directory's contents through CREATOR OWNER. This one
+    # ends up holding the database — JWT secret, token hashes — the log the
+    # pairing code is printed to, and the wrapper the startup task executes as
+    # SYSTEM. So it is given an explicit ACL before anything is written into it,
+    # and a directory somebody else already owns is refused rather than adopted.
+    $dataExisted = Test-Path $DataDir
+    New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
+
+    # Well-known SIDs, not names: the builtin accounts are localised, so
+    # "BUILTIN\Administrators" does not exist as such on a non-English install.
+    $sidSystem = 'S-1-5-18'
+    $sidAdmins = 'S-1-5-32-544'
+
+    if ($dataExisted) {
+        $acl = Get-Acl -Path $DataDir
+        $ownerSid = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+        if ($ownerSid -ne $sidSystem -and
+            $ownerSid -ne $sidAdmins -and
+            $ownerSid -ne $identity.User.Value) {
+            $ownerName = $acl.Owner
+            Fail "$DataDir already exists and is owned by $ownerName — everything in it, config.toml included, is under that account's control. Remove it and re-run."
         }
-        Get-Process -Name 'remon-server' -ErrorAction SilentlyContinue |
-            Stop-Process -Force -ErrorAction SilentlyContinue
     }
 
-    $binary = Join-Path $InstallDir 'remon-server.exe'
-    Write-Step "Installing to $binary"
-    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
-    Copy-Item -Path $newBinary.FullName -Destination $binary -Force
+    $acl = Get-Acl -Path $DataDir
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($ace in @($acl.Access)) { $null = $acl.RemoveAccessRule($ace) }
+    foreach ($who in @($sidSystem, $sidAdmins)) {
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            [Security.Principal.SecurityIdentifier]::new($who),
+            'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))
+    }
+    Set-Acl -Path $DataDir -AclObject $acl
 
     # The binary carries its own defaults, so this file exists to be edited,
     # not to be required. Never overwrite an operator's copy on upgrade.
@@ -189,15 +212,48 @@ allowed_origins = []
         Write-Note "wrote $configPath"
     }
 
+    # Checked with the build about to be installed, and before the running task
+    # is stopped. A config this build rejects then leaves the existing install
+    # untouched and still serving, instead of stopped and already overwritten.
     Write-Step 'Validating configuration'
-    & $binary --config-dir $DataDir --data-dir $DataDir config check
+    & $newBinary.FullName --config-dir $DataDir --data-dir $DataDir config check
     if ($LASTEXITCODE -ne 0) {
-        Fail 'configuration did not validate; nothing was registered'
+        Fail 'configuration did not validate; nothing was changed'
     }
+
+    # ── stop and install ──────────────────────────────────────────────────
+
+    $existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    $wasRunning = $false
+    if ($existingTask -and $existingTask.State -eq 'Running') {
+        $wasRunning = $true
+        Write-Step "Stopping $TaskName for upgrade"
+        Stop-ScheduledTask -TaskName $TaskName
+        # The task hosts a wrapper that owns the server as a child, so wait for
+        # the binary itself rather than the task's own state.
+        $deadline = (Get-Date).AddSeconds(30)
+        while ((Get-Date) -lt $deadline -and
+               (Get-Process -Name 'remon-server' -ErrorAction SilentlyContinue)) {
+            Start-Sleep -Milliseconds 500
+        }
+        Get-Process -Name 'remon-server' -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+
+    $binary = Join-Path $InstallDir 'remon-server.exe'
+    Write-Step "Installing to $binary"
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    Copy-Item -Path $newBinary.FullName -Destination $binary -Force
 
     # ── startup task ──────────────────────────────────────────────────────
 
     if ($NoService) {
+        # Skipping task *setup* is not a request to leave the host unmonitored.
+        # Whatever was running when this started gets put back on the new binary.
+        if ($wasRunning) {
+            Write-Step "Restarting $TaskName"
+            Start-ScheduledTask -TaskName $TaskName
+        }
         Write-Host ''
         Write-Host 'Installed.' -ForegroundColor Green -NoNewline
         Write-Host ' Startup task skipped (-NoService).'
