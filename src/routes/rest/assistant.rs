@@ -19,6 +19,7 @@ use crate::assistant::{
 };
 use crate::error::{AppError, AppResult};
 use crate::routes::extractors::Claims;
+use crate::routes::sse::until_shutdown;
 use crate::state::AppState;
 
 /// Longest question accepted. Diagnostic prompts are a sentence or two; the cap
@@ -125,7 +126,7 @@ pub async fn ask(
 /// accumulated deltas with it) or `error`. Pre-loop failures (bad request,
 /// disabled assistant) stay plain HTTP errors so clients can distinguish
 /// "can't start" from "died mid-answer". A closed connection aborts the loop
-/// on its next frame.
+/// on its next frame, and a server shutdown ends the stream immediately.
 pub async fn ask_stream(
     _claims: Claims,
     State(state): State<Arc<AppState>>,
@@ -172,6 +173,15 @@ pub async fn ask_stream(
         let data = serde_json::to_string(&ev).unwrap_or_else(|_| "{}".to_string());
         Ok(Event::default().event(name).data(data))
     });
+
+    // Every other SSE stream in the daemon is shutdown-aware; this one was
+    // missed when `until_shutdown` landed. It does terminate on its own, but
+    // "on its own" means the entire tool-use loop draining (up to the step cap
+    // times the per-step provider timeout), which outlives systemd's stop
+    // timeout — the process is SIGKILLed before `mark_clean_shutdown` runs and
+    // the next boot is misfiled as an unclean exit. The router's `TimeoutLayer`
+    // does not cover this: tower-http races the response future, not the body.
+    let stream = until_shutdown(stream, state.shutdown.subscribe());
 
     Ok(Sse::new(stream).keep_alive(
         KeepAlive::new()
