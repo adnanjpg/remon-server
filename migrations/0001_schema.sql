@@ -268,7 +268,7 @@ CREATE TABLE metrics_process (
     PRIMARY KEY (resolution, timestamp, name)
 ) WITHOUT ROWID;
 
-CREATE INDEX idx_metrics_process_name_ts ON metrics_process(name, resolution, timestamp DESC);
+CREATE INDEX idx_metrics_process_latest ON metrics_process(resolution, name, timestamp);
 
 CREATE TABLE metrics_components (
     resolution    TEXT    NOT NULL REFERENCES resolutions(name),
@@ -310,7 +310,13 @@ CREATE TABLE metrics_probe (
     PRIMARY KEY (resolution, timestamp, probe_name, metric_name, labels)
 ) WITHOUT ROWID;
 
+-- History reads: one probe's one metric over a time range, newest first.
 CREATE INDEX idx_metrics_probe_lookup ON metrics_probe(probe_name, metric_name, timestamp DESC);
+-- The evaluator's latest-per-stream read groups by (probe_name, labels) after
+-- fixing resolution and metric_name, so those four have to lead in that order
+-- for the group-wise max to come off the index instead of a temp b-tree.
+CREATE INDEX idx_metrics_probe_latest
+    ON metrics_probe(resolution, metric_name, probe_name, labels, timestamp);
 
 -- ─── METRICS — SMART disk health ────────────────────────────────────────────
 -- Populated by the smartctl-wrapping collector (collectors/smart.rs).
@@ -352,9 +358,11 @@ CREATE TABLE logs (
     target    TEXT    NOT NULL,
     message   TEXT    NOT NULL
 );
+-- The only reader filters `level <= ? AND timestamp BETWEEN ? AND ?` and
+-- orders by timestamp, so the range on `timestamp` is the whole access path.
+-- `source` is never a predicate anywhere and an open-ended `level` range
+-- cannot lead an index the ORDER BY also has to serve.
 CREATE INDEX idx_logs_ts     ON logs(timestamp DESC);
-CREATE INDEX idx_logs_source ON logs(source, timestamp DESC);
-CREATE INDEX idx_logs_level  ON logs(level, timestamp DESC);
 
 -- ─── PROBES ─────────────────────────────────────────────────────────────────
 -- Source of truth = YAML manifest on disk. This table shadows it so the
@@ -560,8 +568,10 @@ CREATE TABLE host_events (
     ref_id          TEXT,
     details         TEXT
 );
-CREATE INDEX idx_host_events_ts   ON host_events(created_at DESC);
-CREATE INDEX idx_host_events_kind ON host_events(kind, created_at DESC);
+-- Only the timestamp range is sargable: `/events` filters kind and source
+-- with `instr(?, ','||col||',')` against a wrapped CSV, which no index can
+-- serve, so those are applied row-by-row over the range.
+CREATE INDEX idx_host_events_ts ON host_events(created_at DESC);
 
 -- ─── RUNTIME STATE ──────────────────────────────────────────────────────────
 -- Tiny daemon-owned KV: cross-restart breadcrumbs that are neither config
