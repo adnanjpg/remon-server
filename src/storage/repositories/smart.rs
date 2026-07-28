@@ -49,38 +49,37 @@ impl SmartRepository {
     /// (and logged by the caller's interval floor making them unreachable
     /// in practice), mirroring the other metrics tables.
     pub async fn insert_tick(&self, timestamp: i64, rows: &[SmartDeviceRow]) -> AppResult<()> {
-        let mut tx = self.pool.begin().await?;
-        for r in rows {
-            let health = r.health_passed.map(i64::from);
-            sqlx::query!(
-                "INSERT INTO metrics_smart
-                   (resolution, timestamp, device, model, serial, health_passed,
-                    temperature_c, power_on_hours, power_cycles,
-                    reallocated_sectors, pending_sectors, uncorrectable_sectors,
-                    udma_crc_errors, percentage_used, available_spare_percent,
-                    media_errors)
-                 VALUES ('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                 ON CONFLICT(resolution, timestamp, device) DO NOTHING",
-                timestamp,
-                r.device,
-                r.model,
-                r.serial,
-                health,
-                r.temperature_c,
-                r.power_on_hours,
-                r.power_cycles,
-                r.reallocated_sectors,
-                r.pending_sectors,
-                r.uncorrectable_sectors,
-                r.udma_crc_errors,
-                r.percentage_used,
-                r.available_spare_percent,
-                r.media_errors,
-            )
-            .execute(&mut *tx)
-            .await?;
+        if rows.is_empty() {
+            return Ok(());
         }
-        tx.commit().await?;
+        let mut qb = sqlx::QueryBuilder::new(
+            "INSERT INTO metrics_smart \
+             (resolution, timestamp, device, model, serial, health_passed, \
+              temperature_c, power_on_hours, power_cycles, \
+              reallocated_sectors, pending_sectors, uncorrectable_sectors, \
+              udma_crc_errors, percentage_used, available_spare_percent, \
+              media_errors) ",
+        );
+        qb.push_values(rows.iter(), |mut b, r| {
+            b.push_bind("raw")
+                .push_bind(timestamp)
+                .push_bind(&r.device)
+                .push_bind(&r.model)
+                .push_bind(&r.serial)
+                .push_bind(r.health_passed.map(i64::from))
+                .push_bind(r.temperature_c)
+                .push_bind(r.power_on_hours)
+                .push_bind(r.power_cycles)
+                .push_bind(r.reallocated_sectors)
+                .push_bind(r.pending_sectors)
+                .push_bind(r.uncorrectable_sectors)
+                .push_bind(r.udma_crc_errors)
+                .push_bind(r.percentage_used)
+                .push_bind(r.available_spare_percent)
+                .push_bind(r.media_errors);
+        });
+        qb.push(" ON CONFLICT(resolution, timestamp, device) DO NOTHING");
+        qb.build().execute(&self.pool).await?;
         Ok(())
     }
 

@@ -37,26 +37,26 @@ impl ProcessMetricsRepository {
     /// Append one write tick. Same-(timestamp, name) collisions are dropped,
     /// mirroring the other metrics tables.
     pub async fn insert_tick(&self, timestamp: i64, rows: &[ProcessGroupRow]) -> AppResult<()> {
-        let mut tx = self.pool.begin().await?;
-        for r in rows {
-            sqlx::query!(
-                "INSERT INTO metrics_process
-                   (resolution, timestamp, name, pid_count,
-                    cpu_percent, memory_bytes, disk_read_bps, disk_write_bps)
-                 VALUES ('raw', ?, ?, ?, ?, ?, ?, ?)
-                 ON CONFLICT(resolution, timestamp, name) DO NOTHING",
-                timestamp,
-                r.name,
-                r.pid_count,
-                r.cpu_percent,
-                r.memory_bytes,
-                r.disk_read_bps,
-                r.disk_write_bps,
-            )
-            .execute(&mut *tx)
-            .await?;
+        if rows.is_empty() {
+            return Ok(());
         }
-        tx.commit().await?;
+        let mut qb = sqlx::QueryBuilder::new(
+            "INSERT INTO metrics_process \
+             (resolution, timestamp, name, pid_count, \
+              cpu_percent, memory_bytes, disk_read_bps, disk_write_bps) ",
+        );
+        qb.push_values(rows.iter(), |mut b, r| {
+            b.push_bind("raw")
+                .push_bind(timestamp)
+                .push_bind(&r.name)
+                .push_bind(r.pid_count)
+                .push_bind(r.cpu_percent)
+                .push_bind(r.memory_bytes)
+                .push_bind(r.disk_read_bps)
+                .push_bind(r.disk_write_bps);
+        });
+        qb.push(" ON CONFLICT(resolution, timestamp, name) DO NOTHING");
+        qb.build().execute(&self.pool).await?;
         Ok(())
     }
 }

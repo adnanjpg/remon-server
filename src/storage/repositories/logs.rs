@@ -41,27 +41,26 @@ impl LogRepository {
         Self { pool }
     }
 
-    /// Insert a batch of log entries in one transaction. SQLite's cost is
-    /// per-transaction fsync, so a bursty `recv_many` drain lands as a
-    /// single commit instead of one commit per line.
+    /// Insert a batch of log entries as one statement, so a bursty
+    /// `recv_many` drain costs one round trip and one commit rather than one
+    /// of each per line.
     pub async fn insert_batch(&self, rows: &[NewLogRow]) -> AppResult<()> {
-        let mut tx = self.pool.begin().await?;
-        for r in rows {
-            sqlx::query(
-                r#"
-                INSERT INTO logs (timestamp, level, source, target, message)
-                VALUES (?, ?, ?, ?, ?)
-                "#,
-            )
-            .bind(r.timestamp)
-            .bind(r.level)
-            .bind(&r.source)
-            .bind(&r.target)
-            .bind(&r.message)
-            .execute(&mut *tx)
-            .await?;
+        // `push_values` over an empty iterator emits `VALUES` with nothing
+        // after it; the drain can legitimately hand us nothing.
+        if rows.is_empty() {
+            return Ok(());
         }
-        tx.commit().await?;
+        let mut qb = sqlx::QueryBuilder::new(
+            "INSERT INTO logs (timestamp, level, source, target, message) ",
+        );
+        qb.push_values(rows.iter(), |mut b, r| {
+            b.push_bind(r.timestamp)
+                .push_bind(r.level)
+                .push_bind(&r.source)
+                .push_bind(&r.target)
+                .push_bind(&r.message);
+        });
+        qb.build().execute(&self.pool).await?;
         Ok(())
     }
 

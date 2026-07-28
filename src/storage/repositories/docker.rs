@@ -38,31 +38,31 @@ impl DockerMetricsRepository {
     /// Append one collector tick. Same-(timestamp, container) collisions are
     /// dropped, mirroring the other metrics tables.
     pub async fn insert_tick(&self, timestamp: i64, rows: &[DockerStatsRow]) -> AppResult<()> {
-        let mut tx = self.pool.begin().await?;
-        for r in rows {
-            sqlx::query!(
-                "INSERT INTO metrics_docker
-                   (resolution, timestamp, container_id, cpu_percent,
-                    memory_used_bytes, memory_limit_bytes,
-                    network_rx_bytes, network_tx_bytes,
-                    block_read_bytes, block_write_bytes, pids)
-                 VALUES ('raw', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                 ON CONFLICT(resolution, timestamp, container_id) DO NOTHING",
-                timestamp,
-                r.container_id,
-                r.cpu_percent,
-                r.memory_used_bytes,
-                r.memory_limit_bytes,
-                r.network_rx_bytes,
-                r.network_tx_bytes,
-                r.block_read_bytes,
-                r.block_write_bytes,
-                r.pids,
-            )
-            .execute(&mut *tx)
-            .await?;
+        if rows.is_empty() {
+            return Ok(());
         }
-        tx.commit().await?;
+        let mut qb = sqlx::QueryBuilder::new(
+            "INSERT INTO metrics_docker \
+             (resolution, timestamp, container_id, cpu_percent, \
+              memory_used_bytes, memory_limit_bytes, \
+              network_rx_bytes, network_tx_bytes, \
+              block_read_bytes, block_write_bytes, pids) ",
+        );
+        qb.push_values(rows.iter(), |mut b, r| {
+            b.push_bind("raw")
+                .push_bind(timestamp)
+                .push_bind(&r.container_id)
+                .push_bind(r.cpu_percent)
+                .push_bind(r.memory_used_bytes)
+                .push_bind(r.memory_limit_bytes)
+                .push_bind(r.network_rx_bytes)
+                .push_bind(r.network_tx_bytes)
+                .push_bind(r.block_read_bytes)
+                .push_bind(r.block_write_bytes)
+                .push_bind(r.pids);
+        });
+        qb.push(" ON CONFLICT(resolution, timestamp, container_id) DO NOTHING");
+        qb.build().execute(&self.pool).await?;
         Ok(())
     }
 }
