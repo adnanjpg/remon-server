@@ -70,8 +70,19 @@ impl Database {
             .pragma("wal_autocheckpoint", "1000")
             .pragma("journal_size_limit", JOURNAL_SIZE_LIMIT_BYTES.to_string());
 
+        // sqlx's pool defaults are written for a network database: reap idle
+        // connections after 10 minutes, retire them after 30, start from none.
+        // Against a local file there is no socket to go stale and no failover
+        // to rebalance onto — reaping only discards a warm page cache and pays
+        // to reopen. Holding the pool at full size also keeps the in-memory
+        // test database alive, which otherwise disappears with its last
+        // connection.
         let pool = SqlitePoolOptions::new()
             .max_connections(max_connections)
+            .min_connections(max_connections)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .acquire_timeout(Duration::from_secs(10))
             .connect_with(opts)
             .await?;
 
