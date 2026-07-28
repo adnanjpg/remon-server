@@ -1,0 +1,665 @@
+//! Data-layer measurement suite — the baseline a change is judged against.
+//!
+//! Not a test: nothing here asserts. Each case seeds a file-backed database
+//! shaped like a real host's retained history and prints one `BENCH` line per
+//! measurement, so two runs can be diffed directly.
+//!
+//! ```text
+//! cargo test --profile bench-fast --bin remon-server dbbench -- --ignored --nocapture --test-threads=1
+//! ```
+//!
+//! `--test-threads=1` is not optional. The cases share one disk and one CPU;
+//! run in parallel they measure each other's contention, which is enough to
+//! invert an A/B pair.
+//!
+//! Three deliberate choices, each of which changes the numbers if ignored:
+//!
+//! * **`bench-fast`, never `dev`.** Under `dev` the bundled SQLite is compiled
+//!   at `opt-level = 0`, which inflates everything by roughly an order of
+//!   magnitude and does so unevenly — a query dominated by SQLite's b-tree
+//!   walk and one dominated by Rust-side row mapping move by different
+//!   factors, so even the *ratios* stop being comparable.
+//! * **File-backed, never `:memory:`.** WAL growth, checkpointing, page
+//!   eviction and delete lock-hold are the things being measured and none of
+//!   them exist in an in-memory database.
+//! * **Seeded to the real steady state, not to a convenient size.** A live
+//!   database is not "N hours of samples": retention holds raw for 24 h, 1m
+//!   for 7 days, 5m for 30 days and 1h for a year, so the rolled-up tiers
+//!   outweigh the raw one and every b-tree is correspondingly deeper. Seeding
+//!   raw alone understates every measurement here. `BENCH_DIV` divides all
+//!   four windows for a quick run (default 1 = the real thing); the row count
+//!   each run actually produced is printed.
+//!
+//! Absolute timings are machine-specific. What travels between runs is the
+//! ratio before and after a change, at the same `BENCH_DIV` on the same box.
+
+use std::time::Instant;
+
+use sqlx::SqlitePool;
+
+use super::TestApp;
+use crate::services::alerting::{expression, resolver};
+
+/// Sensor/mount/interface/core counts the seed builds. Chosen to be an
+/// unremarkable small server rather than a worst case — a 16-core host moves
+/// `metrics_cpu_cores` and `metrics_components` proportionally.
+const MOUNTS: &[&str] = &["/", "/home", "/var", "/tmp"];
+const IFACES: &[&str] = &["eth0", "wg0", "docker0"];
+const CORES: i64 = 8;
+const SENSORS: i64 = 8;
+/// Distinct process-name groups, bounded by `process_series_top_k` in prod.
+const PROC_GROUPS: i64 = 30;
+
+/// Divisor applied to every retention window. 1 seeds the true steady state.
+fn bench_div() -> i64 {
+    std::env::var("BENCH_DIV")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|d| *d > 0)
+        .unwrap_or(1)
+}
+
+/// `(resolution, sample interval, retained seconds)` — straight out of the
+/// `resolutions` and `retention_policy` seeds in the migration. Together these
+/// are the shape a database converges to and stays at.
+const TIERS: &[(&str, i64, i64)] = &[
+    ("raw", 2, 86_400),
+    ("1m", 60, 604_800),
+    ("5m", 300, 2_592_000),
+    ("1h", 3600, 31_536_000),
+];
+
+/// One measurement line. Fixed-width so a diff of two runs lines up.
+fn report(name: &str, value: impl std::fmt::Display, unit: &str) {
+    println!("BENCH  {name:<38} {value:>12}  {unit}");
+}
+
+fn micros(d: std::time::Duration) -> u128 {
+    d.as_micros()
+}
+
+/// A file-backed database in the OS temp dir, wired exactly like production
+/// (same pragmas, same pool construction) via the normal harness.
+async fn app_on_disk(tag: &str) -> (TestApp, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("remon-dbbench-{}-{}", tag, std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create bench dir");
+    let path = dir.join("bench.sqlite3");
+    let url = format!("sqlite:{}", path.display());
+    let app = TestApp::spawn_at(&url, 5).await;
+    (app, dir)
+}
+
+/// Seed every tier to its retention window, ending at "now".
+///
+/// Anchored on the current time on purpose: the rollup reads the most recent
+/// *closed* bucket, so history sitting at some fixed epoch in the past would
+/// leave it nothing to fold and the steady-state measurement would time an
+/// empty sweep.
+///
+/// Written as recursive CTEs rather than through the repositories: this
+/// produces millions of rows before every case, and going through the insert
+/// path would make the seed itself the dominant cost.
+async fn seed(pool: &SqlitePool) -> i64 {
+    let div = bench_div();
+    let t0 = Instant::now();
+    let now = chrono::Utc::now().timestamp();
+
+    let series = |n: i64| {
+        format!("WITH RECURSIVE t(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM t WHERE n < {} - 1)", n)
+    };
+    let values_of = |items: &[&str]| {
+        items
+            .iter()
+            .map(|m| format!("SELECT '{}' AS k", m))
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ")
+    };
+    let ints_of = |n: i64| {
+        (0..n)
+            .map(|i| format!("SELECT {} AS k", i))
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ")
+    };
+
+    let mut stmts: Vec<String> = Vec::new();
+    for (res, interval, retained) in TIERS {
+        let step = *interval;
+        let ticks = (retained / step / div).max(1);
+        // End the series at now so the newest bucket is the one the rollup
+        // and the resolver would actually be looking at.
+        let base = now - ticks * step;
+
+        stmts.push(format!(
+            "{cte} INSERT OR IGNORE INTO metrics_cpu
+               (resolution, timestamp, usage_percent, load_1m, load_5m, load_15m,
+                steal_percent, iowait_percent, guest_percent, user_percent, system_percent,
+                context_switches_per_sec, process_forks_per_sec)
+             SELECT '{res}', {base} + n*{step}, 20.0 + (n % 40), 1.0, 1.1, 1.2,
+                    NULL, NULL, NULL, 15.0, 5.0, 4000, 20 FROM t",
+            cte = series(ticks)
+        ));
+        stmts.push(format!(
+            "{cte} INSERT OR IGNORE INTO metrics_memory
+               (resolution, timestamp, total_bytes, used_bytes, available_bytes,
+                cached_bytes, swap_used_bytes,
+                page_faults_minor_per_sec, page_faults_major_per_sec,
+                swap_in_pages_per_sec, swap_out_pages_per_sec)
+             SELECT '{res}', {base} + n*{step}, 16000000000, 8000000000 + n, 8000000000,
+                    2000000000, 0, NULL, NULL, NULL, NULL FROM t",
+            cte = series(ticks)
+        ));
+        stmts.push(format!(
+            "{cte} INSERT OR IGNORE INTO metrics_disk
+               (resolution, timestamp, mount_point, total_bytes, used_bytes, available_bytes,
+                read_bytes_per_sec, write_bytes_per_sec, inode_used_percent,
+                read_iops, write_iops, io_util_percent)
+             SELECT '{res}', {base} + n*{step}, m.k, 500000000000, 250000000000 + n, 250000000000,
+                    1000, 2000, 12.5, 30, 40, NULL
+             FROM t CROSS JOIN ({keys}) m",
+            cte = series(ticks),
+            keys = values_of(MOUNTS)
+        ));
+        stmts.push(format!(
+            "{cte} INSERT OR IGNORE INTO metrics_network
+               (resolution, timestamp, interface_name, rx_bytes_per_sec, tx_bytes_per_sec,
+                rx_packets_per_sec, tx_packets_per_sec, errors_in_per_sec, errors_out_per_sec)
+             SELECT '{res}', {base} + n*{step}, i.k, 100000 + n, 50000, 200, 100, 0, 0
+             FROM t CROSS JOIN ({keys}) i",
+            cte = series(ticks),
+            keys = values_of(IFACES)
+        ));
+        stmts.push(format!(
+            "{cte} INSERT OR IGNORE INTO metrics_components
+               (resolution, timestamp, label, temperature_c, max_c, critical_c)
+             SELECT '{res}', {base} + n*{step}, 'sensor' || s.k, 45.0 + (n % 20), 90.0, 100.0
+             FROM t CROSS JOIN ({keys}) s",
+            cte = series(ticks),
+            keys = ints_of(SENSORS)
+        ));
+        stmts.push(format!(
+            "{cte} INSERT OR IGNORE INTO metrics_pressure
+               (resolution, timestamp, resource, some_avg10, some_avg60, some_avg300,
+                full_avg10, full_avg60, full_avg300)
+             SELECT '{res}', {base} + n*{step}, r.k, 1.0, 2.0, 3.0, 0.5, 0.6, 0.7
+             FROM t CROSS JOIN (SELECT 'cpu' AS k UNION ALL SELECT 'memory' UNION ALL SELECT 'io') r",
+            cte = series(ticks)
+        ));
+
+        // The collector writes the process series once a minute regardless of
+        // the tick rate, so its raw tier is far sparser than the others.
+        let p_step = if *res == "raw" { 60 } else { step };
+        let p_ticks = (retained / p_step / div).max(1);
+        let p_base = now - p_ticks * p_step;
+        stmts.push(format!(
+            "{cte} INSERT OR IGNORE INTO metrics_process
+               (resolution, timestamp, name, pid_count, cpu_percent, memory_bytes,
+                disk_read_bps, disk_write_bps)
+             SELECT '{res}', {p_base} + n*{p_step}, 'proc' || g.k, 3, 5.0 + (n % 10), 100000000, 0, 0
+             FROM t CROSS JOIN ({keys}) g",
+            cte = series(p_ticks),
+            keys = ints_of(PROC_GROUPS)
+        ));
+
+        // Per-core samples are raw-only by design — no rollup, no resolution
+        // column — so this tier loop contributes them exactly once.
+        if *res == "raw" {
+            stmts.push(format!(
+                "{cte} INSERT OR IGNORE INTO metrics_cpu_cores
+                   (timestamp, core_index, usage_percent, freq_mhz)
+                 SELECT {base} + n*{step}, c.k, 20.0 + (n % 50), 3200
+                 FROM t CROSS JOIN ({keys}) c",
+                cte = series(ticks),
+                keys = ints_of(CORES)
+            ));
+        }
+    }
+
+    for s in stmts {
+        sqlx::query(sqlx::AssertSqlSafe(s))
+            .execute(pool)
+            .await
+            .expect("seed");
+    }
+
+    let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(
+        "SELECT (SELECT COUNT(*) FROM metrics_cpu) + (SELECT COUNT(*) FROM metrics_memory)
+              + (SELECT COUNT(*) FROM metrics_disk) + (SELECT COUNT(*) FROM metrics_network)
+              + (SELECT COUNT(*) FROM metrics_cpu_cores) + (SELECT COUNT(*) FROM metrics_components)
+              + (SELECT COUNT(*) FROM metrics_pressure) + (SELECT COUNT(*) FROM metrics_process)",
+    ))
+    .fetch_one(pool)
+    .await
+    .expect("count");
+
+    let raw: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(
+        "SELECT (SELECT COUNT(*) FROM metrics_cpu WHERE resolution='raw')
+              + (SELECT COUNT(*) FROM metrics_disk WHERE resolution='raw')
+              + (SELECT COUNT(*) FROM metrics_network WHERE resolution='raw')
+              + (SELECT COUNT(*) FROM metrics_components WHERE resolution='raw')
+              + (SELECT COUNT(*) FROM metrics_pressure WHERE resolution='raw')
+              + (SELECT COUNT(*) FROM metrics_cpu_cores)",
+    ))
+    .fetch_one(pool)
+    .await
+    .unwrap_or(-1);
+
+    report("seed.div", div, "(1 = real retention windows)");
+    report("seed.rows_total", rows, "rows");
+    report("seed.rows_raw_partition", raw, "rows");
+    report("seed.elapsed", micros(t0.elapsed()) / 1000, "ms");
+    rows
+}
+
+async fn page_stats(pool: &SqlitePool, prefix: &str) {
+    for (pragma, label) in [
+        ("page_count", "page_count"),
+        ("freelist_count", "freelist"),
+        ("page_size", "page_size"),
+    ] {
+        let v: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("PRAGMA {pragma}")))
+            .fetch_one(pool)
+            .await
+            .unwrap_or(-1);
+        report(&format!("{prefix}.{label}"), v, "");
+    }
+}
+
+// ─── Cases ──────────────────────────────────────────────────────────────────
+
+/// The alert evaluator's DB path: one `resolve` per expression, which is what
+/// every rule outside the in-memory snapshot pays on every eval tick.
+///
+/// The label-filtered and all-NULL variants are here because they are the two
+/// shapes that behave counter-intuitively — worth having on the record so a
+/// rewrite is judged on all three, not just the easy one.
+#[tokio::test]
+#[ignore]
+async fn dbbench_resolver() {
+    let (app, dir) = app_on_disk("resolver").await;
+    seed(&app.state.db).await;
+
+    let cases = [
+        ("resolve.disk.used_bytes", "disk.used_bytes > 1"),
+        (
+            "resolve.disk.used_bytes{mount}",
+            "disk.used_bytes{mount_point=\"/\"} > 1",
+        ),
+        // Enriched/optional field: excluded from the in-memory snapshot
+        // whitelist by design, so this is one of the shapes that genuinely
+        // takes the DB path on every eval tick.
+        ("resolve.disk.inode_used", "disk.inode_used_percent > 1"),
+        ("resolve.network.rx", "network.rx_bytes_per_sec > 1"),
+        ("resolve.process.cpu", "process.cpu_percent > 1"),
+        ("resolve.components.temp", "components.temperature_c > 1"),
+        ("resolve.cpu.usage(unkeyed)", "cpu.usage_percent > 1"),
+        ("resolve.cpu.steal(unkeyed,null)", "cpu.steal_percent > 1"),
+    ];
+
+    for (name, expr) in cases {
+        let parsed = expression::parse(expr).expect("parse");
+        // One untimed pass so the measurement isn't dominated by first-touch
+        // page faults on a freshly written file.
+        let _ = resolver::resolve(&app.state.db, &parsed.metric).await;
+
+        let t = Instant::now();
+        let out = resolver::resolve(&app.state.db, &parsed.metric).await;
+        let took = micros(t.elapsed());
+        // A resolve that errors returns instantly; reported as a sample count
+        // it would read as a fast query rather than one that never ran.
+        match out {
+            Ok(v) => report(name, took, &format!("us  ({} samples)", v.len())),
+            Err(e) => report(name, took, &format!("us  ERROR: {e}")),
+        }
+    }
+
+    page_stats(&app.state.db, "resolver").await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The collector write path. The `with`/`without` pair brackets exactly what
+/// gating the per-tick components write would save: today every tick carries
+/// them, while the sensor read behind it only refreshes every 30th.
+#[tokio::test]
+#[ignore]
+async fn dbbench_write_tick() {
+    use crate::models::stats::*;
+    use crate::storage::repositories::MetricsRepository;
+
+    let (app, dir) = app_on_disk("write").await;
+    let repo = MetricsRepository::new(app.state.db.clone());
+    let base = 1_800_000_000i64;
+
+    let mk = |ts: i64| {
+        let cpu = CpuStats {
+            usage_percent: 30.0,
+            per_core: (0..CORES)
+                .map(|i| CoreStats {
+                    core_index: i as u32,
+                    usage_percent: 25.0,
+                    freq_mhz: 3200,
+                })
+                .collect(),
+            load_avg: LoadAverage {
+                one: 1.0,
+                five: 1.1,
+                fifteen: 1.2,
+            },
+            timestamp: ts,
+            steal_percent: None,
+            iowait_percent: None,
+            guest_percent: None,
+            user_percent: Some(15.0),
+            system_percent: Some(5.0),
+            context_switches_per_sec: Some(4000),
+            process_forks_per_sec: Some(20),
+        };
+        let memory = MemoryStats {
+            total_bytes: 16_000_000_000,
+            used_bytes: 8_000_000_000,
+            available_bytes: 8_000_000_000,
+            cached_bytes: 2_000_000_000,
+            swap_total_bytes: 0,
+            swap_used_bytes: 0,
+            timestamp: ts,
+            page_faults_minor_per_sec: None,
+            page_faults_major_per_sec: None,
+            swap_in_pages_per_sec: None,
+            swap_out_pages_per_sec: None,
+        };
+        let disks: Vec<DiskStats> = MOUNTS
+            .iter()
+            .map(|m| DiskStats {
+                mount_point: m.to_string(),
+                total_bytes: 500_000_000_000,
+                used_bytes: 250_000_000_000,
+                available_bytes: 250_000_000_000,
+                read_bytes_per_sec: 1000,
+                write_bytes_per_sec: 2000,
+                timestamp: ts,
+                inode_used_percent: Some(12.5),
+                read_iops: Some(30),
+                write_iops: Some(40),
+                io_util_percent: None,
+            })
+            .collect();
+        let nets: Vec<NetworkStats> = IFACES
+            .iter()
+            .map(|i| NetworkStats {
+                interface: i.to_string(),
+                rx_bytes_per_sec: 100_000,
+                tx_bytes_per_sec: 50_000,
+                rx_packets_per_sec: 200,
+                tx_packets_per_sec: 100,
+                errors_in_per_sec: 0,
+                errors_out_per_sec: 0,
+                rx_bytes_total: 0,
+                tx_bytes_total: 0,
+                timestamp: ts,
+            })
+            .collect();
+        let pressure = PressureSnapshot {
+            cpu: Some(PressureStats {
+                some_avg10: 1.0,
+                some_avg60: 2.0,
+                some_avg300: 3.0,
+                full_avg10: 0.5,
+                full_avg60: 0.6,
+                full_avg300: 0.7,
+            }),
+            memory: None,
+            io: None,
+            timestamp: ts,
+        };
+        let components = ComponentsSnapshot {
+            components: (0..SENSORS)
+                .map(|i| ComponentInfo {
+                    label: format!("sensor{i}"),
+                    temperature_c: Some(45.0),
+                    max_c: Some(90.0),
+                    critical_c: Some(100.0),
+                })
+                .collect(),
+            timestamp: ts,
+        };
+        (cpu, memory, disks, nets, pressure, components)
+    };
+
+    const TICKS: i64 = 20;
+    const REPS: usize = 9;
+
+    let mut with_us: Vec<u128> = Vec::new();
+    let mut without_us: Vec<u128> = Vec::new();
+    let mut ts = base;
+
+    for rep in 0..REPS {
+        // Alternate which arm runs first. A WAL checkpoint fires at a fixed
+        // page count, so whichever arm happens to cross it absorbs its cost;
+        // a fixed order charges that to the same arm every rep and can invert
+        // the comparison outright.
+        let with_first = rep % 2 == 0;
+        for arm_with_components in [with_first, !with_first] {
+            let t = Instant::now();
+            for _ in 0..TICKS {
+                ts += 2;
+                let (c, m, d, n, p, comp) = mk(ts);
+                let components = if arm_with_components {
+                    Some(&comp)
+                } else {
+                    None
+                };
+                repo.insert_raw_tick(&c, &m, &d, &n, Some(&p), components)
+                    .await
+                    .expect("tick");
+            }
+            let per_tick = micros(t.elapsed()) / TICKS as u128;
+            if arm_with_components {
+                with_us.push(per_tick);
+            } else {
+                without_us.push(per_tick);
+            }
+        }
+    }
+
+    let median = |mut v: Vec<u128>| -> u128 {
+        v.sort_unstable();
+        v[v.len() / 2]
+    };
+    let with_comp = median(with_us);
+    let without_comp = median(without_us);
+
+    report("write.tick.with_components", with_comp, "us/tick");
+    report("write.tick.without_components", without_comp, "us/tick");
+    // Derived, not measured: the collector re-reads the sensors once every
+    // `COMPONENTS_REFRESH_EVERY_N_TICKS` ticks, so this is what an average
+    // tick costs when the series write follows that cadence instead of
+    // repeating the cached reading every time.
+    const REFRESH_EVERY: u128 = 30;
+    let amortised = (with_comp + (REFRESH_EVERY - 1) * without_comp) / REFRESH_EVERY;
+    report(
+        "write.tick.amortised_at_1_in_30",
+        amortised,
+        "us/tick  (derived from the two arms)",
+    );
+    // Signed on purpose: a negative share means the two arms are inside the
+    // noise floor and the run should be discarded, not read as a result.
+    report(
+        "write.tick.components_share",
+        format!(
+            "{:.1}",
+            (with_comp as f64 - without_comp as f64) * 100.0 / with_comp.max(1) as f64
+        ),
+        "%",
+    );
+
+    let comp_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM metrics_components")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap_or(-1);
+    report("write.components_rows_written", comp_rows, "rows");
+
+    page_stats(&app.state.db, "write").await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Rollup, in the two states that matter: a normal tick with one closed bucket
+/// to fold, and a tick for a resource that used to produce rows and stopped.
+/// The second is the one that does not self-correct.
+#[tokio::test]
+#[ignore]
+async fn dbbench_rollup() {
+    let (app, dir) = app_on_disk("rollup").await;
+    seed(&app.state.db).await;
+
+    // Steady state: pretend every resource was folded up to one bucket ago.
+    let now = chrono::Utc::now().timestamp();
+    for res in [
+        "cpu",
+        "memory",
+        "disk",
+        "network",
+        "docker",
+        "process",
+        "pressure",
+        "components",
+        "probe",
+    ] {
+        for (target, width) in [("1m", 60i64), ("5m", 300), ("1h", 3600)] {
+            let cursor = (now / width - 2) * width;
+            sqlx::query(
+                "INSERT INTO rollup_state (resource, resolution, last_bucket_ts, last_run_at)
+                 VALUES (?, ?, ?, 0)
+                 ON CONFLICT(resource, resolution) DO UPDATE SET last_bucket_ts = excluded.last_bucket_ts",
+            )
+            .bind(res)
+            .bind(target)
+            .bind(cursor)
+            .execute(&app.state.db)
+            .await
+            .expect("cursor");
+        }
+    }
+
+    let t = Instant::now();
+    crate::services::rollup::run_once(&app.state).await.expect("rollup");
+    report("rollup.tick.steady", micros(t.elapsed()) / 1000, "ms");
+
+    // A resource that produced rows and then went dark: `docker` has no rows
+    // here, and its cursor is non-zero, so every bucket from the cursor to now
+    // is swept and none of them writes anything.
+    for (target, width) in [("1m", 60i64), ("5m", 300), ("1h", 3600)] {
+        let stale = (now / width - 900) * width;
+        sqlx::query("UPDATE rollup_state SET last_bucket_ts = ? WHERE resource = 'docker' AND resolution = ?")
+            .bind(stale)
+            .bind(target)
+            .execute(&app.state.db)
+            .await
+            .expect("stale cursor");
+    }
+
+    let t = Instant::now();
+    crate::services::rollup::run_once(&app.state).await.expect("rollup");
+    report("rollup.tick.one_dark_resource", micros(t.elapsed()) / 1000, "ms");
+
+    // ...and again, to show whether the sweep converges or repeats.
+    let t = Instant::now();
+    crate::services::rollup::run_once(&app.state).await.expect("rollup");
+    report("rollup.tick.dark_resource_repeat", micros(t.elapsed()) / 1000, "ms");
+
+    // The number that decides whether the sweep is self-correcting: how far
+    // the cursor moved from where it was parked. Zero means every one of those
+    // buckets will be swept again on the next tick, and the one after that.
+    let cursor_after: i64 = sqlx::query_scalar(
+        "SELECT last_bucket_ts FROM rollup_state WHERE resource='docker' AND resolution='1m'",
+    )
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap_or(-1);
+    let stale_1m = (now / 60 - 900) * 60;
+    report(
+        "rollup.dark_cursor_moved_by",
+        cursor_after - stale_1m,
+        "s  (0 = never advances)",
+    );
+
+    page_stats(&app.state.db, "rollup").await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Retention: one unbounded DELETE per policy. The number that matters is not
+/// the total but the longest single statement — that is how long the sole
+/// writer is unavailable to the collectors, against a 5 s busy timeout.
+#[tokio::test]
+#[ignore]
+async fn dbbench_retention() {
+    use crate::storage::repositories::MetricsRepository;
+
+    let (app, dir) = app_on_disk("retention").await;
+    seed(&app.state.db).await;
+    let repo = MetricsRepository::new(app.state.db.clone());
+
+    const RESOURCES: &[&str] = &[
+        "cpu",
+        "memory",
+        "disk",
+        "network",
+        "cpu_cores",
+        "components",
+        "pressure",
+        "process",
+    ];
+    let now = chrono::Utc::now().timestamp();
+    let raw_keep = 86_400i64;
+
+    // Two passes, because they are different questions.
+    //
+    // The hourly pass on a host that has been up for a while deletes exactly
+    // the rows that aged out since the last one — an hour's worth. That is the
+    // cost the daemon actually pays, forever.
+    //
+    // The second is what happens the first time an operator shortens a keep
+    // window: one statement against most of a table. That is the case that
+    // decides whether the delete has to be chunked, and it is reachable from
+    // the API.
+    for (label, cutoff) in [
+        ("steady", now - raw_keep + 3600),
+        ("purge_to_1h", now - 3600),
+    ] {
+        let mut worst = 0u128;
+        let mut worst_res = "";
+        let mut total = 0u128;
+        for resource in RESOURCES {
+            let t = Instant::now();
+            let n = repo
+                .delete_older_than(resource, "raw", cutoff)
+                .await
+                .expect("delete");
+            let took = micros(t.elapsed());
+            total += took;
+            if took > worst {
+                worst = took;
+                worst_res = resource;
+            }
+            report(
+                &format!("retention.{label}.{resource}"),
+                took / 1000,
+                &format!("ms  ({n} rows)"),
+            );
+        }
+        report(&format!("retention.{label}.total"), total / 1000, "ms");
+        report(
+            &format!("retention.{label}.worst_stmt"),
+            worst / 1000,
+            &format!("ms  ({worst_res}; busy_timeout is 5000 ms)"),
+        );
+    }
+
+    // WAL after the pass: an unchunked delete cannot be checkpointed while it
+    // runs, so this is where the growth shows up.
+    let wal = dir.join("bench.sqlite3-wal");
+    let wal_bytes = std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+    report("retention.wal_bytes", wal_bytes, "bytes");
+
+    page_stats(&app.state.db, "retention").await;
+    let _ = std::fs::remove_dir_all(&dir);
+}

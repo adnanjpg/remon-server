@@ -14,6 +14,7 @@ mod assistant_api;
 mod assistant_tools;
 mod auth_flow;
 mod config_api;
+mod dbbench;
 mod events_api;
 mod heartbeats_api;
 mod incidents_api;
@@ -81,9 +82,31 @@ impl TestApp {
     /// a real provider key from the environment; every other test takes the
     /// default (no key → the endpoint is inert).
     pub async fn spawn_with_assistant(assistant_config: crate::config::AssistantConfig) -> TestApp {
-        let db = crate::storage::Database::connect("sqlite::memory:", 1)
+        Self::build("sqlite::memory:", 1, assistant_config).await
+    }
+
+    /// Same wiring over a caller-supplied database URL. The measurement suite
+    /// (`dbbench`) uses this to get a *file-backed* database: WAL, checkpoints,
+    /// page eviction and delete lock-hold do not exist on `:memory:`, and those
+    /// are exactly what it measures.
+    #[allow(dead_code)]
+    pub async fn spawn_at(db_url: &str, max_connections: u32) -> TestApp {
+        Self::build(
+            db_url,
+            max_connections,
+            crate::config::AssistantConfig::default(),
+        )
+        .await
+    }
+
+    async fn build(
+        db_url: &str,
+        max_connections: u32,
+        assistant_config: crate::config::AssistantConfig,
+    ) -> TestApp {
+        let db = crate::storage::Database::connect(db_url, max_connections)
             .await
-            .expect("connect in-memory sqlite");
+            .expect("connect sqlite");
         db.migrate().await.expect("run migrations");
 
         let auth_config = AuthConfig {

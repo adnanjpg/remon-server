@@ -10,6 +10,18 @@ codegen-units = 1
 panic = "abort"
 strip = "symbols"
 
+# Optimised like release, but without the fat-LTO link the shipped profile
+# pays. Measurements taken under `dev` are meaningless — SQLite itself is
+# compiled at opt-level 0 there — and a full release build is too slow to sit
+# in a measure-change-measure loop. Used by the `dbbench` suite.
+[profile.bench-fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+panic = "unwind"
+strip = "none"
+debug-assertions = false
+
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
