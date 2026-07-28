@@ -78,6 +78,42 @@ fn micros(d: std::time::Duration) -> u128 {
     d.as_micros()
 }
 
+/// Resident set of this process. SQLite's page cache is a private allocation
+/// per connection with no SQL-visible counter, so the only way to see what a
+/// `cache_size` change actually costs is to ask the OS.
+fn rss_bytes() -> u64 {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::ProcessStatus::{
+            GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        };
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+        // SAFETY: the struct is zeroed and its size passed as the API
+        // requires; the handle is a pseudo-handle that needs no release.
+        unsafe {
+            let mut c: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+            c.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+            if GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) != 0 {
+                return c.WorkingSetSize as u64;
+            }
+        }
+        0
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // statm field 2 is resident pages.
+        std::fs::read_to_string("/proc/self/statm")
+            .ok()
+            .and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok())
+            .map(|pages| pages * 4096)
+            .unwrap_or(0)
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        0
+    }
+}
+
 /// A file-backed database in the OS temp dir, wired exactly like production
 /// (same pragmas, same pool construction) via the normal harness.
 async fn app_on_disk(tag: &str) -> (TestApp, std::path::PathBuf) {
@@ -583,6 +619,82 @@ async fn dbbench_rollup() {
     );
 
     page_stats(&app.state.db, "rollup").await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// What a `cache_size` change actually buys and costs, both arms in one run.
+///
+/// The page cache is private to each connection, so the configured size is a
+/// per-connection ceiling multiplied by the pool — the reason the number is
+/// worth revisiting at all. Shrinking it is only safe if the read path does
+/// not pay for it, and that has to be measured against the same data in the
+/// same process; between runs this machine drifts by more than the effect.
+#[tokio::test]
+#[ignore]
+async fn dbbench_cache_size() {
+    use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    let (app, dir) = app_on_disk("cache").await;
+    seed(&app.state.db).await;
+    let path = dir.join("bench.sqlite3");
+    // Release the seeding pool so its cache is not counted against the arms.
+    app.state.db.close().await;
+    drop(app);
+
+    let baseline_rss = rss_bytes();
+    report("cache.rss_baseline", baseline_rss / 1024 / 1024, "MB");
+
+    for cache_kb in [-65_536i64, -8_000] {
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite:{}", path.display()))
+            .expect("opts")
+            .journal_mode(SqliteJournalMode::Wal)
+            .pragma("cache_size", cache_kb.to_string())
+            .pragma("temp_store", "MEMORY")
+            .pragma("mmap_size", (256u64 * 1024 * 1024).to_string());
+        let pool = SqlitePoolOptions::new()
+            .max_connections(5)
+            .connect_with(opts)
+            .await
+            .expect("pool");
+
+        // Force all five connections into existence and let each fill its own
+        // cache — one at a time would only ever warm the first.
+        let before = rss_bytes();
+        for _ in 0..3 {
+            let scans = (0..5).map(|_| async {
+                let _: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM metrics_disk WHERE resolution = 'raw'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap_or(0);
+            });
+            futures_util::future::join_all(scans).await;
+        }
+
+        let t = Instant::now();
+        for _ in 0..5 {
+            let _: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM metrics_disk WHERE resolution = 'raw'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap_or(0);
+        }
+        let read_us = micros(t.elapsed()) / 5;
+        let after = rss_bytes();
+
+        let label = if cache_kb == -65_536 { "64MB" } else { "8MB" };
+        report(
+            &format!("cache.{label}.rss_growth"),
+            (after.saturating_sub(before)) / 1024 / 1024,
+            "MB  (5 warmed connections)",
+        );
+        report(&format!("cache.{label}.read"), read_us, "us/scan");
+
+        pool.close().await;
+    }
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 

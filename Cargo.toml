@@ -84,6 +84,9 @@ docker = ["dep:bollard"]
 windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     "Win32_Foundation",
+    # Resident-set readout for the measurement suite; SQLite's page cache is
+    # per connection and there is no SQL-visible counter for what it holds.
+    "Win32_System_ProcessStatus",
 ] }
 
 [dev-dependencies]
