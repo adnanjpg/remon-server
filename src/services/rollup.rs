@@ -79,7 +79,10 @@ async fn run(state: Arc<AppState>) {
     }
 }
 
-async fn run_once(state: &AppState) -> anyhow::Result<()> {
+/// One full sweep: every rollup target × every resource. Visible to the crate
+/// so the measurement suite can drive a tick directly instead of waiting on
+/// the interval.
+pub(crate) async fn run_once(state: &AppState) -> anyhow::Result<()> {
     let res_repo = ResolutionRepository::new(state.db.clone());
     let cursor_repo = RollupStateRepository::new(state.db.clone());
 
@@ -143,7 +146,27 @@ async fn rollup_resource(
     let min_start = max_start.saturating_sub(MAX_BACKFILL_BUCKETS.saturating_mul(bucket));
     let mut bucket_start = start_from.max(min_start);
 
-    let mut last_written = cursor.last_bucket_ts;
+    // How far the parent tier is guaranteed not to write again. An empty
+    // bucket below this line can be stepped over: nothing will ever land in
+    // it. Above it, emptiness is temporary — the parent simply hasn't caught
+    // up — and stepping over would lose that bucket permanently.
+    //
+    // `raw` has no cursor because collectors write it live, and a bucket that
+    // has already closed cannot gain samples afterwards; everything up to
+    // `latest_closed_start` is settled.
+    let parent_settled_through = if parent == "raw" {
+        latest_closed_start
+    } else {
+        cursor_repo.get(resource, parent).await?.last_bucket_ts
+    };
+
+    // The cursor may only move across a contiguous run of finished buckets.
+    // `blocked` latches at the first bucket that is empty but still fillable,
+    // so a later bucket that does have rows is written (harmlessly, the write
+    // is idempotent) without the cursor jumping over the gap.
+    let mut commit_through = cursor.last_bucket_ts;
+    let mut blocked = false;
+    let mut wrote_any = false;
 
     while bucket_start <= latest_closed_start {
         let bucket_end = bucket_start + bucket;
@@ -157,8 +180,25 @@ async fn rollup_resource(
         )
         .await
         {
-            Ok(true) => last_written = bucket_start,
-            Ok(false) => {}
+            Ok(true) => {
+                wrote_any = true;
+                if !blocked {
+                    commit_through = bucket_start;
+                }
+            }
+            // Empty. Step over it only once the parent can no longer fill it —
+            // otherwise a resource that has gone quiet parks the cursor and
+            // every following tick re-sweeps the same widening range, up to
+            // the back-fill clamp, forever.
+            Ok(false) => {
+                if bucket_end <= parent_settled_through {
+                    if !blocked {
+                        commit_through = bucket_start;
+                    }
+                } else {
+                    blocked = true;
+                }
+            }
             Err(e) => {
                 // Stop at the first error. If we kept going and a later
                 // bucket succeeded, the cursor would advance past the
@@ -175,13 +215,13 @@ async fn rollup_resource(
         bucket_start = bucket_end;
     }
 
-    if last_written != cursor.last_bucket_ts {
+    if commit_through != cursor.last_bucket_ts {
         cursor_repo
-            .set(resource, &target.name, last_written)
+            .set(resource, &target.name, commit_through)
             .await?;
         debug!(
-            "rollup committed: resource={} resolution={} last_bucket_ts={}",
-            resource, target.name, last_written
+            "rollup committed: resource={} resolution={} last_bucket_ts={} wrote_rows={}",
+            resource, target.name, commit_through, wrote_any
         );
     }
 
