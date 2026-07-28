@@ -23,6 +23,15 @@ pub struct LogRow {
     pub message: String,
 }
 
+/// The read path for `GET /logs`. Built by hand rather than through the
+/// `query!` macro, so it never lands in the `.sqlx` cache the query-plan audit
+/// sweeps — it is named here so the audit can explain it explicitly.
+pub(crate) const LIST_SQL: &str = r#"SELECT id, timestamp, level, source, target, message
+               FROM logs
+              WHERE level <= ? AND timestamp >= ? AND timestamp <= ?
+              ORDER BY timestamp DESC, id DESC
+              LIMIT ?"#;
+
 pub struct LogRepository {
     pool: SqlitePool,
 }
@@ -66,19 +75,13 @@ impl LogRepository {
         end: i64,
         limit: u32,
     ) -> AppResult<Vec<LogRow>> {
-        let rows = sqlx::query(
-            r#"SELECT id, timestamp, level, source, target, message
-               FROM logs
-              WHERE level <= ? AND timestamp >= ? AND timestamp <= ?
-              ORDER BY timestamp DESC, id DESC
-              LIMIT ?"#,
-        )
-        .bind(max_level)
-        .bind(start)
-        .bind(end)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = sqlx::query(LIST_SQL)
+            .bind(max_level)
+            .bind(start)
+            .bind(end)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?;
 
         Ok(rows
             .into_iter()

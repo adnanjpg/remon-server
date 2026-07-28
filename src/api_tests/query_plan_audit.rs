@@ -19,7 +19,8 @@ use std::path::Path;
 use sqlx::{Row, SqlitePool};
 
 use super::TestApp;
-use crate::services::alerting::resolver::keyed_latest_sql;
+use crate::services::alerting::resolver::{keyed_latest_sql, probe_latest_sql, unkeyed_latest_sql};
+use crate::storage::repositories::logs::LIST_SQL as LOGS_LIST_SQL;
 
 /// Append-only / rolled-up tables that grow with retained history — a full
 /// scan or a sort over these is the smell we guard against. Small config /
@@ -175,6 +176,7 @@ async fn resolver_latest_per_key_uses_index_not_sorter() {
         ("metrics_components", "temperature_c", "label"),
         ("metrics_smart", "health_passed", "device"),
         ("metrics_docker", "cpu_percent", "container_id"),
+        ("metrics_process", "cpu_percent", "name"),
     ];
 
     let mut failures: Vec<String> = Vec::new();
@@ -194,6 +196,54 @@ async fn resolver_latest_per_key_uses_index_not_sorter() {
         failures.is_empty(),
         "the resolver's latest-per-key query regressed to a scan/sorter — the \
          (resolution, key, timestamp) index is missing or unused:\n{}",
+        failures.join("\n")
+    );
+}
+
+/// Queries assembled by hand never reach the `.sqlx` cache, so the sweep above
+/// cannot see them — and an index dropped as unused would look unused here too.
+/// Every such query is listed explicitly.
+#[tokio::test]
+async fn hand_built_queries_have_no_full_scan_or_sorter() {
+    let app = TestApp::spawn().await;
+
+    let mut sqls: Vec<(String, String)> = vec![
+        ("logs list".into(), LOGS_LIST_SQL.to_string()),
+        (
+            "unkeyed cpu".into(),
+            unkeyed_latest_sql("metrics_cpu", "usage_percent"),
+        ),
+        (
+            "unkeyed memory".into(),
+            unkeyed_latest_sql("metrics_memory", "used_bytes"),
+        ),
+    ];
+    // The probe shape varies with how much the rule constrains: no filter, a
+    // probe_name equality, and a JSON label predicate on top.
+    for (label, probe_clause, json_clauses) in [
+        ("probe unfiltered", "", ""),
+        ("probe by name", " AND probe_name = ?", ""),
+        (
+            "probe by name+label",
+            " AND probe_name = ?",
+            " AND json_extract(labels, ?) = ?",
+        ),
+    ] {
+        sqls.push((label.into(), probe_latest_sql(probe_clause, json_clauses)));
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    for (label, sql) in &sqls {
+        let plan = plan_details(&app.state.db, sql).await.expect("explain");
+        let off = offenders(sql, &plan);
+        if !off.is_empty() {
+            failures.push(format!("{label}: {off:?}"));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "a hand-built query scans or sorts a growing table:\n{}",
         failures.join("\n")
     );
 }

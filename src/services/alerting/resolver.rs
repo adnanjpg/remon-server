@@ -359,6 +359,19 @@ async fn resolve_inner(
 
 // ===== Single-row tables (cpu, memory) =====
 
+/// The single-row-table counterpart to [`keyed_latest_sql`]: newest non-NULL
+/// sample of one column. Extracted for the same reason — the audit explains it
+/// directly, since a query built by `format!` never reaches the `.sqlx` cache.
+pub(crate) fn unkeyed_latest_sql(table: &str, column: &str) -> String {
+    format!(
+        "SELECT {col} FROM {table}
+          WHERE resolution = 'raw' AND {col} IS NOT NULL
+          ORDER BY timestamp DESC LIMIT 1",
+        col = column,
+        table = table
+    )
+}
+
 async fn resolve_unkeyed(
     pool: &SqlitePool,
     metric: &MetricRef,
@@ -373,13 +386,7 @@ async fn resolve_unkeyed(
             metric.namespace
         )));
     }
-    let sql = format!(
-        "SELECT {col} FROM {table}
-          WHERE resolution = 'raw' AND {col} IS NOT NULL
-          ORDER BY timestamp DESC LIMIT 1",
-        col = column,
-        table = table
-    );
+    let sql = unkeyed_latest_sql(table, column);
 
     let value_opt: Option<f64> = if i64_fields.contains(&column) {
         sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql.as_str()))
@@ -706,6 +713,31 @@ fn pressure_snap_value(p: &PressureStats, field: &str) -> f64 {
 
 // ===== Probe namespace =====
 
+/// Latest value per `(probe_name, labels)` stream. The label predicates are
+/// caller-built (each carries its own placeholders), so the shape varies with
+/// the rule; the audit explains the unfiltered and filtered variants.
+pub(crate) fn probe_latest_sql(probe_clause: &str, json_clauses: &str) -> String {
+    format!(
+        "SELECT probe_name, labels, value
+           FROM metrics_probe
+          WHERE resolution = 'raw'
+            AND metric_name = ?
+            {probe_clause}
+            {json_clauses}
+            AND (probe_name, labels, timestamp) IN (
+              SELECT probe_name, labels, MAX(timestamp)
+                FROM metrics_probe
+               WHERE resolution = 'raw'
+                 AND metric_name = ?
+                 {probe_clause}
+                 {json_clauses}
+               GROUP BY probe_name, labels
+            )",
+        probe_clause = probe_clause,
+        json_clauses = json_clauses,
+    )
+}
+
 async fn resolve_probe(
     pool: &SqlitePool,
     metric: &MetricRef,
@@ -748,25 +780,7 @@ async fn resolve_probe(
     // Group on (probe_name, labels) so a probe emitting multiple
     // labelled streams (`{jail=sshd}`, `{jail=ftp}`) returns each as a
     // separate sample.
-    let sql = format!(
-        "SELECT probe_name, labels, value
-           FROM metrics_probe
-          WHERE resolution = 'raw'
-            AND metric_name = ?
-            {probe_clause}
-            {json_clauses}
-            AND (probe_name, labels, timestamp) IN (
-              SELECT probe_name, labels, MAX(timestamp)
-                FROM metrics_probe
-               WHERE resolution = 'raw'
-                 AND metric_name = ?
-                 {probe_clause}
-                 {json_clauses}
-               GROUP BY probe_name, labels
-            )",
-        probe_clause = probe_clause,
-        json_clauses = json_clauses,
-    );
+    let sql = probe_latest_sql(probe_clause, &json_clauses);
 
     let mut q = sqlx::query_as::<_, (String, String, f64)>(sqlx::AssertSqlSafe(sql.as_str()));
     q = q.bind(metric_name);
