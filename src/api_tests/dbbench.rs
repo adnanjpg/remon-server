@@ -622,6 +622,100 @@ async fn dbbench_rollup() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Per-row INSERT loop against one multi-row VALUES, for the tick sizes the
+/// repositories actually use. Both arms in one run, alternating, because the
+/// difference is a property of the technique and has to be separated from
+/// whatever else the machine is doing.
+#[tokio::test]
+#[ignore]
+async fn dbbench_batch_insert() {
+    let (app, dir) = app_on_disk("batch").await;
+    let pool = &app.state.db;
+
+    // 40 = two rankings of `process_series_top_k` deduplicated, the real
+    // per-tick row count for the process series.
+    const ROWS: i64 = 40;
+    const REPS: usize = 9;
+
+    let mut loop_us: Vec<u128> = Vec::new();
+    let mut batch_us: Vec<u128> = Vec::new();
+    let mut ts = 1_900_000_000i64;
+
+    for rep in 0..REPS {
+        for loop_first in [rep % 2 == 0, rep % 2 != 0] {
+            ts += 60;
+            let t = Instant::now();
+            if loop_first {
+                let mut tx = pool.begin().await.expect("begin");
+                for i in 0..ROWS {
+                    sqlx::query(
+                        "INSERT INTO metrics_process
+                           (resolution, timestamp, name, pid_count,
+                            cpu_percent, memory_bytes, disk_read_bps, disk_write_bps)
+                         VALUES ('raw', ?, ?, ?, ?, ?, ?, ?)
+                         ON CONFLICT(resolution, timestamp, name) DO NOTHING",
+                    )
+                    .bind(ts)
+                    .bind(format!("proc{i}"))
+                    .bind(3i64)
+                    .bind(5.0f64)
+                    .bind(100_000_000i64)
+                    .bind(0i64)
+                    .bind(0i64)
+                    .execute(&mut *tx)
+                    .await
+                    .expect("insert");
+                }
+                tx.commit().await.expect("commit");
+            } else {
+                let mut qb = sqlx::QueryBuilder::new(
+                    "INSERT INTO metrics_process
+                       (resolution, timestamp, name, pid_count,
+                        cpu_percent, memory_bytes, disk_read_bps, disk_write_bps) ",
+                );
+                qb.push_values(0..ROWS, |mut b, i| {
+                    b.push_bind("raw")
+                        .push_bind(ts)
+                        .push_bind(format!("proc{i}"))
+                        .push_bind(3i64)
+                        .push_bind(5.0f64)
+                        .push_bind(100_000_000i64)
+                        .push_bind(0i64)
+                        .push_bind(0i64);
+                });
+                qb.push(" ON CONFLICT(resolution, timestamp, name) DO NOTHING");
+                qb.build().execute(pool).await.expect("batch insert");
+            }
+            let took = micros(t.elapsed());
+            if loop_first {
+                loop_us.push(took);
+            } else {
+                batch_us.push(took);
+            }
+        }
+    }
+
+    let median = |mut v: Vec<u128>| -> u128 {
+        v.sort_unstable();
+        v[v.len() / 2]
+    };
+    let per_row_loop = median(loop_us);
+    let one_batch = median(batch_us);
+
+    report("batch.loop_in_tx", per_row_loop, "us/tick (40 rows)");
+    report("batch.single_values", one_batch, "us/tick (40 rows)");
+    report(
+        "batch.saving",
+        format!(
+            "{:.1}",
+            (per_row_loop as f64 - one_batch as f64) * 100.0 / per_row_loop.max(1) as f64
+        ),
+        "%",
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// What a `cache_size` change actually buys and costs, both arms in one run.
 ///
 /// The page cache is private to each connection, so the configured size is a
