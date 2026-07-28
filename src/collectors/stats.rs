@@ -213,7 +213,14 @@ pub async fn run(state: Arc<AppState>) {
                 &disks_arc,
                 &network,
                 pressure.as_deref(),
-                Some(&components_full),
+                // Only on the ticks that actually re-read the sensors. The
+                // other 29 in 30 would restamp an unchanged reading with a
+                // fresh timestamp — wasted writes, and a row asserting a
+                // measurement that was never taken, which the rollup then
+                // averages as though it were 30 observations. The live
+                // broadcast and the SSE primer above still carry the cached
+                // reading every tick; only the series stops repeating it.
+                do_comp.then(|| components_full.as_ref()),
             )
             .await
         {
