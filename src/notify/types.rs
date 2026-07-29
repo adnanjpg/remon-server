@@ -1,6 +1,8 @@
 /// Notification severity — mirrors AlertSeverity but kept independent so
 /// this module has no coupling to the alert engine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Ordered: `Warn < Crit`, so folding several events into one page can keep
+/// the loudest severity among them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
     Warn,
     Crit,

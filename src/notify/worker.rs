@@ -60,22 +60,30 @@ impl NotifyQueue {
     /// naturally, and the only choice that keeps the ordering the queue exists
     /// to provide. The drop is logged and the event's `notified` stays false,
     /// so the timeline shows honestly that nobody was paged.
-    pub fn dispatch(&self, notification: Notification, receipt: Option<i64>) {
+    /// Returns whether the notification was accepted — callers that record
+    /// "notified" (the alert cooldown) need to know.
+    pub fn dispatch(&self, notification: Notification, receipt: Option<i64>) -> bool {
         use mpsc::error::TrySendError;
         match self.tx.try_send(NotifyRequest {
             notification,
             receipt,
         }) {
-            Ok(()) => {}
-            Err(TrySendError::Full(req)) => warn!(
-                "notification queue full ({} deep), dropped: {}",
-                CAPACITY, req.notification.title
-            ),
+            Ok(()) => true,
+            Err(TrySendError::Full(req)) => {
+                warn!(
+                    "notification queue full ({} deep), dropped: {}",
+                    CAPACITY, req.notification.title
+                );
+                false
+            }
             // Shutdown closed the receiver — expected, not a fault.
-            Err(TrySendError::Closed(req)) => debug!(
-                "notification queue closed, dropped: {}",
-                req.notification.title
-            ),
+            Err(TrySendError::Closed(req)) => {
+                debug!(
+                    "notification queue closed, dropped: {}",
+                    req.notification.title
+                );
+                false
+            }
         }
     }
 }
@@ -120,17 +128,15 @@ async fn run(
                 None => return,
             },
         };
-        // Raced against the flush signal: a wedged relay holds one delivery
-        // for its whole fan-out budget, and the stop cannot wait that long.
-        // Abandoning it leaves `notified` false, which is the honest record.
+        // Raced against flush: a wedged relay holds one delivery for its whole
+        // fan-out budget. Abandoning it leaves `notified` false.
         tokio::select! {
             _ = deliver(&notify, &pool, req) => {}
             _ = crate::shutdown::flagged(&mut flush) => break,
         }
     }
 
-    // Flushing runs after the ledger's, so rows written during that drain have
-    // had their chance to page before the queue closes.
+    // Runs after the ledger's flush, so rows written there have already paged.
     rx.close();
     let drain = async {
         let mut sent = 0usize;

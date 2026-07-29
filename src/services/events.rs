@@ -127,10 +127,8 @@ async fn ledger_writer(
         write_one(&state, event).await;
     }
 
-    // The flush signal is only sent once serving has stopped and the periodic
-    // loops have wound down, so the queue has a last element — closing it and
-    // draining to empty is exact, where waiting out a quiet period was a guess
-    // that ended the drain while handlers were still finishing.
+    // Flush is signalled only after serving stops, so the queue has a last
+    // element and draining to empty is exact.
     rx.close();
     let mut written = 0usize;
     while let Some(ev) = rx.recv().await {
@@ -170,26 +168,45 @@ pub fn record(state: &Arc<AppState>, event: NewHostEvent) {
 /// the system-event sweep, SMART, operator audit) shares it. Insert failure is
 /// logged and skips the notify.
 async fn insert_and_maybe_notify(state: &Arc<AppState>, event: &NewHostEvent) {
-    if let Err(e) = HostEventRepository::new(state.db.clone())
-        .insert(event)
-        .await
-    {
-        warn!("host event insert failed (kind={}): {e}", event.kind);
+    if !insert_event(state, event).await {
         return;
     }
     let Some(sev) = notify_severity(event.kind, event.severity) else {
         return;
     };
+    page(state, event.kind, sev, event.message.clone(), 1).await;
+}
+
+/// Record the row. `false` on insert failure — nothing downstream should then
+/// act as though the event happened.
+async fn insert_event(state: &Arc<AppState>, event: &NewHostEvent) -> bool {
+    match HostEventRepository::new(state.db.clone())
+        .insert(event)
+        .await
+    {
+        Ok(_) => true,
+        Err(e) => {
+            warn!("host event insert failed (kind={}): {e}", event.kind);
+            false
+        }
+    }
+}
+
+/// Queue one page; `count` above 1 folds that many occurrences into it.
+/// Queued rather than awaited — a slow relay would hold up the caller's tick.
+async fn page(state: &Arc<AppState>, kind: &str, sev: Severity, body: String, count: usize) {
     let server_name = state.effective_config.read().await.server_name.clone();
+    let body = if count > 1 {
+        format!("{body}\n(and {} more in this window)", count - 1)
+    } else {
+        body
+    };
     let n = Notification {
-        title: format!("[{}] {}", server_name, host_event_subject(event.kind)),
-        body: event.message.clone(),
+        title: format!("[{}] {}", server_name, host_event_subject(kind)),
+        body,
         severity: sev,
         event: NotificationEvent::HostEvent,
     };
-    // Queued, not awaited: this runs inside the system-event sweep loop, and a
-    // relay taking its full budget would hold up both the remaining events of
-    // this tick and the cursor write that follows them.
     state.notify_queue.dispatch(n, None);
 }
 
@@ -488,6 +505,9 @@ async fn system_event_sweep_loop(state: Arc<AppState>) {
                 SWEEP_MAX_EVENTS_PER_TICK
             );
         }
+        // Every event is recorded; pages are folded per kind. A failing disk
+        // emits one line per failed I/O, which is one incident to an operator.
+        let mut folded: Vec<(&'static str, Severity, String, usize)> = Vec::new();
         for ev in plan.record {
             let event = NewHostEvent {
                 created_at: Some(ev.ts),
@@ -499,7 +519,23 @@ async fn system_event_sweep_loop(state: Arc<AppState>) {
                 ref_id: ev.ref_id,
                 ..Default::default()
             };
-            insert_and_maybe_notify(&state, &event).await;
+            if !insert_event(&state, &event).await {
+                continue;
+            }
+            let Some(sev) = notify_severity(event.kind, event.severity) else {
+                continue;
+            };
+            match folded.iter_mut().find(|(k, ..)| *k == event.kind) {
+                // First message as the specimen, loudest severity seen.
+                Some(entry) => {
+                    entry.1 = entry.1.max(sev);
+                    entry.3 += 1;
+                }
+                None => folded.push((event.kind, sev, event.message.clone(), 1)),
+            }
+        }
+        for (kind, sev, body, count) in folded {
+            page(&state, kind, sev, body, count).await;
         }
         cursor = plan.next_cursor;
         let _ = rs.set(KEY_SYSEVENT_CURSOR, &cursor.to_string()).await;
