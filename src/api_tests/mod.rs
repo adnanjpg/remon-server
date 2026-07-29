@@ -25,6 +25,7 @@ mod process_api;
 mod public;
 mod push_api;
 mod query_plan_audit;
+mod rollup_aggregate;
 mod rollup_cursor;
 mod smart_api;
 mod sse_shutdown;

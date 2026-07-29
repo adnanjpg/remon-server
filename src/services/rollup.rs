@@ -322,6 +322,14 @@ async fn aggregate_one_bucket(
              GROUP BY interface_name
             "#
         }
+        // The four byte columns are Docker's own counters, cumulative since the
+        // container started — the collector stores `networks.*.rx_bytes` and the
+        // blkio totals as read. Averaging a monotonic counter produces a number
+        // the container never reported, somewhere between the bucket's first and
+        // last reading, and every coarser tier then averages that again. MAX is
+        // the bucket's end value, and the one reading worth keeping when a
+        // restart resets the counter mid-bucket. The rest are gauges (memory,
+        // pids) or an already-derived rate (cpu_percent), where AVG is right.
         "docker" => {
             r#"
             INSERT OR REPLACE INTO metrics_docker
@@ -333,10 +341,10 @@ async fn aggregate_one_bucket(
                    AVG(cpu_percent),
                    CAST(AVG(memory_used_bytes)  AS INTEGER),
                    CAST(AVG(memory_limit_bytes) AS INTEGER),
-                   CAST(AVG(network_rx_bytes)   AS INTEGER),
-                   CAST(AVG(network_tx_bytes)   AS INTEGER),
-                   CAST(AVG(block_read_bytes)   AS INTEGER),
-                   CAST(AVG(block_write_bytes)  AS INTEGER),
+                   MAX(network_rx_bytes),
+                   MAX(network_tx_bytes),
+                   MAX(block_read_bytes),
+                   MAX(block_write_bytes),
                    CAST(AVG(pids)               AS INTEGER)
               FROM metrics_docker
              WHERE resolution = ? AND timestamp >= ? AND timestamp < ?
