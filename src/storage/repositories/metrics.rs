@@ -43,7 +43,12 @@ impl MetricsRepository {
         pressure: Option<&PressureSnapshot>,
         components: Option<&ComponentsSnapshot>,
     ) -> AppResult<()> {
-        let mut tx = self.pool.begin().await?;
+        // IMMEDIATE, not deferred: a deferred transaction that read before its
+        // first write would upgrade its snapshot, and SQLITE_BUSY_SNAPSHOT is
+        // the one contention error the busy handler is never consulted for.
+        // Taking the write lock up front keeps that unreachable by construction
+        // rather than by statement order.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
 
         let ctx_switches = cpu.context_switches_per_sec.map(|v| v as i64);
         let proc_forks = cpu.process_forks_per_sec.map(|v| v as i64);
