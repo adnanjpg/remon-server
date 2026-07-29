@@ -55,7 +55,6 @@ const BOOT_JITTER_SECS: i64 = 120;
 /// is set to make one unreachable in practice rather than merely unlikely.
 const LEDGER_CAPACITY: usize = 1024;
 
-
 /// Producer handle for the ledger. Cheap to clone; lives on `AppState`.
 #[derive(Clone)]
 pub struct LedgerQueue {
@@ -650,8 +649,20 @@ async fn scan_system_events(since_ts: i64) -> Result<Vec<SysEvent>, ScanError> {
     // blinded the sweep on exactly the hosts most likely to have something
     // worth reporting. So stderr only fails the scan when nothing came back
     // with it.
+    //
+    // "Nothing came back" has to be counted in entries rather than in bytes.
+    // A read without the privileges for the kernel journal writes the hint
+    // about not seeing other users' messages to stderr and that same banner to
+    // stdout — non-empty output carrying no entries, which passed as a
+    // successful empty scan. The sweep then advanced its cursor every tick and
+    // reported nothing, for the life of the process, saying so nowhere.
+    let entries: Vec<&str> = stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with("--"))
+        .collect();
+
     if !stderr.trim().is_empty() {
-        if stdout.trim().is_empty() {
+        if entries.is_empty() {
             return Err(ScanError::Transient(format!(
                 "journalctl exited with {}: {}",
                 output.status,
@@ -664,9 +675,8 @@ async fn scan_system_events(since_ts: i64) -> Result<Vec<SysEvent>, ScanError> {
         );
     }
 
-    Ok(stdout
-        .lines()
-        .filter(|l| !l.trim().is_empty() && !l.starts_with("--"))
+    Ok(entries
+        .into_iter()
         .filter_map(classify_kernel_line)
         .collect())
 }
