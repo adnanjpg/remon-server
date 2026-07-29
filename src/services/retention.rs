@@ -51,7 +51,9 @@ async fn run(state: Arc<AppState>) {
     }
 }
 
-async fn run_once(state: &AppState) -> anyhow::Result<()> {
+/// One full pass: every policy, then a statistics refresh. Visible to the crate
+/// so a test can assert the refresh happens rather than trusting the wiring.
+pub(crate) async fn run_once(state: &AppState) -> anyhow::Result<()> {
     let policy_repo = RetentionRepository::new(state.db.clone());
     let metrics_repo = MetricsRepository::new(state.db.clone());
 
@@ -83,6 +85,21 @@ async fn run_once(state: &AppState) -> anyhow::Result<()> {
 
     if total_deleted > 0 {
         debug!("retention tick: total rows deleted = {}", total_deleted);
+    }
+
+    // Refresh the planner's statistics. Nothing created them before, so
+    // `sqlite_stat1` did not exist and every plan came from SQLite's built-in
+    // guesses — and the guess for the alert resolver's per-key seek is the
+    // primary key, which walks a whole resolution partition for each key rather
+    // than seeking that key's newest row. The `(resolution, key, timestamp)`
+    // indexes are only chosen once there are statistics to compare.
+    //
+    // Here because this pass has just changed the row counts the statistics
+    // describe, and because it runs both at startup and hourly. `optimize`
+    // re-analyses only what has drifted far enough to matter, so it costs
+    // nothing on the ticks where nothing has.
+    if let Err(e) = sqlx::query("PRAGMA optimize").execute(&state.db).await {
+        warn!("PRAGMA optimize failed: {:?}", e);
     }
 
     Ok(())
