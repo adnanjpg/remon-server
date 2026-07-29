@@ -290,6 +290,124 @@ async fn seed(pool: &SqlitePool) -> i64 {
     rows
 }
 
+/// Key counts the cardinality sweep walks. The resolver seeks once per key, so
+/// this is the axis its cost actually moves along — measured across a range
+/// rather than guessed at a single host's shape. `BENCH_KEYS` overrides.
+fn sweep_keys() -> Vec<i64> {
+    match std::env::var("BENCH_KEYS") {
+        Ok(v) => v
+            .split(',')
+            .filter_map(|s| s.trim().parse::<i64>().ok())
+            .filter(|k| *k > 0)
+            .collect(),
+        Err(_) => vec![2, 4, 8, 20, 50],
+    }
+}
+
+/// `metrics_disk` alone, every tier, at an arbitrary key count.
+///
+/// Only this table, because the queries under measurement touch only this
+/// table — but every tier of it, because the b-tree the seek descends is the
+/// whole table, not the `raw` partition. Seeding `raw` alone would report a
+/// shallower tree than production has.
+async fn seed_disk(pool: &SqlitePool, keys: i64) {
+    let div = bench_div();
+    let now = chrono::Utc::now().timestamp();
+
+    for (res, interval, retained) in TIERS {
+        let step = *interval;
+        let ticks = (retained / step / div).max(1);
+        let base = now - ticks * step;
+        let mounts = (0..keys)
+            .map(|i| format!("SELECT {} AS k", i))
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ");
+
+        // `inode_used_percent` and `io_util_percent` stay NULL for every row —
+        // which is not a convenience, it is the state of an optional field on a
+        // host that never populates it, and it is the state the seek behaves
+        // worst in.
+        let sql = format!(
+            "WITH RECURSIVE t(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM t WHERE n < {ticks} - 1)
+             INSERT OR IGNORE INTO metrics_disk
+               (resolution, timestamp, mount_point, total_bytes, used_bytes, available_bytes,
+                read_bytes_per_sec, write_bytes_per_sec, inode_used_percent,
+                read_iops, write_iops, io_util_percent)
+             SELECT '{res}', {base} + n*{step}, 'mnt' || m.k, 500000000000,
+                    250000000000 + n, 250000000000, 1000, 2000, NULL, 30, 40, NULL
+             FROM t CROSS JOIN ({mounts}) m"
+        );
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .execute(pool)
+            .await
+            .expect("seed disk");
+    }
+}
+
+/// What the alert resolver's DB path costs as a function of key count, and what
+/// it costs when the selected column is NULL for every row it could return.
+///
+/// Both axes exist because the single-shape measurement in [`dbbench_resolver`]
+/// cannot separate them: it reported one number at one host's cardinality, and
+/// the question that decides whether this path matters is how that number moves
+/// — with the number of mounts, containers or interfaces a host happens to
+/// have, and with whether the field is one this host ever fills in.
+#[tokio::test]
+#[ignore]
+async fn dbbench_resolver_cardinality() {
+    let populated = expression::parse("disk.used_bytes > 1").expect("parse");
+    let all_null = expression::parse("disk.inode_used_percent > 1").expect("parse");
+
+    for keys in sweep_keys() {
+        let (app, dir) = app_on_disk(&format!("card{keys}")).await;
+        let t = Instant::now();
+        seed_disk(&app.state.db, keys).await;
+        report(
+            &format!("card.{keys}.seed"),
+            micros(t.elapsed()) / 1000,
+            "ms",
+        );
+
+        // Both arms are measured twice: once as production runs today, and once
+        // after `ANALYZE`. Nothing in the server ever runs it, so `sqlite_stat1`
+        // does not exist on a live database and every plan is chosen from
+        // SQLite's built-in guesses — which is why the per-key seek falls back
+        // to the PRIMARY KEY instead of the index built for it.
+        for stats in ["no_stats", "analyzed"] {
+            if stats == "analyzed" {
+                let t = Instant::now();
+                sqlx::query(sqlx::AssertSqlSafe("ANALYZE"))
+                    .execute(&app.state.db)
+                    .await
+                    .expect("analyze");
+                report(
+                    &format!("card.{keys}.analyze_cost"),
+                    micros(t.elapsed()) / 1000,
+                    "ms",
+                );
+            }
+
+            for (label, parsed) in [("populated", &populated), ("all_null", &all_null)] {
+                // One untimed pass so first-touch page faults land outside the
+                // measurement, matching `dbbench_resolver`.
+                let _ = resolver::resolve(&app.state.db, &parsed.metric).await;
+
+                let t = Instant::now();
+                let out = resolver::resolve(&app.state.db, &parsed.metric).await;
+                let took = micros(t.elapsed());
+                let samples = out.map(|v| v.len()).unwrap_or(0);
+                report(
+                    &format!("card.{keys}.{label}.{stats}"),
+                    took,
+                    &format!("us  ({samples} samples)"),
+                );
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 async fn page_stats(pool: &SqlitePool, prefix: &str) {
     for (pragma, label) in [
         ("page_count", "page_count"),
