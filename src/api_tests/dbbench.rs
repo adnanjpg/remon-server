@@ -1121,6 +1121,74 @@ async fn dbbench_batch_insert() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `PRAGMA optimize` runs at the end of every retention pass, on the same
+/// connection pool the collectors write through, and it takes the write lock
+/// while it re-analyses. Two things decide whether that is safe: how long it
+/// holds, and what a collector insert waiting behind it pays against the 5 s
+/// `busy_timeout`.
+#[tokio::test]
+#[ignore]
+async fn dbbench_optimize() {
+    use crate::storage::repositories::MetricsRepository;
+
+    let (app, dir) = app_on_disk("optimize").await;
+    seed(&app.state.db).await;
+
+    // Statistics are current straight after the seed — the cheap case, which is
+    // what most hourly ticks look like.
+    let t = Instant::now();
+    sqlx::query("PRAGMA optimize")
+        .execute(&app.state.db)
+        .await
+        .expect("optimize");
+    report("optimize.stats_current", micros(t.elapsed()) / 1000, "ms");
+
+    // Now make them stale the way a retention pass does, then optimize while
+    // inserts are running, recording the worst wait one of them sees.
+    let repo = MetricsRepository::new(app.state.db.clone());
+    let now = chrono::Utc::now().timestamp();
+    for resource in ["cpu_cores", "components", "disk"] {
+        repo.delete_older_than(resource, "raw", now - 3600)
+            .await
+            .expect("delete");
+    }
+
+    let pool = app.state.db.clone();
+    let writer = tokio::spawn(async move {
+        let mut worst = 0u128;
+        let base = 1_950_000_000i64;
+        for i in 0..200 {
+            let t = Instant::now();
+            let _ = sqlx::query(
+                "INSERT OR IGNORE INTO metrics_cpu_cores (timestamp, core_index, usage_percent, freq_mhz)
+                 VALUES (?, 0, 1.0, 1)",
+            )
+            .bind(base + i)
+            .execute(&pool)
+            .await;
+            worst = worst.max(micros(t.elapsed()));
+        }
+        worst
+    });
+
+    let t = Instant::now();
+    sqlx::query("PRAGMA optimize")
+        .execute(&app.state.db)
+        .await
+        .expect("optimize");
+    let optimize_us = micros(t.elapsed());
+    let worst_insert = writer.await.expect("writer");
+
+    report("optimize.stats_stale", optimize_us / 1000, "ms");
+    report(
+        "optimize.worst_concurrent_insert",
+        worst_insert / 1000,
+        "ms  (busy_timeout is 5000 ms)",
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// What a `cache_size` change actually buys and costs, both arms in one run.
 ///
 /// The page cache is private to each connection, so the configured size is a
