@@ -148,13 +148,23 @@ try {
     # pairing code is printed to, and the wrapper the startup task executes as
     # SYSTEM. So it is given an explicit ACL before anything is written into it,
     # and a directory somebody else already owns is refused rather than adopted.
-    $dataExisted = Test-Path $DataDir
-    New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
-
     # Well-known SIDs, not names: the builtin accounts are localised, so
     # "BUILTIN\Administrators" does not exist as such on a non-English install.
     $sidSystem = 'S-1-5-18'
     $sidAdmins = 'S-1-5-32-544'
+
+    # Created without -Force so that "this already existed" comes from the
+    # create itself. -Force succeeds either way, so a separate Test-Path had to
+    # answer it — and any local user may create entries under ProgramData, so
+    # a directory planted between the two was reported as new and skipped the
+    # ownership check written to catch exactly that.
+    $dataExisted = $false
+    try {
+        New-Item -ItemType Directory -Path $DataDir -ErrorAction Stop | Out-Null
+    } catch {
+        if (-not (Test-Path -LiteralPath $DataDir -PathType Container)) { throw }
+        $dataExisted = $true
+    }
 
     if ($dataExisted) {
         $acl = Get-Acl -Path $DataDir
@@ -175,12 +185,30 @@ try {
             [Security.Principal.SecurityIdentifier]::new($who),
             'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))
     }
+    # An owner holds WRITE_DAC whatever the DACL says, so locking the ACL down
+    # and leaving the directory owned by whoever created it hands that account
+    # the means to give itself access straight back. Under ProgramData,
+    # CREATOR OWNER makes that account an ordinary local user in precisely the
+    # case this block exists for.
+    $acl.SetOwner([Security.Principal.SecurityIdentifier]::new($sidAdmins))
     Set-Acl -Path $DataDir -AclObject $acl
 
     # The binary carries its own defaults, so this file exists to be edited,
     # not to be required. Never overwrite an operator's copy on upgrade.
     $configPath = Join-Path $DataDir 'config.toml'
     if (Test-Path $configPath) {
+        # Securing the directory is not atomic with creating it, and this file
+        # may predate both. config.toml is executable input — `smart.smartctl_path`
+        # on its own names a binary the server then runs as SYSTEM — so it is
+        # honoured only when it belongs to an account that could have put it
+        # there legitimately.
+        $configAcl = Get-Acl -Path $configPath
+        $configOwner = $configAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+        if ($configOwner -ne $sidSystem -and
+            $configOwner -ne $sidAdmins -and
+            $configOwner -ne $identity.User.Value) {
+            Fail "$configPath is owned by $($configAcl.Owner) — it names binaries this server runs as SYSTEM. Remove it and re-run."
+        }
         Write-Note "kept existing $configPath"
     } else {
         $sample = Get-ChildItem -Path $tmp -Filter 'config.toml.sample' -Recurse |
@@ -209,6 +237,12 @@ allow_any_origin = false
 allowed_origins = []
 '@ | Set-Content -Path $configPath -Encoding UTF8
         }
+        # Owned by Administrators rather than by whoever ran the installer, so
+        # the check above still passes when the next upgrade is run from a
+        # different administrator account.
+        $configAcl = Get-Acl -Path $configPath
+        $configAcl.SetOwner([Security.Principal.SecurityIdentifier]::new($sidAdmins))
+        Set-Acl -Path $configPath -AclObject $configAcl
         Write-Note "wrote $configPath"
     }
 
