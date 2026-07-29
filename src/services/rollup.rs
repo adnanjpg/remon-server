@@ -9,9 +9,10 @@
 //! 3. Use `INSERT OR REPLACE` keyed on the bucket timestamp so a re-run
 //!    over the same window is idempotent.
 //!
-//! After extended downtime we deliberately clamp how far back we look
-//! (`MAX_BACKFILL_BUCKETS`) — we'd rather lose old aggregates than spend
-//! minutes back-filling on every restart.
+//! After extended downtime we bound how much a single tick will aggregate
+//! (`MAX_BACKFILL_BUCKETS`) rather than spending minutes back-filling on the
+//! first tick after a restart. What is left over waits for the next tick; the
+//! cursor never steps past a bucket it did not aggregate.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,8 +22,18 @@ use log::{debug, warn};
 use crate::state::AppState;
 use crate::storage::repositories::{Resolution, ResolutionRepository, RollupStateRepository};
 
-/// How many child buckets to back-fill in a single tick after a long gap.
-/// 1h × 720 = 30 days; usually we only do 1-2 per tick.
+/// How many child buckets one tick will aggregate before leaving the rest to
+/// the next one. Usually 1-2 are due; this bounds a tick that finds a long gap.
+///
+/// A budget, not a horizon. It used to clamp how far *back* a tick would reach,
+/// and the buckets older than the clamp were not deferred but skipped — the
+/// cursor resumed ahead of them and nothing ever came back. 720 buckets is 30
+/// days at 1h, which is where the "30 days" reading came from, but only 12
+/// hours at 1m, and `raw` — what the 1m tier is built from — is kept for a day.
+/// So a gap between 12 and 24 hours punched a permanent hole in the 1m tier
+/// with the raw rows to fill it sitting right there. Stopping where the budget
+/// runs out and resuming there next tick costs several ticks to catch up and
+/// loses nothing.
 const MAX_BACKFILL_BUCKETS: i64 = 720;
 
 /// Resources that get full rollup coverage (per-bucket aggregation).
@@ -140,11 +151,7 @@ async fn rollup_resource(
         return Ok(());
     }
 
-    // Clamp the back-fill range so a restart after long downtime doesn't
-    // try to rebuild months of aggregates in one tick.
-    let max_start = latest_closed_start;
-    let min_start = max_start.saturating_sub(MAX_BACKFILL_BUCKETS.saturating_mul(bucket));
-    let mut bucket_start = start_from.max(min_start);
+    let mut bucket_start = start_from;
 
     // How far the parent tier is guaranteed not to write again. An empty
     // bucket below this line can be stepped over: nothing will ever land in
@@ -168,7 +175,13 @@ async fn rollup_resource(
     let mut blocked = false;
     let mut wrote_any = false;
 
-    while bucket_start <= latest_closed_start {
+    // Bounds the work of one tick without bounding how far back the cursor can
+    // eventually reach: whatever is left is still ahead of `commit_through`,
+    // and the next tick starts there.
+    let mut budget = MAX_BACKFILL_BUCKETS;
+
+    while bucket_start <= latest_closed_start && budget > 0 {
+        budget -= 1;
         let bucket_end = bucket_start + bucket;
         match aggregate_one_bucket(
             state,
