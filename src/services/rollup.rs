@@ -153,26 +153,21 @@ async fn rollup_resource(
 
     let mut bucket_start = start_from;
 
-    // How far the parent tier is guaranteed not to write again. An empty
-    // bucket below this line can be stepped over: nothing will ever land in
-    // it. Above it, emptiness is temporary — the parent simply hasn't caught
-    // up — and stepping over would lose that bucket permanently.
+    // The end of what the parent has finished writing. A bucket is only ready
+    // to aggregate once the parent has covered all of it — rows present are not
+    // the same as a complete range, and averaging a window the parent is still
+    // filling freezes a partial value the cursor then moves past.
     //
-    // `raw` has no cursor because collectors write it live, and a bucket that
-    // has already closed cannot gain samples afterwards; everything up to
-    // `latest_closed_start` is settled.
+    // `raw` is written live by the collectors, so every closed bucket is
+    // complete. A rolled parent is trusted only to the start of its own last
+    // written bucket, which trails by one parent bucket and never overstates.
     let parent_settled_through = if parent == "raw" {
-        latest_closed_start
+        latest_closed_start + bucket
     } else {
         cursor_repo.get(resource, parent).await?.last_bucket_ts
     };
 
-    // The cursor may only move across a contiguous run of finished buckets.
-    // `blocked` latches at the first bucket that is empty but still fillable,
-    // so a later bucket that does have rows is written (harmlessly, the write
-    // is idempotent) without the cursor jumping over the gap.
     let mut commit_through = cursor.last_bucket_ts;
-    let mut blocked = false;
     let mut wrote_any = false;
 
     // Bounds the work of one tick without bounding how far back the cursor can
@@ -181,8 +176,13 @@ async fn rollup_resource(
     let mut budget = MAX_BACKFILL_BUCKETS;
 
     while bucket_start <= latest_closed_start && budget > 0 {
-        budget -= 1;
         let bucket_end = bucket_start + bucket;
+        // The parent fills ascending, so the first bucket it has not covered
+        // means none above it is ready either.
+        if bucket_end > parent_settled_through {
+            break;
+        }
+        budget -= 1;
         match aggregate_one_bucket(
             state,
             resource,
@@ -193,24 +193,11 @@ async fn rollup_resource(
         )
         .await
         {
-            Ok(true) => {
-                wrote_any = true;
-                if !blocked {
-                    commit_through = bucket_start;
-                }
-            }
-            // Empty. Step over it only once the parent can no longer fill it —
-            // otherwise a resource that has gone quiet parks the cursor and
-            // every following tick re-sweeps the same widening range, up to
-            // the back-fill clamp, forever.
-            Ok(false) => {
-                if bucket_end <= parent_settled_through {
-                    if !blocked {
-                        commit_through = bucket_start;
-                    }
-                } else {
-                    blocked = true;
-                }
+            // Complete either way: an empty closed bucket stays empty, and
+            // parking the cursor on one puts the sweep on a treadmill.
+            Ok(wrote) => {
+                wrote_any |= wrote;
+                commit_through = bucket_start;
             }
             Err(e) => {
                 // Stop at the first error. If we kept going and a later

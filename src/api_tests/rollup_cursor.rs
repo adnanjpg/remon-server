@@ -149,6 +149,49 @@ async fn a_child_tier_waits_for_buckets_its_parent_has_not_filled() {
     );
 }
 
+/// A bucket the parent has only partly filled must not be treated as finished.
+/// `aggregate_one_bucket` reports rows written, not a completed range, so a
+/// window the parent is still working through aggregates from what is there so
+/// far — and if the cursor moves past it, that partial average is permanent.
+#[tokio::test]
+async fn a_partly_filled_bucket_does_not_advance_the_cursor() {
+    let app = TestApp::spawn().await;
+    let now = chrono::Utc::now().timestamp();
+
+    sqlx::query("UPDATE resolutions SET enabled = 0 WHERE name = '1m'")
+        .execute(&app.state.db)
+        .await
+        .expect("disable 1m");
+
+    // One 5m window, with 1m settled only two minutes into it.
+    let window = (now / 300 - 20) * 300;
+    set_cursor(&app, "cpu", "1m", window + 60).await;
+    set_cursor(&app, "cpu", "5m", window - 300).await;
+
+    for minute in [window, window + 60] {
+        sqlx::query(
+            "INSERT INTO metrics_cpu (resolution, timestamp, usage_percent, load_1m, load_5m, load_15m)
+             VALUES ('1m', ?, 10.0, 1.0, 1.0, 1.0)",
+        )
+        .bind(minute)
+        .execute(&app.state.db)
+        .await
+        .expect("seed 1m row");
+    }
+
+    crate::services::rollup::run_once(&app.state)
+        .await
+        .expect("rollup tick");
+
+    let after = cursor(&app, "cpu", "5m").await;
+    assert!(
+        after < window,
+        "5m cursor moved to {after}, past a window 1m has only filled to \
+         {}: that bucket keeps an average of two samples out of five",
+        window + 60
+    );
+}
+
 /// Advancing must not skip a gap: a later bucket that does have rows still
 /// leaves the cursor before the pending one.
 #[tokio::test]
