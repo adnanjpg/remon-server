@@ -389,6 +389,11 @@ async fn run(
         error!("server error: {}", e);
     }
 
+    // Also on the error path, where the graceful-shutdown future was never
+    // polled: the background loops watch this, and without it they keep running
+    // while the stop below waits on them.
+    let _ = app_state.shutdown.send(true);
+
     // Ledger first: a row written during its flush can still page, and needs
     // the delivery worker alive to take it.
     let _ = ledger_flush.send(true);
