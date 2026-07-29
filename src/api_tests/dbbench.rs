@@ -50,6 +50,37 @@ const SENSORS: i64 = 8;
 /// Distinct process-name groups, bounded by `process_series_top_k` in prod.
 const PROC_GROUPS: i64 = 30;
 
+/// Containers the docker tier is built at. The resolver seeks once per key, and
+/// containers are the namespace where that count is neither small nor fixed —
+/// so it is a knob rather than a constant. `BENCH_CONTAINERS` overrides.
+fn bench_containers() -> i64 {
+    std::env::var("BENCH_CONTAINERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|c| *c > 0)
+        .unwrap_or(12)
+}
+
+/// Key counts for the series the tier loop does not build.
+const SMART_DEVICES: i64 = 2;
+const PROBES: i64 = 3;
+const PROBE_METRICS: i64 = 4;
+
+/// The docker collector writes on its own 3s cadence, not the 2s raw tick.
+const DOCKER_RAW_INTERVAL_SECS: i64 = 3;
+
+/// `(seconds between rows, seconds retained)` for the tables that grow at event
+/// rate rather than tick rate. The cadence is each producer's real interval;
+/// the window is what `retention_policy` gives that resource in the migration.
+const LOGS_RATE: (i64, i64) = (60, 2_592_000);
+const HOST_EVENTS_RATE: (i64, i64) = (4_320, 7_776_000);
+const ALERT_EVENTS_RATE: (i64, i64) = (21_600, 7_776_000);
+const PROBE_RUNS_RATE: (i64, i64) = (60, 2_592_000);
+const HEARTBEAT_RATE: (i64, i64) = (300, 2_592_000);
+const INCIDENTS_RATE: (i64, i64) = (86_400, 2_592_000);
+const SMART_RATE: (i64, i64) = (1_800, 31_536_000);
+const HEARTBEAT_CHECKS: i64 = 2;
+
 /// Divisor applied to every retention window. 1 seeds the true steady state.
 fn bench_div() -> i64 {
     std::env::var("BENCH_DIV")
@@ -261,11 +292,18 @@ async fn seed(pool: &SqlitePool) -> i64 {
             .expect("seed");
     }
 
+    seed_operational(pool).await;
+
     let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(
         "SELECT (SELECT COUNT(*) FROM metrics_cpu) + (SELECT COUNT(*) FROM metrics_memory)
               + (SELECT COUNT(*) FROM metrics_disk) + (SELECT COUNT(*) FROM metrics_network)
               + (SELECT COUNT(*) FROM metrics_cpu_cores) + (SELECT COUNT(*) FROM metrics_components)
-              + (SELECT COUNT(*) FROM metrics_pressure) + (SELECT COUNT(*) FROM metrics_process)",
+              + (SELECT COUNT(*) FROM metrics_pressure) + (SELECT COUNT(*) FROM metrics_process)
+              + (SELECT COUNT(*) FROM metrics_docker) + (SELECT COUNT(*) FROM metrics_probe)
+              + (SELECT COUNT(*) FROM metrics_smart) + (SELECT COUNT(*) FROM logs)
+              + (SELECT COUNT(*) FROM host_events) + (SELECT COUNT(*) FROM alert_events)
+              + (SELECT COUNT(*) FROM probe_runs) + (SELECT COUNT(*) FROM heartbeat_pings)
+              + (SELECT COUNT(*) FROM incident_snapshots)",
     ))
     .fetch_one(pool)
     .await
@@ -277,7 +315,9 @@ async fn seed(pool: &SqlitePool) -> i64 {
               + (SELECT COUNT(*) FROM metrics_network WHERE resolution='raw')
               + (SELECT COUNT(*) FROM metrics_components WHERE resolution='raw')
               + (SELECT COUNT(*) FROM metrics_pressure WHERE resolution='raw')
-              + (SELECT COUNT(*) FROM metrics_cpu_cores)",
+              + (SELECT COUNT(*) FROM metrics_cpu_cores)
+              + (SELECT COUNT(*) FROM metrics_docker WHERE resolution='raw')
+              + (SELECT COUNT(*) FROM metrics_probe WHERE resolution='raw')",
     ))
     .fetch_one(pool)
     .await
@@ -288,6 +328,182 @@ async fn seed(pool: &SqlitePool) -> i64 {
     report("seed.rows_raw_partition", raw, "rows");
     report("seed.elapsed", micros(t0.elapsed()) / 1000, "ms");
     rows
+}
+
+/// Fill the tables the tier loop does not reach: `metrics_docker`,
+/// `metrics_probe` and `metrics_smart`, which are written on their producers'
+/// own schedules, and the ledgers and histories that grow at event rate.
+///
+/// Seeding stopped at the eight tier tables, so the retention pass walked eight
+/// of the seventeen tables production gives it and reported a total that could
+/// only be a lower bound, while any plan over `logs`, `host_events` or
+/// `incident_snapshots` was measured against an empty b-tree.
+async fn seed_operational(pool: &SqlitePool) {
+    let div = bench_div();
+    let now = chrono::Utc::now().timestamp();
+    let containers = bench_containers();
+
+    let series = |n: i64| {
+        format!(
+            "WITH RECURSIVE t(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM t WHERE n < {} - 1)",
+            n.max(1)
+        )
+    };
+    let ints_of = |n: i64| {
+        (0..n)
+            .map(|i| format!("SELECT {} AS k", i))
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ")
+    };
+    // Rows for `(rate, window)`, and the timestamp the series starts at.
+    let span = |(step, keep): (i64, i64)| {
+        let ticks = (keep / step / div).max(1);
+        (ticks, now - ticks * step, step)
+    };
+
+    let mut stmts: Vec<String> = Vec::new();
+
+    // Foreign-key parents. The children carry the rows the measurements read;
+    // these only have to exist and satisfy their constraints.
+    stmts.push(
+        "INSERT OR IGNORE INTO alert_rules (id, name, expression, severity)
+         VALUES (1, 'bench-rule', 'cpu.usage_percent > 90', 'warn')"
+            .into(),
+    );
+    for p in 0..PROBES {
+        stmts.push(format!(
+            "INSERT OR IGNORE INTO probe_definitions
+               (name, enabled, schedule, timeout_ms, manifest_hash)
+             VALUES ('probe{p}', 1, '60s', 30000, 'manifest{p}')"
+        ));
+    }
+    for c in 0..HEARTBEAT_CHECKS {
+        stmts.push(format!(
+            "INSERT OR IGNORE INTO heartbeat_checks
+               (id, name, slug_hash, period_secs, grace_secs)
+             VALUES ({id}, 'check{c}', 'slughash{c}', 300, 60)",
+            id = c + 1
+        ));
+    }
+
+    // ── metric series on their own schedules ──────────────────────────────
+    for (res, interval, retained) in TIERS {
+        let step = if *res == "raw" {
+            DOCKER_RAW_INTERVAL_SECS
+        } else {
+            *interval
+        };
+        let ticks = (retained / step / div).max(1);
+        let base = now - ticks * step;
+        stmts.push(format!(
+            "{cte} INSERT OR IGNORE INTO metrics_docker
+               (resolution, timestamp, container_id, cpu_percent, memory_used_bytes,
+                memory_limit_bytes, network_rx_bytes, network_tx_bytes,
+                block_read_bytes, block_write_bytes, pids)
+             SELECT '{res}', {base} + n*{step}, 'container' || c.k, 5.0 + (n % 30),
+                    200000000, 1000000000, 1000*n, 500*n, 4096*n, 2048*n, 8
+             FROM t CROSS JOIN ({keys}) c",
+            cte = series(ticks),
+            keys = ints_of(containers)
+        ));
+
+        // Probes run on a schedule, so their raw tier is as sparse as the runs.
+        let p_step = if *res == "raw" { 60 } else { *interval };
+        let p_ticks = (retained / p_step / div).max(1);
+        let p_base = now - p_ticks * p_step;
+        stmts.push(format!(
+            "{cte} INSERT OR IGNORE INTO metrics_probe
+               (resolution, timestamp, probe_name, metric_name, labels, value)
+             SELECT '{res}', {p_base} + n*{p_step}, 'probe' || p.k, 'metric' || m.k,
+                    '{{}}', 1.0 + (n % 100)
+             FROM t CROSS JOIN ({probes}) p CROSS JOIN ({metrics}) m",
+            cte = series(p_ticks),
+            probes = ints_of(PROBES),
+            metrics = ints_of(PROBE_METRICS)
+        ));
+    }
+
+    // SMART is raw-only and kept for a year; the poller runs every 30 minutes.
+    let (ticks, base, step) = span(SMART_RATE);
+    stmts.push(format!(
+        "{cte} INSERT OR IGNORE INTO metrics_smart
+           (resolution, timestamp, device, model, serial, health_passed,
+            temperature_c, power_on_hours, power_cycles)
+         SELECT 'raw', {base} + n*{step}, 'sd' || d.k, 'MODEL', 'SERIAL', 1,
+                35.0 + (n % 10), n, 12
+         FROM t CROSS JOIN ({keys}) d",
+        cte = series(ticks),
+        keys = ints_of(SMART_DEVICES)
+    ));
+
+    // ── event-rate tables ─────────────────────────────────────────────────
+    let (ticks, base, step) = span(LOGS_RATE);
+    stmts.push(format!(
+        "{cte} INSERT INTO logs (timestamp, level, source, target, message)
+         SELECT {base} + n*{step}, 2, 'server', 'remon_server::collectors',
+                'collector tick completed in ' || (n % 50) || 'ms'
+         FROM t",
+        cte = series(ticks)
+    ));
+
+    let (ticks, base, step) = span(HOST_EVENTS_RATE);
+    stmts.push(format!(
+        "{cte} INSERT INTO host_events (created_at, source, kind, severity, message)
+         SELECT {base} + n*{step}, 'system', 'server_started', 'info',
+                'Server started after a clean shutdown'
+         FROM t",
+        cte = series(ticks)
+    ));
+
+    let (ticks, base, step) = span(ALERT_EVENTS_RATE);
+    stmts.push(format!(
+        "{cte} INSERT INTO alert_events
+           (rule_id, label_set, event_type, severity, occurred_at, metric_value, notified)
+         SELECT 1, '{{}}', CASE n % 2 WHEN 0 THEN 'fired' ELSE 'resolved' END,
+                'warn', {base} + n*{step}, 91.5, 1
+         FROM t",
+        cte = series(ticks)
+    ));
+
+    let (ticks, base, step) = span(PROBE_RUNS_RATE);
+    stmts.push(format!(
+        "{cte} INSERT INTO probe_runs
+           (probe_name, timestamp, duration_ms, exit_code, message, parse_ok)
+         SELECT 'probe' || p.k, {base} + n*{step}, 12 + (n % 40), 0, NULL, 1
+         FROM t CROSS JOIN ({probes}) p",
+        cte = series(ticks),
+        probes = ints_of(PROBES)
+    ));
+
+    let (ticks, base, step) = span(HEARTBEAT_RATE);
+    stmts.push(format!(
+        "{cte} INSERT INTO heartbeat_pings
+           (check_id, received_at, kind, exit_code, source_ip, user_agent)
+         SELECT c.k + 1, {base} + n*{step}, 'success', 0, '10.0.0.5', 'curl/8.5.0'
+         FROM t CROSS JOIN ({keys}) c",
+        cte = series(ticks),
+        keys = ints_of(HEARTBEAT_CHECKS)
+    ));
+
+    // Few rows, but each carries a captured bundle — the reason a query that
+    // selects `bundle` when it only needs the row's metadata costs what it does.
+    let (ticks, base, step) = span(INCIDENTS_RATE);
+    stmts.push(format!(
+        "{cte} INSERT INTO incident_snapshots
+           (created_at, trigger_kind, category, rule_id, rule_name, label_set,
+            metric_value, bundle)
+         SELECT {base} + n*{step}, 'alert', 'resource', 1, 'bench-rule', '{{}}',
+                91.5, hex(zeroblob(8192))
+         FROM t",
+        cte = series(ticks)
+    ));
+
+    for s in stmts {
+        sqlx::query(sqlx::AssertSqlSafe(s))
+            .execute(pool)
+            .await
+            .expect("seed operational");
+    }
 }
 
 /// Key counts the cardinality sweep walks. The resolver seeks once per key, so
@@ -942,6 +1158,9 @@ async fn dbbench_retention() {
     seed(&app.state.db).await;
     let repo = MetricsRepository::new(app.state.db.clone());
 
+    // Every resource the pass actually walks, not just the tier tables: the
+    // ledgers, the log and the two histories are deleted by the same pass and
+    // are what a total measured over eight tables was missing.
     const RESOURCES: &[&str] = &[
         "cpu",
         "memory",
@@ -951,9 +1170,33 @@ async fn dbbench_retention() {
         "components",
         "pressure",
         "process",
+        "docker",
+        "probe",
+        "smart",
+        "logs",
+        "probe_runs",
+        "heartbeat_pings",
+        "alert_events",
+        "host_events",
+        "incident_snapshots",
     ];
     let now = chrono::Utc::now().timestamp();
-    let raw_keep = 86_400i64;
+
+    // Each resource ages out on its own window — a day for the raw metric
+    // tiers, 30 days for logs and the two histories, 90 for the ledgers, a year
+    // for SMART. One shared cutoff would time an hour's worth on some tables
+    // and a mass purge on others under the same label.
+    let mut keep: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
+    for resource in RESOURCES {
+        let secs: Option<i64> = sqlx::query_scalar(
+            "SELECT keep_seconds FROM retention_policy WHERE resource = ? AND resolution = 'raw'",
+        )
+        .bind(resource)
+        .fetch_optional(&app.state.db)
+        .await
+        .expect("read retention policy");
+        keep.insert(resource, secs.unwrap_or(86_400));
+    }
 
     // Two passes, because they are different questions.
     //
@@ -965,14 +1208,16 @@ async fn dbbench_retention() {
     // window: one statement against most of a table. That is the case that
     // decides whether the delete has to be chunked, and it is reachable from
     // the API.
-    for (label, cutoff) in [
-        ("steady", now - raw_keep + 3600),
-        ("purge_to_1h", now - 3600),
-    ] {
+    for label in ["steady", "purge_to_1h"] {
         let mut worst = 0u128;
         let mut worst_res = "";
         let mut total = 0u128;
         for resource in RESOURCES {
+            let cutoff = if label == "steady" {
+                now - keep[*resource] + 3600
+            } else {
+                now - 3600
+            };
             let t = Instant::now();
             let n = repo
                 .delete_older_than(resource, "raw", cutoff)
