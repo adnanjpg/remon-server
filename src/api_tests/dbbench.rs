@@ -38,6 +38,8 @@ use std::time::Instant;
 use sqlx::SqlitePool;
 
 use super::TestApp;
+use super::query_plan_audit::plan_details;
+use crate::services::alerting::resolver::keyed_latest_sql;
 use crate::services::alerting::{expression, resolver};
 
 /// Sensor/mount/interface/core counts the seed builds. Chosen to be an
@@ -1117,6 +1119,121 @@ async fn dbbench_batch_insert() {
         ),
         "%",
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Why an all-NULL column costs orders of magnitude more than a populated one,
+/// and which of the available answers actually fixes it.
+///
+/// The resolver falls back to the latest *non-NULL* sample per key. When the
+/// column has values that is one row per key; when it has none the search has
+/// nothing to stop it. Four shapes against the same data, so the cost can be
+/// attributed rather than guessed at.
+#[tokio::test]
+#[ignore]
+async fn dbbench_null_column_fallback() {
+    let (app, dir) = app_on_disk("nullcol").await;
+    seed(&app.state.db).await;
+    let pool = &app.state.db;
+
+    let now = chrono::Utc::now().timestamp();
+    let variants: Vec<(&str, String)> = vec![
+        // What the resolver builds today.
+        (
+            "latest_non_null",
+            keyed_latest_sql("metrics_disk", "inode_used_percent", "mount_point", ""),
+        ),
+        // Bounded to the last hour: the same shape, with the walk cut short.
+        (
+            "latest_non_null_1h",
+            keyed_latest_sql("metrics_disk", "inode_used_percent", "mount_point", "")
+                .replace(
+                    "AND (inode_used_percent) IS NOT NULL",
+                    &format!(
+                        "AND (inode_used_percent) IS NOT NULL AND t.timestamp >= {}",
+                        now - 3600
+                    ),
+                ),
+        ),
+        // No fallback at all: newest row per key, NULL and all.
+        (
+            "newest_row_only",
+            "SELECT lbl, val FROM (
+               SELECT k.mount_point AS lbl,
+                      (SELECT inode_used_percent FROM metrics_disk t
+                        WHERE t.resolution = 'raw' AND t.mount_point = k.mount_point
+                        ORDER BY t.timestamp DESC LIMIT 1) AS val
+                 FROM (SELECT DISTINCT mount_point FROM metrics_disk
+                        WHERE resolution = 'raw') k
+             ) WHERE val IS NOT NULL"
+                .to_string(),
+        ),
+    ];
+
+    for (name, sql) in &variants {
+        let plan = plan_details(pool, sql).await.unwrap_or_default();
+        let t = Instant::now();
+        let _ = sqlx::query(sqlx::AssertSqlSafe(sql.clone()))
+            .fetch_all(pool)
+            .await;
+        report(&format!("nullcol.{name}"), micros(t.elapsed()), "us");
+        for line in plan {
+            println!("PLAN   {name:<22} {line}");
+        }
+    }
+
+    // A bound at the raw retention window is not a semantic change: retention
+    // deletes raw rows past 24 h, so "latest non-NULL ever" and "latest
+    // non-NULL within the window" already select from the same rows. 26 h
+    // leaves room for the hourly pass not having run yet.
+    let bounded_26h = keyed_latest_sql("metrics_disk", "inode_used_percent", "mount_point", "")
+        .replace(
+            "AND (inode_used_percent) IS NOT NULL",
+            &format!(
+                "AND (inode_used_percent) IS NOT NULL AND t.timestamp >= {}",
+                now - 26 * 3600
+            ),
+        );
+    let plan = plan_details(pool, &bounded_26h).await.unwrap_or_default();
+    let t = Instant::now();
+    let _ = sqlx::query(sqlx::AssertSqlSafe(bounded_26h))
+        .fetch_all(pool)
+        .await;
+    report("nullcol.bounded_26h", micros(t.elapsed()), "us");
+    for line in plan {
+        println!("PLAN   bounded_26h            {line}");
+    }
+
+    // Which statistics actually exist, and which pass creates them. STAT4 is
+    // compiled in, so `sqlite_stat4` should hold per-index samples — but a
+    // predicate on a column that is in no index has no samples either way.
+    for table in ["sqlite_stat1", "sqlite_stat4"] {
+        let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) FROM sqlite_schema WHERE name = '{table}'"
+        )))
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+        if n == 0 {
+            report(&format!("stats.{table}"), "absent", "");
+            continue;
+        }
+        let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) FROM {table}"
+        )))
+        .fetch_one(pool)
+        .await
+        .unwrap_or(-1);
+        let disk: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) FROM {table} WHERE tbl = 'metrics_disk'"
+        )))
+        .fetch_one(pool)
+        .await
+        .unwrap_or(-1);
+        report(&format!("stats.{table}"), rows, "rows");
+        report(&format!("stats.{table}.metrics_disk"), disk, "rows");
+    }
 
     let _ = std::fs::remove_dir_all(&dir);
 }

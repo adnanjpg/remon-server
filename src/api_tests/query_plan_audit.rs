@@ -68,7 +68,7 @@ fn placeholders_to_null(sql: &str) -> String {
     out
 }
 
-async fn plan_details(pool: &SqlitePool, sql: &str) -> Result<Vec<String>, String> {
+pub(super) async fn plan_details(pool: &SqlitePool, sql: &str) -> Result<Vec<String>, String> {
     let explain = format!("EXPLAIN QUERY PLAN {}", placeholders_to_null(sql));
     // Auditing our own query text — the whole point of this test.
     let rows = sqlx::query(sqlx::AssertSqlSafe(explain))
