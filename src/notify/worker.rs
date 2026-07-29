@@ -108,26 +108,31 @@ async fn run(
     mut rx: mpsc::Receiver<NotifyRequest>,
     notify: Arc<NotificationManager>,
     pool: SqlitePool,
-    mut shutdown: watch::Receiver<bool>,
+    mut flush: watch::Receiver<bool>,
 ) {
     loop {
         let req = tokio::select! {
             biased;
-            _ = shutdown.changed() => break,
+            _ = crate::shutdown::flagged(&mut flush) => break,
             req = rx.recv() => match req {
                 Some(req) => req,
                 // Every producer is gone; nothing more can arrive.
                 None => return,
             },
         };
-        deliver(&notify, &pool, req).await;
+        // Raced against the flush signal: a wedged relay holds one delivery
+        // for its whole fan-out budget, and the stop cannot wait that long.
+        // Abandoning it leaves `notified` false, which is the honest record.
+        tokio::select! {
+            _ = deliver(&notify, &pool, req) => {}
+            _ = crate::shutdown::flagged(&mut flush) => break,
+        }
     }
 
-    // Shutdown: refuse new work, then flush what is already queued under a
-    // budget. `close()` lets in-flight `try_send`s fail fast rather than
-    // queueing behind a drain that will not reach them.
+    // Flushing runs after the ledger's, so rows written during that drain have
+    // had their chance to page before the queue closes.
     rx.close();
-    let flush = async {
+    let drain = async {
         let mut sent = 0usize;
         while let Some(req) = rx.recv().await {
             deliver(&notify, &pool, req).await;
@@ -135,7 +140,7 @@ async fn run(
         }
         sent
     };
-    match tokio::time::timeout(DRAIN_BUDGET, flush).await {
+    match tokio::time::timeout(DRAIN_BUDGET, drain).await {
         Ok(0) => {}
         Ok(sent) => info!("notification queue flushed {sent} pending on shutdown"),
         Err(_) => warn!("notification queue still draining after {DRAIN_BUDGET:?}, giving up"),

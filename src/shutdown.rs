@@ -45,6 +45,29 @@ pub async fn tick_or_stop(
     }
 }
 
+/// Resolve once a `watch<bool>` is set to true, and never on the sender going
+/// away.
+///
+/// The owned workers (ledger, notification queue) select their flush signal
+/// against their inbound queue. Letting a dropped sender resolve that branch
+/// would make them close mid-run — `changed()` reports a gone sender as an
+/// error, not as a value — and the rows or pages still arriving would be
+/// dropped against a closed channel. Parking instead leaves the queue's own
+/// disconnect as the way those tasks end.
+pub(crate) async fn flagged(flag: &mut watch::Receiver<bool>) {
+    if *flag.borrow() {
+        return;
+    }
+    loop {
+        if flag.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+        if *flag.borrow() {
+            return;
+        }
+    }
+}
+
 /// Wait for a handler to record why we are ending.
 async fn requested(exit_intent: &mut watch::Receiver<Option<ExitIntent>>) -> Option<ExitIntent> {
     // `changed()` only errors when every sender is gone, which cannot happen

@@ -173,7 +173,10 @@ impl TestApp {
             state.db.clone(),
             state.shutdown.subscribe(),
         );
-        crate::services::events::spawn_ledger_writer(ledger_rx, state.clone());
+        // Never signalled in tests: the writer stops when the last producer
+        // drops, which is what happens when the harness is torn down.
+        let (_ledger_flush, ledger_flush_rx) = tokio::sync::watch::channel(false);
+        crate::services::events::spawn_ledger_writer(ledger_rx, state.clone(), ledger_flush_rx);
 
         // Mirror `build_app`: the assistant lives outside `create_routes`
         // (it gets a longer timeout there), so mount it here too — with the

@@ -29,7 +29,6 @@
 //! alarming kinds push.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use log::{debug, error, info, warn};
 use serde_json::json;
@@ -56,14 +55,6 @@ const BOOT_JITTER_SECS: i64 = 120;
 /// is set to make one unreachable in practice rather than merely unlikely.
 const LEDGER_CAPACITY: usize = 1024;
 
-/// Total time shutdown will spend flushing the ledger.
-const LEDGER_DRAIN_BUDGET: Duration = Duration::from_secs(5);
-
-/// How long the drain waits for another row before calling it done. The queue
-/// is not closed on shutdown: `/system/shutdown` reports the outcome of
-/// stopping its own unit *while* the drain is running, and that row — the one
-/// hardest to reconstruct afterwards — is exactly the one worth waiting for.
-const LEDGER_DRAIN_QUIET: Duration = Duration::from_millis(200);
 
 /// Producer handle for the ledger. Cheap to clone; lives on `AppState`.
 #[derive(Clone)]
@@ -113,20 +104,20 @@ pub fn ledger_channel() -> (LedgerQueue, mpsc::Receiver<NewHostEvent>) {
 pub fn spawn_ledger_writer(
     rx: mpsc::Receiver<NewHostEvent>,
     state: Arc<AppState>,
+    flush: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
-    let shutdown = state.shutdown.subscribe();
-    tokio::spawn(ledger_writer(rx, state, shutdown))
+    tokio::spawn(ledger_writer(rx, state, flush))
 }
 
 async fn ledger_writer(
     mut rx: mpsc::Receiver<NewHostEvent>,
     state: Arc<AppState>,
-    mut shutdown: watch::Receiver<bool>,
+    mut flush: watch::Receiver<bool>,
 ) {
     loop {
         let event = tokio::select! {
             biased;
-            _ = shutdown.changed() => break,
+            _ = crate::shutdown::flagged(&mut flush) => break,
             ev = rx.recv() => match ev {
                 Some(ev) => ev,
                 // Every producer is gone; nothing more can arrive.
@@ -136,20 +127,18 @@ async fn ledger_writer(
         write_one(&state, event).await;
     }
 
-    let flush = async {
-        let mut written = 0usize;
-        // Quiet-period rather than `close()`, so a producer still finishing its
-        // work during shutdown can still be recorded.
-        while let Ok(Some(ev)) = tokio::time::timeout(LEDGER_DRAIN_QUIET, rx.recv()).await {
-            write_one(&state, ev).await;
-            written += 1;
-        }
-        written
-    };
-    match tokio::time::timeout(LEDGER_DRAIN_BUDGET, flush).await {
-        Ok(0) => {}
-        Ok(n) => info!("ledger flushed {n} pending row(s) on shutdown"),
-        Err(_) => warn!("ledger still draining after {LEDGER_DRAIN_BUDGET:?}, giving up"),
+    // The flush signal is only sent once serving has stopped and the periodic
+    // loops have wound down, so the queue has a last element — closing it and
+    // draining to empty is exact, where waiting out a quiet period was a guess
+    // that ended the drain while handlers were still finishing.
+    rx.close();
+    let mut written = 0usize;
+    while let Some(ev) = rx.recv().await {
+        write_one(&state, ev).await;
+        written += 1;
+    }
+    if written > 0 {
+        info!("ledger flushed {written} pending row(s) on shutdown");
     }
 }
 

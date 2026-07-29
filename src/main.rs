@@ -33,6 +33,8 @@ mod services;
 mod shutdown;
 mod storage;
 
+use std::time::Duration;
+
 use crate::services::system as system_svc;
 
 #[tokio::main]
@@ -91,6 +93,22 @@ async fn main() -> std::process::ExitCode {
     }
 
     std::process::ExitCode::SUCCESS
+}
+
+/// How long the stop waits for each owned worker to finish flushing. Sized so
+/// both together stay well inside a supervisor's stop timeout; whatever is
+/// still queued past this is dropped, which is the lesser loss against being
+/// SIGKILLed before the clean-shutdown marker is written.
+const LEDGER_STOP_BUDGET: Duration = Duration::from_secs(3);
+const NOTIFY_STOP_BUDGET: Duration = Duration::from_secs(5);
+
+/// Await a worker under a budget, reporting whichever way it ended.
+async fn stop_worker(handle: tokio::task::JoinHandle<()>, budget: Duration, what: &str) {
+    match tokio::time::timeout(budget, handle).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => warn!("{what} did not shut down cleanly: {e}"),
+        Err(_) => warn!("{what} still busy after {budget:?}; abandoning what it had queued"),
+    }
 }
 
 /// Exit code for `POST /system/restart`.
@@ -296,13 +314,21 @@ async fn run(
     ));
     info!("app state initialized with broadcast channels and layered config");
 
+    // The owned workers stop on their own signal, not on `shutdown`. That one
+    // fires at the *start* of the graceful drain, while handlers are still
+    // running and still producing audit rows and pages; these fire once
+    // serving has actually stopped and nothing further can be queued.
+    let (ledger_flush, ledger_flush_rx) = tokio::sync::watch::channel(false);
+    let (notify_flush, notify_flush_rx) = tokio::sync::watch::channel(false);
+
     let notify_worker = notify::worker::spawn(
         notify_rx,
         Arc::clone(&app_state.notify),
         app_state.db.clone(),
-        app_state.shutdown.subscribe(),
+        notify_flush_rx,
     );
-    let ledger_writer = services::events::spawn_ledger_writer(ledger_rx, app_state.clone());
+    let ledger_writer =
+        services::events::spawn_ledger_writer(ledger_rx, app_state.clone(), ledger_flush_rx);
 
     services::logging::start_db_writer(log_rx, db.pool().clone());
 
@@ -365,16 +391,19 @@ async fn run(
         error!("server error: {}", e);
     }
 
-    // Serving has stopped; flush the owned workers before the process ends.
-    // Ledger first: a row written during its drain can page, and that
-    // notification needs a delivery task still running to take it. Both bound
-    // their own wait, so neither can hang the stop.
-    if let Err(e) = ledger_writer.await {
-        warn!("ledger writer did not shut down cleanly: {e}");
-    }
-    if let Err(e) = notify_worker.await {
-        warn!("notification worker did not shut down cleanly: {e}");
-    }
+    // Serving has stopped, so no handler can queue anything further. Flush in
+    // order: the ledger first, because a row written now can still page and
+    // that notification needs the delivery task to still be listening.
+    //
+    // Each wait is bounded here rather than trusted to the task. A wedged
+    // relay can hold a single delivery for its full fan-out budget, and the
+    // stop has to fit inside the supervisor's timeout — being killed partway
+    // costs the clean-shutdown marker, which makes the next boot report a
+    // crash that did not happen.
+    let _ = ledger_flush.send(true);
+    stop_worker(ledger_writer, LEDGER_STOP_BUDGET, "ledger writer").await;
+    let _ = notify_flush.send(true);
+    stop_worker(notify_worker, NOTIFY_STOP_BUDGET, "notification worker").await;
 
     // Reached only on orderly drain — a crash/kill skips this, which is
     // exactly what the next boot's unclean-exit detection keys on. A requested
