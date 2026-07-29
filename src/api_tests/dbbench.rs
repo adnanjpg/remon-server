@@ -297,7 +297,13 @@ async fn seed(pool: &SqlitePool) -> i64 {
     // What production has once the retention pass has run once, which is within
     // a moment of startup. Measuring without statistics measures a state a live
     // database is only in before its first pass — and the plans differ.
-    sqlx::query("ANALYZE").execute(pool).await.expect("analyze");
+    // `BENCH_NO_ANALYZE` skips it, to attribute a change to the statistics
+    // rather than to whatever else moved between two runs.
+    if std::env::var("BENCH_NO_ANALYZE").is_err() {
+        let t = Instant::now();
+        sqlx::query("ANALYZE").execute(pool).await.expect("analyze");
+        report("seed.analyze", micros(t.elapsed()) / 1000, "ms");
+    }
 
     let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(
         "SELECT (SELECT COUNT(*) FROM metrics_cpu) + (SELECT COUNT(*) FROM metrics_memory)
