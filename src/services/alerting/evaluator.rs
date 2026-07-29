@@ -532,18 +532,20 @@ async fn evaluate_rule(
                 let queued = state.notify_queue.dispatch(n, receipt);
                 // Cooldown reads `last_notified_at`; a dropped page notified
                 // nobody, so the stamp comes back off.
-                if !queued && new_last_notified_at == Some(now) {
-                    if let Some(entry) = live.get_mut(&sample.label_set) {
-                        entry.last_notified_at = prior.last_notified_at;
-                        if must_persist
-                            && let Err(e) =
-                                repo.upsert_state(&entry.to_row(rule.id, &sample.label_set)).await
-                        {
-                            warn!(
-                                "could not un-stamp a dropped notification for rule='{}': {:?}",
-                                rule.name, e
-                            );
-                        }
+                if !queued
+                    && new_last_notified_at == Some(now)
+                    && let Some(entry) = live.get_mut(&sample.label_set)
+                {
+                    entry.last_notified_at = prior.last_notified_at;
+                    if must_persist
+                        && let Err(e) = repo
+                            .upsert_state(&entry.to_row(rule.id, &sample.label_set))
+                            .await
+                    {
+                        warn!(
+                            "could not un-stamp a dropped notification for rule='{}': {:?}",
+                            rule.name, e
+                        );
                     }
                 }
             }

@@ -278,12 +278,14 @@ async fn audit_detects_the_sorter_when_the_index_is_missing() {
     let sql = keyed_latest_sql("metrics_unindexed", "used_bytes", "mount_point", "");
     let plan = plan_details(&app.state.db, &sql).await.unwrap();
     assert!(
-        plan.iter().any(|l| l.contains("USE TEMP B-TREE FOR DISTINCT")
-            || l.contains("USE TEMP B-TREE FOR GROUP BY")),
+        plan.iter()
+            .any(|l| l.contains("USE TEMP B-TREE FOR DISTINCT")
+                || l.contains("USE TEMP B-TREE FOR GROUP BY")),
         "an unindexed latest-per-key query must sort; plan was {plan:?}"
     );
     assert!(
-        plan.iter().any(|l| l.starts_with("SCAN ") && !l.contains("USING")),
+        plan.iter()
+            .any(|l| l.starts_with("SCAN ") && !l.contains("USING")),
         "an unindexed latest-per-key query must scan; plan was {plan:?}"
     );
 }

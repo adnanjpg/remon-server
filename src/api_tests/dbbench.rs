@@ -142,7 +142,10 @@ async fn seed(pool: &SqlitePool) -> i64 {
     let now = chrono::Utc::now().timestamp();
 
     let series = |n: i64| {
-        format!("WITH RECURSIVE t(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM t WHERE n < {} - 1)", n)
+        format!(
+            "WITH RECURSIVE t(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM t WHERE n < {} - 1)",
+            n
+        )
     };
     let values_of = |items: &[&str]| {
         items
@@ -324,7 +327,10 @@ async fn dbbench_resolver() {
         // Enriched/optional field: excluded from the in-memory snapshot
         // whitelist by design, so this is one of the shapes that genuinely
         // takes the DB path on every eval tick.
-        ("resolve.disk.inode_used(keyed,null)", "disk.inode_used_percent > 1"),
+        (
+            "resolve.disk.inode_used(keyed,null)",
+            "disk.inode_used_percent > 1",
+        ),
         ("resolve.network.rx", "network.rx_bytes_per_sec > 1"),
         ("resolve.process.cpu", "process.cpu_percent > 1"),
         ("resolve.components.temp", "components.temperature_c > 1"),
@@ -577,7 +583,9 @@ async fn dbbench_rollup() {
     }
 
     let t = Instant::now();
-    crate::services::rollup::run_once(&app.state).await.expect("rollup");
+    crate::services::rollup::run_once(&app.state)
+        .await
+        .expect("rollup");
     report("rollup.tick.steady", micros(t.elapsed()) / 1000, "ms");
 
     // A resource that produced rows and then went dark: `docker` has no rows
@@ -594,13 +602,25 @@ async fn dbbench_rollup() {
     }
 
     let t = Instant::now();
-    crate::services::rollup::run_once(&app.state).await.expect("rollup");
-    report("rollup.tick.one_dark_resource", micros(t.elapsed()) / 1000, "ms");
+    crate::services::rollup::run_once(&app.state)
+        .await
+        .expect("rollup");
+    report(
+        "rollup.tick.one_dark_resource",
+        micros(t.elapsed()) / 1000,
+        "ms",
+    );
 
     // ...and again, to show whether the sweep converges or repeats.
     let t = Instant::now();
-    crate::services::rollup::run_once(&app.state).await.expect("rollup");
-    report("rollup.tick.dark_resource_repeat", micros(t.elapsed()) / 1000, "ms");
+    crate::services::rollup::run_once(&app.state)
+        .await
+        .expect("rollup");
+    report(
+        "rollup.tick.dark_resource_repeat",
+        micros(t.elapsed()) / 1000,
+        "ms",
+    );
 
     // The number that decides whether the sweep is self-correcting: how far
     // the cursor moved from where it was parked. Zero means every one of those
