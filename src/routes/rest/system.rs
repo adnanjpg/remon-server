@@ -194,13 +194,15 @@ pub async fn restart_server(
     ))
 }
 
-/// `POST /system/shutdown` — stop monitoring this host and stay stopped.
+/// `POST /system/shutdown` — stop monitoring this host.
 ///
-/// Every supervisor is configured to restart the agent however it went down,
-/// so exiting is not enough: the supervisor has to be told. That is only
-/// possible when the server knows which unit it runs under, which is why this
-/// refuses rather than pretending when it does not — a 202 followed by the
-/// agent coming back anyway would be worse than an error.
+/// Every supervisor is configured to restart the agent however it went down, so
+/// exiting is not enough: the supervisor has to be told, which needs the unit
+/// name. With one, the unit is stopped and stays stopped. Without one — a bare
+/// binary, or a container where neither `RC_SVCNAME` nor the cgroup path names
+/// anything — exiting is all that can be done, and whether the process returns
+/// depends on how it was started. The reply says which of the two happened
+/// instead of promising an outcome that is not ours to give.
 pub async fn shutdown_server(
     claims: Claims,
     State(state): State<Arc<AppState>>,
@@ -221,13 +223,14 @@ pub async fn shutdown_server(
     );
 
     let Some(unit) = unit else {
-        // Nothing supervising us, so simply ending the process is enough and
-        // is the whole of what "shutdown" can mean here.
+        // No unit to stop, so exiting is the whole of what can be done here.
         request_exit(&state, ExitIntent::Shutdown);
         return Ok((
             StatusCode::ACCEPTED,
             Json(LifecycleResponse {
-                message: "Shutting down. Nothing will restart this process.".to_string(),
+                message: "Exiting. No supervising unit was found, so whether this process \
+                          comes back depends on how it was started."
+                    .to_string(),
             }),
         ));
     };

@@ -56,10 +56,12 @@ async fn restart_answers_before_it_acts() {
     );
 }
 
-/// Nothing supervises the test harness, so shutdown degrades to "just stop" —
-/// and must say so rather than promising a supervisor will be told.
+/// Nothing supervises the test harness, so shutdown degrades to exiting. The
+/// reply has to say that without claiming the process stays down: under Docker
+/// `restart: always` or supervisord no unit is identifiable and the container
+/// comes straight back.
 #[tokio::test]
-async fn shutdown_without_a_supervisor_stops_outright() {
+async fn shutdown_without_a_supervisor_exits_without_promising_to_stay_down() {
     let app = TestApp::spawn().await;
     let token = app.pair_and_login().await;
 
@@ -71,8 +73,12 @@ async fn shutdown_without_a_supervisor_stops_outright() {
     assert_eq!(*app.state.exit_intent.borrow(), Some(ExitIntent::Shutdown));
     let message = body["message"].as_str().unwrap_or_default();
     assert!(
-        message.contains("Nothing will restart"),
-        "expected the reply to be clear that it stays down, got: {message}"
+        message.contains("No supervising unit"),
+        "expected the reply to name why it can only exit, got: {message}"
+    );
+    assert!(
+        !message.contains("Nothing will restart"),
+        "the reply must not promise an outcome it cannot know, got: {message}"
     );
 }
 

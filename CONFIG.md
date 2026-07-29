@@ -87,7 +87,7 @@ This is accident prevention, not a security boundary: any paired device already 
 
 The deliberate paths are:
 - `POST /system/restart` — ends the process so the supervisor starts a fresh one. How to apply boot-time configuration (listen port, log format, CORS origins) without shell access. Exits **75** rather than 0, because a Windows scheduled task only restarts an action that failed.
-- `POST /system/shutdown` — stops and stays stopped. Every supervisor is configured to restart the agent however it went down, so this asks the supervisor to stop the unit; starting it again needs access to the host. Where nothing supervises the process it simply exits.
+- `POST /system/shutdown` — stops monitoring this host. Every supervisor is configured to restart the agent however it went down, so this asks the supervisor to stop the unit; starting it again needs access to the host. Where no unit can be identified — a bare binary, or a container where neither `RC_SVCNAME` nor the cgroup path names one — it can only exit, and whether it returns depends on how it was started. The reply says which of the two happened.
 
 Both answer `202` before acting, drain in-flight requests and SSE streams, and write the clean-shutdown marker so the next boot does not report a crash.
 
