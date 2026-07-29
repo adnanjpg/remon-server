@@ -1,10 +1,8 @@
 //! Rollup cursor advancement.
 //!
-//! The cursor decides which buckets a tick sweeps, and the two failure modes
-//! pull in opposite directions: never advancing past an empty bucket puts the
-//! sweep on a treadmill that grows to the back-fill clamp and stays there,
-//! while always advancing loses buckets a parent tier has not filled yet.
-//! Both are silent — no error, no log — so they are pinned here.
+//! Two failure modes pull in opposite directions: never advancing past an
+//! empty bucket puts the sweep on a treadmill, always advancing loses buckets
+//! a parent tier has not filled yet. Both are silent.
 
 use super::TestApp;
 
@@ -33,11 +31,9 @@ async fn cursor(app: &TestApp, resource: &str, resolution: &str) -> i64 {
     .expect("read cursor")
 }
 
-/// A resource that produced rows and then stopped — Docker removed, the last
-/// probe deleted, a sensor gone after a kernel upgrade. Its buckets are empty
-/// but its cursor is not zero, so without advancing on empty the sweep widens
-/// by one bucket per tick until it hits `MAX_BACKFILL_BUCKETS` and then
-/// re-runs that entire range every tick, forever, writing nothing.
+/// A resource that produced rows and then stopped: empty buckets, non-zero
+/// cursor. Without advancing on empty the sweep widens each tick to the
+/// back-fill clamp and re-runs that range forever, writing nothing.
 #[tokio::test]
 async fn empty_buckets_advance_the_cursor_when_nothing_can_fill_them() {
     let app = TestApp::spawn().await;
@@ -54,8 +50,7 @@ async fn empty_buckets_advance_the_cursor_when_nothing_can_fill_them() {
     let after = cursor(&app, "docker", "1m").await;
     assert!(
         after > stale,
-        "cursor stayed at {stale} after a sweep of empty buckets — every \
-         following tick re-sweeps the same widening range"
+        "cursor stayed at {stale} after sweeping empty buckets"
     );
     assert!(
         after >= (now / 60 - 2) * 60,
@@ -64,13 +59,9 @@ async fn empty_buckets_advance_the_cursor_when_nothing_can_fill_them() {
     );
 }
 
-/// The counter-case. `5m` rolls up from `1m`, so a `5m` bucket that is empty
-/// today may still be filled once `1m` catches up — after a restart, or with
-/// the back-fill clamp in play. Stepping over it would drop that window from
-/// the 5m series permanently, with the source rows still sitting on disk.
-///
-/// `1m` is disabled here so it cannot advance during the tick, which is what
-/// leaves its cursor genuinely behind.
+/// The counter-case: a `5m` bucket empty today can still be filled once
+/// `1m` catches up, so stepping over it drops that window permanently.
+/// `1m` is disabled so it cannot advance during the tick.
 #[tokio::test]
 async fn a_child_tier_waits_for_buckets_its_parent_has_not_filled() {
     let app = TestApp::spawn().await;
@@ -94,16 +85,12 @@ async fn a_child_tier_waits_for_buckets_its_parent_has_not_filled() {
     let after = cursor(&app, "cpu", "5m").await;
     assert!(
         after <= parent_at,
-        "5m cursor moved to {after}, past where 1m is settled ({parent_at}) — \
-         those buckets are empty only because the parent has not caught up, \
-         and 1m will fill them later with nothing left to read them"
+        "5m cursor moved to {after}, past where 1m is settled ({parent_at})"
     );
 }
 
-/// Advancing must not skip a gap: an unfillable-yet bucket followed by one
-/// that does have rows has to leave the cursor *before* the gap, even though
-/// the later bucket was written. Otherwise the gap is lost the moment the
-/// parent fills it.
+/// Advancing must not skip a gap: a later bucket that does have rows still
+/// leaves the cursor before the pending one.
 #[tokio::test]
 async fn a_written_bucket_after_a_gap_does_not_drag_the_cursor_over_it() {
     let app = TestApp::spawn().await;

@@ -419,17 +419,13 @@ async fn resolve_unkeyed(
 /// non-NULL sample). Extracted so the query-plan audit test can `EXPLAIN` the
 /// real SQL against the `(resolution, label_column, timestamp)` index.
 ///
-/// Shaped as distinct keys plus a per-key seek rather than a group-wise max.
-/// The obvious `GROUP BY {label} … MAX(timestamp)` form cannot stop early:
-/// `{col} IS NOT NULL` is not in the index, so every entry in the resolution's
-/// slice needs a row lookup to test it, and the whole partition is walked
-/// however few keys there are. Seeking each key's slice from its newest end
-/// instead stops at the first row that qualifies, which is normally the first
-/// one examined.
+/// Distinct keys plus a per-key seek, not a group-wise max: `{col} IS NOT
+/// NULL` is not in the index, so `GROUP BY … MAX(timestamp)` needs a row
+/// lookup per entry and walks the whole partition. Seeking each key from its
+/// newest end stops at the first qualifying row.
 ///
-/// The label filter belongs in the key subquery, not only in an outer WHERE:
-/// applied outside, a rule pinned to one mount still resolves the latest value
-/// for every mount on the host and throws all but one away.
+/// The label filter goes in the key subquery — applied only in an outer WHERE
+/// it still resolves every key on the host and discards all but one.
 pub(crate) fn keyed_latest_sql(
     table: &str,
     select_expr: &str,

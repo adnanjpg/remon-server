@@ -45,15 +45,11 @@ pub async fn tick_or_stop(
     }
 }
 
-/// Resolve once a `watch<bool>` is set to true, and never on the sender going
-/// away.
+/// Resolve once the flag is set, and never on the sender going away.
 ///
-/// The owned workers (ledger, notification queue) select their flush signal
-/// against their inbound queue. Letting a dropped sender resolve that branch
-/// would make them close mid-run — `changed()` reports a gone sender as an
-/// error, not as a value — and the rows or pages still arriving would be
-/// dropped against a closed channel. Parking instead leaves the queue's own
-/// disconnect as the way those tasks end.
+/// `changed()` reports a dropped sender as an error; treating that as a signal
+/// would close the owned workers mid-run. Parking leaves their queue's own
+/// disconnect as the way they end.
 pub(crate) async fn flagged(flag: &mut watch::Receiver<bool>) {
     if *flag.borrow() {
         return;

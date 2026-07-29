@@ -95,10 +95,8 @@ async fn main() -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 
-/// How long the stop waits for each owned worker to finish flushing. Sized so
-/// both together stay well inside a supervisor's stop timeout; whatever is
-/// still queued past this is dropped, which is the lesser loss against being
-/// SIGKILLed before the clean-shutdown marker is written.
+/// Per-worker flush budget. Both together must fit inside the supervisor's
+/// stop timeout; anything still queued past it is dropped.
 const LEDGER_STOP_BUDGET: Duration = Duration::from_secs(3);
 const NOTIFY_STOP_BUDGET: Duration = Duration::from_secs(5);
 
@@ -391,15 +389,8 @@ async fn run(
         error!("server error: {}", e);
     }
 
-    // Serving has stopped, so no handler can queue anything further. Flush in
-    // order: the ledger first, because a row written now can still page and
-    // that notification needs the delivery task to still be listening.
-    //
-    // Each wait is bounded here rather than trusted to the task. A wedged
-    // relay can hold a single delivery for its full fan-out budget, and the
-    // stop has to fit inside the supervisor's timeout — being killed partway
-    // costs the clean-shutdown marker, which makes the next boot report a
-    // crash that did not happen.
+    // Ledger first: a row written during its flush can still page, and needs
+    // the delivery worker alive to take it.
     let _ = ledger_flush.send(true);
     stop_worker(ledger_writer, LEDGER_STOP_BUDGET, "ledger writer").await;
     let _ = notify_flush.send(true);
