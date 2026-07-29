@@ -191,7 +191,7 @@ async fn seed(pool: &SqlitePool) -> i64 {
                 read_bytes_per_sec, write_bytes_per_sec, inode_used_percent,
                 read_iops, write_iops, io_util_percent)
              SELECT '{res}', {base} + n*{step}, m.k, 500000000000, 250000000000 + n, 250000000000,
-                    1000, 2000, 12.5, 30, 40, NULL
+                    1000, 2000, NULL, 30, 40, NULL
              FROM t CROSS JOIN ({keys}) m",
             cte = series(ticks),
             keys = values_of(MOUNTS)
@@ -324,7 +324,7 @@ async fn dbbench_resolver() {
         // Enriched/optional field: excluded from the in-memory snapshot
         // whitelist by design, so this is one of the shapes that genuinely
         // takes the DB path on every eval tick.
-        ("resolve.disk.inode_used", "disk.inode_used_percent > 1"),
+        ("resolve.disk.inode_used(keyed,null)", "disk.inode_used_percent > 1"),
         ("resolve.network.rx", "network.rx_bytes_per_sec > 1"),
         ("resolve.process.cpu", "process.cpu_percent > 1"),
         ("resolve.components.temp", "components.temperature_c > 1"),

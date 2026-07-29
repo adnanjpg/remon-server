@@ -101,12 +101,18 @@ fn offenders(sql: &str, plan: &[String]) -> Vec<String> {
                 out.push(line.clone());
             }
         }
-        // A GROUP BY sorter — the exact 0.15.2 regression class (the resolver
-        // grouping over a full raw-partition scan). We do NOT flag ORDER BY
-        // temp-b-trees: "LAST TERM OF ORDER BY" is an index-served sort with a
-        // cheap tiebreak, and the remaining ones sort small bounded results
-        // (e.g. one row per device) — neither scales with retained history.
-        if line.contains("USE TEMP B-TREE FOR GROUP BY") && touches_growing {
+        // A GROUP BY or DISTINCT sorter — the 0.15.2 regression class (the
+        // resolver grouping over a full raw-partition scan) and its twin,
+        // since the resolver now reaches its keys through DISTINCT and an
+        // index that stops serving it would be just as expensive. We do NOT
+        // flag ORDER BY temp-b-trees: "LAST TERM OF ORDER BY" is an
+        // index-served sort with a cheap tiebreak, and the remaining ones sort
+        // small bounded results (e.g. one row per device) — neither scales
+        // with retained history.
+        if touches_growing
+            && (line.contains("USE TEMP B-TREE FOR GROUP BY")
+                || line.contains("USE TEMP B-TREE FOR DISTINCT"))
+        {
             out.push(line.clone());
         }
     }
@@ -249,10 +255,15 @@ async fn hand_built_queries_have_no_full_scan_or_sorter() {
 }
 
 /// Guard the guard: the same latest-per-key query against a metrics-shaped
-/// table WITHOUT the `(resolution, key, timestamp)` index must produce the
-/// GROUP BY sorter — proving the index is what removes it, and that the
-/// detector is looking for the right plan line. If this ever stops firing, the
-/// audit above has gone blind.
+/// table WITHOUT the `(resolution, key, timestamp)` index must degenerate into
+/// a scan and a sort — proving the index is what removes them, and that the
+/// detector is looking for plan lines that actually appear. If this ever stops
+/// firing, the audit above has gone blind.
+///
+/// The signal moved with the query: the group-wise-max form sorted for its
+/// GROUP BY, the distinct-keys form sorts for its DISTINCT. Both are caught,
+/// which is the point — a detector pinned to the old wording would have waved
+/// the new shape through.
 #[tokio::test]
 async fn audit_detects_the_sorter_when_the_index_is_missing() {
     let app = TestApp::spawn().await;
@@ -267,8 +278,12 @@ async fn audit_detects_the_sorter_when_the_index_is_missing() {
     let sql = keyed_latest_sql("metrics_unindexed", "used_bytes", "mount_point", "");
     let plan = plan_details(&app.state.db, &sql).await.unwrap();
     assert!(
-        plan.iter()
-            .any(|l| l.contains("USE TEMP B-TREE FOR GROUP BY")),
+        plan.iter().any(|l| l.contains("USE TEMP B-TREE FOR DISTINCT")
+            || l.contains("USE TEMP B-TREE FOR GROUP BY")),
         "an unindexed latest-per-key query must sort; plan was {plan:?}"
+    );
+    assert!(
+        plan.iter().any(|l| l.starts_with("SCAN ") && !l.contains("USING")),
+        "an unindexed latest-per-key query must scan; plan was {plan:?}"
     );
 }

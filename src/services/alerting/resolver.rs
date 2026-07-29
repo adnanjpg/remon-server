@@ -417,8 +417,19 @@ async fn resolve_unkeyed(
 /// row with the greatest `timestamp` per `label_column` (skipping NULLs in
 /// the selected column, so a currently-NULL field falls back to its last
 /// non-NULL sample). Extracted so the query-plan audit test can `EXPLAIN` the
-/// real SQL — a `(resolution, label_column, timestamp)` index must keep the
-/// group-wise max off a temp-b-tree sorter (see the audit and 0.15.2).
+/// real SQL against the `(resolution, label_column, timestamp)` index.
+///
+/// Shaped as distinct keys plus a per-key seek rather than a group-wise max.
+/// The obvious `GROUP BY {label} … MAX(timestamp)` form cannot stop early:
+/// `{col} IS NOT NULL` is not in the index, so every entry in the resolution's
+/// slice needs a row lookup to test it, and the whole partition is walked
+/// however few keys there are. Seeking each key's slice from its newest end
+/// instead stops at the first row that qualifies, which is normally the first
+/// one examined.
+///
+/// The label filter belongs in the key subquery, not only in an outer WHERE:
+/// applied outside, a rule pinned to one mount still resolves the latest value
+/// for every mount on the host and throws all but one away.
 pub(crate) fn keyed_latest_sql(
     table: &str,
     select_expr: &str,
@@ -426,16 +437,19 @@ pub(crate) fn keyed_latest_sql(
     where_label: &str,
 ) -> String {
     format!(
-        "SELECT {label}, {col}
-           FROM {table}
-          WHERE resolution = 'raw' AND {col} IS NOT NULL
-            {where_label}
-            AND ({label}, timestamp) IN (
-              SELECT {label}, MAX(timestamp)
-                FROM {table}
-               WHERE resolution = 'raw' AND {col} IS NOT NULL
-               GROUP BY {label}
-            )",
+        "SELECT lbl, val FROM (
+           SELECT k.{label} AS lbl,
+                  (SELECT {col}
+                     FROM {table} t
+                    WHERE t.resolution = 'raw'
+                      AND t.{label} = k.{label}
+                      AND ({col}) IS NOT NULL
+                    ORDER BY t.timestamp DESC
+                    LIMIT 1) AS val
+             FROM (SELECT DISTINCT {label}
+                     FROM {table}
+                    WHERE resolution = 'raw' {where_label}) k
+         ) WHERE val IS NOT NULL",
         label = label_column,
         col = select_expr,
         table = table,
