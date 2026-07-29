@@ -202,6 +202,9 @@ check "has no start rate limit"         'grep -q "^StartLimitIntervalSec=0" "$UN
 check "enabled the service"             'grep -q "systemctl enable" "$ROOT/state/init.log"'
 check "started the service"             'grep -q "systemctl restart" "$ROOT/state/init.log"'
 check "installed the binary"            '[ -x "$ROOT/target/usr/local/bin/remon-server" ]'
+# The config check runs a copy staged beside the target, because /tmp may be
+# noexec. That copy must not survive the install.
+check "left no staged binary behind"    '! ls "$ROOT/target/usr/local/bin/".remon-server.staged >/dev/null 2>&1'
 check "wrote a config"                  '[ -f "$ROOT/target/etc/remon/config.toml" ]'
 check "reported journalctl for logs"    'grep -q "journalctl -fu remon-server" <<<"$out"'
 check "reported success"                'grep -q "is running" <<<"$out"'

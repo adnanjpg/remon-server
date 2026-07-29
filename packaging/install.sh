@@ -218,8 +218,16 @@ fi
 # Checked with the build about to be installed, and before the running service
 # is stopped. A config this build rejects then leaves the existing install
 # untouched and still serving, instead of stopped and already overwritten.
+#
+# Staged next to the target rather than executed from $TMP: /tmp is mounted
+# noexec on hardened hosts, and a refusal to execute there would be reported as
+# a configuration error.
 step "Validating configuration"
-"$TMP/remon-server" --config-dir "$CONFIG_DIR" --data-dir "$DATA_DIR" config check \
+install -d -m 0755 "$BIN_DIR"
+STAGED="$BIN_DIR/.remon-server.staged"
+trap 'rm -rf "$TMP"; rm -f "$STAGED"' EXIT INT TERM
+install -m 0755 "$TMP/remon-server" "$STAGED"
+"$STAGED" --config-dir "$CONFIG_DIR" --data-dir "$DATA_DIR" config check \
     || die "configuration did not validate; nothing was changed"
 
 # ── stop, install, restart ────────────────────────────────────────────────
@@ -252,12 +260,20 @@ case "$INIT" in
 esac
 
 step "Installing to $BIN_DIR/remon-server"
-install -d -m 0755 "$BIN_DIR"
-install -m 0755 "$TMP/remon-server" "$BIN_DIR/remon-server"
+mv -f "$STAGED" "$BIN_DIR/remon-server"
 
 # ── service ───────────────────────────────────────────────────────────────
 
 if [ -n "${REMON_NO_SERVICE:-}" ]; then
+    # The service definition is left alone, so directories that moved this run
+    # are not picked up — the flags in it still name the old ones.
+    for f in "$UNIT_PATH" "$INITD_PATH"; do
+        [ -f "$f" ] || continue
+        if ! grep -q -- "$CONFIG_DIR" "$f" || ! grep -q -- "$DATA_DIR" "$f"; then
+            warn "$f still points at other directories; it was not rewritten because REMON_NO_SERVICE is set"
+        fi
+    done
+
     # Skipping service *setup* is not a request to leave the host unmonitored.
     # Whatever was running when this started gets put back on the new binary.
     if [ "$was_running" -eq 1 ]; then
