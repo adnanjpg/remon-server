@@ -461,15 +461,16 @@ async fn system_event_sweep_loop(state: Arc<AppState>) {
     use std::time::Duration;
 
     let rs = RuntimeStateRepository::new(state.db.clone());
+    // A failed read is the pool being busy at boot, not a broken sweep. Start
+    // from the first-run lookback and let the next tick persist a cursor.
     let mut cursor = match rs.get(KEY_SYSEVENT_CURSOR).await {
-        Ok(v) => v
-            .and_then(|s| s.parse::<i64>().ok())
-            .unwrap_or_else(|| chrono::Utc::now().timestamp() - SWEEP_FIRST_LOOKBACK_SECS),
+        Ok(v) => v.and_then(|s| s.parse::<i64>().ok()),
         Err(e) => {
-            warn!("system-event sweep: cursor read failed, disabling: {e}");
-            return;
+            warn!("system-event sweep: cursor read failed, starting from the lookback: {e}");
+            None
         }
-    };
+    }
+    .unwrap_or_else(|| chrono::Utc::now().timestamp() - SWEEP_FIRST_LOOKBACK_SECS);
 
     let mut ticker = tokio::time::interval(Duration::from_secs(SWEEP_INTERVAL_SECS));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
