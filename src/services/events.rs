@@ -564,8 +564,22 @@ fn plan_sweep(events: Vec<SysEvent>, cursor: i64, now: i64) -> SweepPlan {
     let mut record: Vec<SysEvent> = events.into_iter().filter(|e| e.ts > cursor).collect();
     record.sort_by_key(|e| e.ts);
 
-    let truncated = record.len() > SWEEP_MAX_EVENTS_PER_TICK;
-    record.truncate(SWEEP_MAX_EVENTS_PER_TICK);
+    // The cursor has one-second resolution, so cutting inside a second loses
+    // whatever shares it with the last event kept: the next scan asks for
+    // `ts > cursor` and those are not. The cut is extended to the end of that
+    // second instead. A second holding more than the cap on its own overshoots
+    // it rather than stalling — a cursor that could never pass that second
+    // would re-read it every tick, forever.
+    let mut truncated = false;
+    if record.len() > SWEEP_MAX_EVENTS_PER_TICK {
+        let boundary = record[SWEEP_MAX_EVENTS_PER_TICK - 1].ts;
+        let last_of_second = record.iter().rposition(|e| e.ts == boundary);
+        let keep = last_of_second.map_or(record.len(), |i| i + 1);
+        if keep < record.len() {
+            record.truncate(keep);
+            truncated = true;
+        }
+    }
 
     let next_cursor = match record.last() {
         Some(last) => last.ts,
@@ -1118,6 +1132,52 @@ mod tests {
             plan.next_cursor, SWEEP_MAX_EVENTS_PER_TICK as i64,
             "the cursor stops at the last one recorded, leaving the rest ahead of it"
         );
+    }
+
+    /// The cap must not cut inside a second. The cursor cannot express "the
+    /// third event of second 500", so anything sharing that second with the
+    /// last one kept is neither recorded now nor `ts > cursor` next tick.
+    #[cfg(any(target_os = "linux", windows))]
+    #[test]
+    fn the_cap_does_not_cut_inside_a_second() {
+        let now = 10_000;
+        let cap = SWEEP_MAX_EVENTS_PER_TICK as i64;
+        let mut events: Vec<SysEvent> = (1..cap).map(sys_event).collect();
+        // Four more all stamped the same second as the one the cap lands on.
+        events.extend((0..5).map(|_| sys_event(cap)));
+        events.extend((cap + 1..=cap + 10).map(sys_event));
+
+        let plan = plan_sweep(events, 0, now);
+
+        assert!(plan.truncated);
+        assert_eq!(
+            plan.record.iter().filter(|e| e.ts == cap).count(),
+            5,
+            "the whole second is recorded, overshooting the cap"
+        );
+        assert_eq!(plan.next_cursor, cap);
+        assert!(
+            plan.record.iter().all(|e| e.ts <= cap),
+            "nothing past the boundary second is claimed"
+        );
+    }
+
+    /// And when one second holds more than the cap on its own, it is taken
+    /// whole. Refusing to overshoot would park the cursor below that second
+    /// and re-read it on every tick for the life of the process.
+    #[cfg(any(target_os = "linux", windows))]
+    #[test]
+    fn a_second_larger_than_the_cap_does_not_stall_the_cursor() {
+        let now = 10_000;
+        let events: Vec<SysEvent> = (0..SWEEP_MAX_EVENTS_PER_TICK + 50)
+            .map(|_| sys_event(700))
+            .collect();
+
+        let plan = plan_sweep(events, 0, now);
+
+        assert!(!plan.truncated, "nothing is left behind to defer");
+        assert_eq!(plan.record.len(), SWEEP_MAX_EVENTS_PER_TICK + 50);
+        assert_eq!(plan.next_cursor, 700, "the cursor gets past that second");
     }
 
     /// Anything at or before the cursor was handled on an earlier tick.
