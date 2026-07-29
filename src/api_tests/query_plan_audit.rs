@@ -169,6 +169,195 @@ async fn sqlx_cached_queries_have_no_full_scan_or_sorter() {
     );
 }
 
+/// A few hundred rows per keyed table, with far fewer keys than timestamps.
+///
+/// The ratio is the whole point: `ANALYZE` records average rows per distinct
+/// index prefix, and the planner only prefers `(resolution, key, timestamp)`
+/// over the primary key once it can see that fixing a key narrows the search.
+/// Volume is irrelevant to that comparison, so this stays small.
+async fn seed_for_statistics(pool: &SqlitePool) {
+    insert_statistics_fixture(pool).await;
+
+    sqlx::query("ANALYZE").execute(pool).await.expect("analyze");
+
+    // An empty table produces no statistics and so silently reverts the planner
+    // to its guesses — the audit would then report the guessed plan as the
+    // finding. Confirm every table under audit actually has statistics.
+    for table in [
+        "metrics_disk",
+        "metrics_network",
+        "metrics_pressure",
+        "metrics_components",
+        "metrics_smart",
+        "metrics_docker",
+        "metrics_process",
+    ] {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_stat1 WHERE tbl = ?")
+            .bind(table)
+            .fetch_one(pool)
+            .await
+            .expect("read sqlite_stat1");
+        assert!(
+            n > 0,
+            "{table} has no statistics; the fixture did not populate it"
+        );
+    }
+}
+
+/// The rows only, with no `ANALYZE` — so a test can observe what happens to a
+/// database that has data and no statistics, which is what production was.
+async fn insert_statistics_fixture(pool: &SqlitePool) {
+    const TICKS: i64 = 200;
+
+    // Plain INSERT, never `OR IGNORE`: `resource` carries a CHECK constraint,
+    // and a fixture that swallows the violation leaves the table empty, which
+    // leaves it without statistics, which fails this test for a reason that has
+    // nothing to do with the query being audited.
+    let rows = |cols: &str, keys: i64, vals: &str| {
+        format!(
+            "WITH RECURSIVE t(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM t WHERE n < {TICKS} - 1),
+                           k(j) AS (SELECT 0 UNION ALL SELECT j+1 FROM k WHERE j < {keys} - 1)
+             INSERT INTO {cols} SELECT 'raw', n*2, {vals} FROM t CROSS JOIN k"
+        )
+    };
+
+    for sql in [
+        rows(
+            "metrics_disk (resolution, timestamp, mount_point, total_bytes, used_bytes, available_bytes)",
+            4,
+            "'mnt' || j, 1000, 500, 500",
+        ),
+        rows(
+            "metrics_network (resolution, timestamp, interface_name, rx_bytes_per_sec, tx_bytes_per_sec, rx_packets_per_sec, tx_packets_per_sec)",
+            4,
+            "'if' || j, 1, 1, 1, 1",
+        ),
+        rows(
+            "metrics_pressure (resolution, timestamp, resource, some_avg10, some_avg60, some_avg300, full_avg10, full_avg60, full_avg300)",
+            3,
+            "CASE j WHEN 0 THEN 'cpu' WHEN 1 THEN 'memory' ELSE 'io' END, 1, 1, 1, 1, 1, 1",
+        ),
+        rows(
+            "metrics_components (resolution, timestamp, label, temperature_c)",
+            4,
+            "'sensor' || j, 40.0",
+        ),
+        rows(
+            "metrics_smart (resolution, timestamp, device, health_passed)",
+            4,
+            "'sd' || j, 1",
+        ),
+        rows(
+            "metrics_docker (resolution, timestamp, container_id, cpu_percent, memory_used_bytes, memory_limit_bytes, network_rx_bytes, network_tx_bytes)",
+            4,
+            "'c' || j, 1.0, 1, 1, 1, 1",
+        ),
+        rows(
+            "metrics_process (resolution, timestamp, name, pid_count, cpu_percent, memory_bytes)",
+            4,
+            "'proc' || j, 1, 1.0, 1",
+        ),
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .execute(pool)
+            .await
+            .expect("seed for statistics");
+    }
+}
+
+/// The audit above builds its own statistics, so it would go on passing even if
+/// nothing in the server ever produced any. This is the half that ties the plan
+/// to production: the retention pass runs at startup and hourly, and it has to
+/// leave `sqlite_stat1` behind.
+#[tokio::test]
+async fn the_retention_pass_leaves_planner_statistics_behind() {
+    let app = TestApp::spawn().await;
+    insert_statistics_fixture(&app.state.db).await;
+
+    let exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_stat1'",
+    )
+    .fetch_one(&app.state.db)
+    .await
+    .expect("read schema");
+    assert_eq!(
+        exists, 0,
+        "statistics existed before anything ran ANALYZE; this test cannot prove what made them"
+    );
+
+    crate::services::retention::run_once(&app.state)
+        .await
+        .expect("retention pass");
+
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_stat1")
+        .fetch_one(&app.state.db)
+        .await
+        .expect("sqlite_stat1 after a retention pass");
+    assert!(
+        rows > 0,
+        "the retention pass left no planner statistics, so every plan comes from \
+         SQLite's built-in guesses and the resolver's per-key seek falls back to \
+         the primary key"
+    );
+}
+
+/// The per-key seek must reach its key through the index built for it.
+///
+/// Separate from the scan/sorter audit because it asks a different question of a
+/// different fixture. That audit runs against an empty schema, where there are
+/// no statistics and every plan comes from SQLite's built-in guesses; the guess
+/// for this shape is the primary key, which constrains only `resolution` and so
+/// walks that whole partition once per key. Nothing in the other detectors sees
+/// it — it is not a scan and it sorts nothing — so the cost the indexes were
+/// added to remove came back while the gate stayed green.
+///
+/// The assertion is on the table accesses that are *not* covered by an index: a
+/// covering index legitimately constrains only `resolution` when it is
+/// collecting the DISTINCT key list, but anything that has to fetch rows must
+/// have fixed the key first.
+#[tokio::test]
+async fn resolver_per_key_seek_constrains_the_key() {
+    let app = TestApp::spawn().await;
+    seed_for_statistics(&app.state.db).await;
+
+    let cases = [
+        ("metrics_disk", "used_bytes", "mount_point"),
+        ("metrics_network", "rx_bytes_per_sec", "interface_name"),
+        ("metrics_pressure", "some_avg10", "resource"),
+        ("metrics_components", "temperature_c", "label"),
+        ("metrics_smart", "health_passed", "device"),
+        ("metrics_docker", "cpu_percent", "container_id"),
+        ("metrics_process", "cpu_percent", "name"),
+    ];
+
+    let mut failures: Vec<String> = Vec::new();
+    for (table, col, label) in cases {
+        for where_label in ["", &format!("AND {} = ?", label)] {
+            let sql = keyed_latest_sql(table, col, label, where_label);
+            let plan = plan_details(&app.state.db, &sql).await.expect("explain");
+            let unbounded: Vec<&String> = plan
+                .iter()
+                .filter(|l| l.starts_with("SEARCH") && !l.contains("COVERING INDEX"))
+                .filter(|l| !l.contains(&format!("{label}=?")))
+                .collect();
+            if !unbounded.is_empty() {
+                failures.push(format!(
+                    "{table} (where_label={where_label:?}): {unbounded:?}"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "a per-key seek fetches rows without constraining its key, so it walks the \
+         whole resolution partition for every key. The (resolution, key, timestamp) \
+         index exists — the planner is not choosing it, which needs statistics \
+         (`PRAGMA optimize`, run by the retention pass):\n{}",
+        failures.join("\n")
+    );
+}
+
 #[tokio::test]
 async fn resolver_latest_per_key_uses_index_not_sorter() {
     let app = TestApp::spawn().await;
