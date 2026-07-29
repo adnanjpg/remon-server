@@ -21,6 +21,10 @@ use crate::services::system as system_svc;
 use crate::state::AppState;
 use crate::storage::repositories::{AlertRepository, LogRepository};
 
+/// How far back `read_logs` looks, matching `GET /logs`. The assistant asks
+/// about what is happening now; unbounded reads scale with retention.
+const LOG_LOOKBACK_SECS: i64 = 86_400;
+
 /// OpenAI-format `tools` array advertised to the model on every turn. Built at
 /// call time so the Docker tool (compile-gated) and the Prometheus tool
 /// (config-gated) appear only when actually available.
@@ -593,9 +597,12 @@ async fn read_logs(state: &Arc<AppState>, args: &Value) -> Result<Value, String>
         .unwrap_or(50)
         .clamp(1, 200) as u32;
 
+    // Bounded like `GET /logs`, which defaults to the last day. Reading from 0
+    // makes a selective level walk the whole retained window — thirty days of
+    // it — to fill one page.
     let now = chrono::Utc::now().timestamp();
     let rows = LogRepository::new(state.db.clone())
-        .list(max_level, 0, now, limit)
+        .list(max_level, now - LOG_LOOKBACK_SECS, now, limit)
         .await
         .map_err(|e| e.to_string())?;
 
