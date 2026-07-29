@@ -294,6 +294,11 @@ async fn seed(pool: &SqlitePool) -> i64 {
 
     seed_operational(pool).await;
 
+    // What production has once the retention pass has run once, which is within
+    // a moment of startup. Measuring without statistics measures a state a live
+    // database is only in before its first pass — and the plans differ.
+    sqlx::query("ANALYZE").execute(pool).await.expect("analyze");
+
     let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(
         "SELECT (SELECT COUNT(*) FROM metrics_cpu) + (SELECT COUNT(*) FROM metrics_memory)
               + (SELECT COUNT(*) FROM metrics_disk) + (SELECT COUNT(*) FROM metrics_network)
@@ -509,6 +514,12 @@ async fn seed_operational(pool: &SqlitePool) {
 /// Key counts the cardinality sweep walks. The resolver seeks once per key, so
 /// this is the axis its cost actually moves along — measured across a range
 /// rather than guessed at a single host's shape. `BENCH_KEYS` overrides.
+/// The default stops at 20 because each point builds its own database, and the
+/// harness leaks a pool per case (two spawned tasks hold the `AppState` that
+/// owns the sender keeping them alive), so a later `journal_mode = WAL` can lose
+/// the race for its exclusive lock — `busy_timeout` is set after it in the same
+/// pragma string. Higher points are reachable with `BENCH_KEYS=2,8,20,50` on a
+/// run of this case alone.
 fn sweep_keys() -> Vec<i64> {
     match std::env::var("BENCH_KEYS") {
         Ok(v) => v
@@ -516,7 +527,7 @@ fn sweep_keys() -> Vec<i64> {
             .filter_map(|s| s.trim().parse::<i64>().ok())
             .filter(|k| *k > 0)
             .collect(),
-        Err(_) => vec![2, 4, 8, 20, 50],
+        Err(_) => vec![2, 4, 8, 20],
     }
 }
 
@@ -620,6 +631,11 @@ async fn dbbench_resolver_cardinality() {
             }
         }
 
+        // Closed before the next iteration opens its own: this case builds one
+        // database per point, and five live pools against five WAL files is
+        // enough for the last connection to be refused. Closing also lets the
+        // directory actually go, instead of surviving the run.
+        app.state.db.close().await;
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
@@ -922,9 +938,38 @@ async fn dbbench_rollup() {
         .expect("rollup");
     report("rollup.tick.steady", micros(t.elapsed()) / 1000, "ms");
 
-    // A resource that produced rows and then went dark: `docker` has no rows
-    // here, and its cursor is non-zero, so every bucket from the cursor to now
-    // is swept and none of them writes anything.
+    // A cursor parked 900 buckets back with data behind it: the tick has real
+    // aggregation to do and the per-tick budget is what stops it doing all of
+    // it at once. This is the cost of catching up after an outage.
+    for (target, width) in [("1m", 60i64), ("5m", 300), ("1h", 3600)] {
+        let stale = (now / width - 900) * width;
+        sqlx::query("UPDATE rollup_state SET last_bucket_ts = ? WHERE resource = 'docker' AND resolution = ?")
+            .bind(stale)
+            .bind(target)
+            .execute(&app.state.db)
+            .await
+            .expect("stale cursor");
+    }
+
+    let t = Instant::now();
+    crate::services::rollup::run_once(&app.state)
+        .await
+        .expect("rollup");
+    report(
+        "rollup.tick.backfill_with_data",
+        micros(t.elapsed()) / 1000,
+        "ms",
+    );
+
+    // The same stale cursor with nothing behind it. Every rollup resource is
+    // seeded now, so the dark state has to be made rather than assumed: the
+    // sweep walks bucket after bucket and none of them writes anything, and the
+    // question is whether the cursor still advances or the range is re-swept
+    // forever.
+    sqlx::query("DELETE FROM metrics_docker")
+        .execute(&app.state.db)
+        .await
+        .expect("empty docker");
     for (target, width) in [("1m", 60i64), ("5m", 300), ("1h", 3600)] {
         let stale = (now / width - 900) * width;
         sqlx::query("UPDATE rollup_state SET last_bucket_ts = ? WHERE resource = 'docker' AND resolution = ?")
