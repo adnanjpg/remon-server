@@ -78,6 +78,11 @@ struct Live {
     last_notified_at: Option<i64>,
 }
 
+/// How long a persisted lifecycle row stays trustworthy without being
+/// evaluated. Covers a restart and a reload cycle; past it the row describes a
+/// window nothing sampled.
+const MAX_UNOBSERVED_SECS: i64 = 300;
+
 impl Live {
     fn fresh(now: i64) -> Self {
         Self {
@@ -100,29 +105,38 @@ impl Live {
     /// fires immediately, on one sample, with a notification claiming it was
     /// sustained.
     ///
-    /// `last_eval_at` bounds what was actually observed, so the anchor moves
-    /// forward by the unobserved gap instead of being reset. A two-second
-    /// restart keeps the evidence it had; a three-day gap keeps none of it.
+    /// `last_eval_at` bounds what was actually observed, so within a short gap
+    /// the anchor moves forward by it instead of being reset — a restart keeps
+    /// the evidence it had.
     ///
-    /// Only `Pending` is adjusted. For `Firing`, `state_since` is not a
-    /// countdown but the answer to "since when" — reported in the UI badge and
-    /// carried into the resolve event — and moving it would misstate a fact
-    /// about the incident rather than protect a deadline.
-    fn from_row(r: &AlertStateRow, now: i64) -> Self {
+    /// Past [`MAX_UNOBSERVED_SECS`] there is no evidence to keep and `None`
+    /// says so: nothing was sampled across the gap, so the condition may have
+    /// cleared and returned, and a lowered `for_duration_secs` would otherwise
+    /// inherit more elapsed window than the new one allows. Resuming a stale
+    /// `Firing` is no better — still violating, it emits nothing and the
+    /// operator hears about an ongoing problem never; cleared, it announces a
+    /// resolve for an incident that ended unobserved and no view ever showed.
+    /// Starting over is right on both branches.
+    ///
+    /// Only `Pending` is adjusted within the window. For `Firing`,
+    /// `state_since` is not a countdown but the answer to "since when" —
+    /// reported in the UI badge and carried into the resolve event.
+    fn from_row(r: &AlertStateRow, now: i64) -> Option<Self> {
+        let unobserved = (now - r.last_eval_at).max(0);
+        if unobserved > MAX_UNOBSERVED_SECS {
+            return None;
+        }
         let state_since = match r.state {
-            AlertLifecycle::Pending => {
-                let unobserved = (now - r.last_eval_at).max(0);
-                (r.state_since + unobserved).min(now)
-            }
+            AlertLifecycle::Pending => (r.state_since + unobserved).min(now),
             AlertLifecycle::Ok | AlertLifecycle::Firing => r.state_since,
         };
-        Self {
+        Some(Self {
             state: r.state,
             state_since,
             last_value: r.last_value,
             last_eval_at: r.last_eval_at,
             last_notified_at: r.last_notified_at,
-        }
+        })
     }
 
     fn to_row(&self, rule_id: i64, label_set: &str) -> AlertStateRow {
@@ -168,13 +182,25 @@ async fn run(state: Arc<AppState>) {
     let hydrated_at = Utc::now().timestamp();
     match repo.list_all_state().await {
         Ok(rows) => {
+            let mut dropped = 0usize;
             for r in rows {
-                live.entry(r.rule_id)
-                    .or_default()
-                    .insert(r.label_set.clone(), Live::from_row(&r, hydrated_at));
+                match Live::from_row(&r, hydrated_at) {
+                    Some(l) => {
+                        live.entry(r.rule_id)
+                            .or_default()
+                            .insert(r.label_set.clone(), l);
+                    }
+                    // Deleted, not merely skipped: left behind it would keep
+                    // showing as active on `/alerts/state` and the summary
+                    // badge, for an incident this run cannot vouch for.
+                    None => {
+                        dropped += 1;
+                        let _ = repo.delete_state_if(r.rule_id, &r.label_set, r.state).await;
+                    }
+                }
             }
             info!(
-                "alert evaluator hydrated {} lifecycle row(s)",
+                "alert evaluator hydrated {} lifecycle row(s), dropped {dropped} stale",
                 live.values().map(|m| m.len()).sum::<usize>()
             );
         }
@@ -270,11 +296,20 @@ async fn rehydrate_missing(
         }
         match repo.list_state_for_rule(rid).await {
             Ok(rows) if !rows.is_empty() => {
-                let hydrated: HashMap<String, Live> = rows
-                    .iter()
-                    .map(|r| (r.label_set.clone(), Live::from_row(r, now)))
-                    .collect();
-                live.insert(rid, hydrated);
+                let mut hydrated: HashMap<String, Live> = HashMap::new();
+                for r in &rows {
+                    match Live::from_row(r, now) {
+                        Some(l) => {
+                            hydrated.insert(r.label_set.clone(), l);
+                        }
+                        None => {
+                            let _ = repo.delete_state_if(r.rule_id, &r.label_set, r.state).await;
+                        }
+                    }
+                }
+                if !hydrated.is_empty() {
+                    live.insert(rid, hydrated);
+                }
             }
             Ok(_) => {}
             Err(e) => warn!(
@@ -623,7 +658,7 @@ pub(crate) async fn evaluate_once(
         .await
         .map_err(|e| e.to_string())?
         .into_iter()
-        .map(|r| (r.label_set.clone(), Live::from_row(&r, now)))
+        .filter_map(|r| Live::from_row(&r, now).map(|l| (r.label_set.clone(), l)))
         .collect();
     evaluate_rule(state, &repo, rule, expr, &mut live, true, now).await
 }
@@ -926,17 +961,19 @@ mod tests {
     async fn rehydrate_missing_restores_firing_state_after_reenable() {
         let repo = test_repo().await;
         let rule_id = insert_test_rule(&repo).await;
+        let now = Utc::now().timestamp();
 
         // Simulate: the rule was Firing, then got disabled (its `live` entry
         // dropped, but the DB row is untouched) — write that row directly.
+        // Evaluated seconds ago: a disable/re-enable cycle, not a long absence.
         repo.upsert_state(&AlertStateRow {
             rule_id,
             label_set: "{}".to_string(),
             state: AlertLifecycle::Firing,
-            state_since: 1_000,
+            state_since: now - 600,
             last_value: Some(97.5),
-            last_eval_at: 1_060,
-            last_notified_at: Some(1_060),
+            last_eval_at: now - 30,
+            last_notified_at: Some(now - 30),
         })
         .await
         .expect("seed firing state");
@@ -944,15 +981,56 @@ mod tests {
         // Simulate: the rule just reappeared in `rules` after re-enable, but
         // `live` has nothing for it (exactly what disabling left behind).
         let mut live: HashMap<i64, HashMap<String, Live>> = HashMap::new();
-        rehydrate_missing(&repo, [rule_id], &mut live, Utc::now().timestamp()).await;
+        rehydrate_missing(&repo, [rule_id], &mut live, now).await;
 
         let restored = live
             .get(&rule_id)
             .and_then(|m| m.get("{}"))
             .expect("rule id and label_set restored into `live`");
         assert_eq!(restored.state, AlertLifecycle::Firing);
-        assert_eq!(restored.state_since, 1_000);
-        assert_eq!(restored.last_notified_at, Some(1_060));
+        assert_eq!(restored.state_since, now - 600);
+        assert_eq!(restored.last_notified_at, Some(now - 30));
+    }
+
+    /// The other half of the rule above: a rule disabled while Firing and
+    /// re-enabled weeks later must not resume. Its row describes a window
+    /// nothing sampled, so `rehydrate_missing` drops it and evaluation
+    /// starts over from Ok.
+    #[tokio::test]
+    async fn rehydrate_missing_discards_state_left_by_a_long_disable() {
+        let repo = test_repo().await;
+        let rule_id = insert_test_rule(&repo).await;
+        let now = Utc::now().timestamp();
+
+        repo.upsert_state(&AlertStateRow {
+            rule_id,
+            label_set: "{}".to_string(),
+            state: AlertLifecycle::Firing,
+            state_since: now - 3 * 86_400,
+            last_value: Some(97.5),
+            last_eval_at: now - 2 * 86_400,
+            last_notified_at: Some(now - 2 * 86_400),
+        })
+        .await
+        .expect("seed firing state");
+
+        let mut live: HashMap<i64, HashMap<String, Live>> = HashMap::new();
+        rehydrate_missing(&repo, [rule_id], &mut live, now).await;
+
+        assert!(
+            live.get(&rule_id).is_none_or(|m| m.get("{}").is_none()),
+            "a two-day-old lifecycle row must not be rehydrated"
+        );
+        // Dropped from the table too, so `/alerts/state` and the summary badge
+        // stop showing an event this run cannot vouch for.
+        let rows = repo
+            .list_state_for_rule(rule_id)
+            .await
+            .expect("list state for rule");
+        assert!(
+            rows.is_empty(),
+            "the stale row must be deleted, not just skipped"
+        );
     }
 
     /// A rule already tracked in `live` (the common case — still enabled,
@@ -1017,28 +1095,31 @@ mod tests {
         }
     }
 
-    /// A `for` window means "held continuously while being evaluated", so time
-    /// nobody was evaluating cannot count toward it. Restoring `state_since`
-    /// verbatim let a rule that sat Pending while disabled come back with its
-    /// window already elapsed and fire on the very first sample.
+    /// A gap longer than the trust window leaves nothing to restore: nothing
+    /// sampled across it, so the condition may have cleared and returned, and a
+    /// `for_duration_secs` lowered in the meantime would otherwise inherit more
+    /// elapsed window than the new one allows.
     #[test]
-    fn rehydrated_pending_does_not_inherit_an_unwatched_for_window() {
+    fn a_long_unwatched_gap_leaves_nothing_to_rehydrate() {
         let now = 1_000_000;
         let three_days = 3 * 86_400;
-        let live = Live::from_row(&pending_row(now - three_days, now - three_days), now);
-
-        assert_eq!(live.state_since, now, "an unwatched gap cannot count");
-        // So the debounce is actually served rather than skipped.
-        let s = transition(live.state, live.state_since, true, 600, now + 1);
-        assert_eq!(s.state, AlertLifecycle::Pending);
+        assert!(
+            Live::from_row(&pending_row(now - three_days, now - three_days), now).is_none(),
+            "state unevaluated for three days cannot be resumed"
+        );
+        // The threshold itself, either side of it.
+        assert!(
+            Live::from_row(&pending_row(now - 900, now - MAX_UNOBSERVED_SECS - 1), now).is_none()
+        );
+        assert!(Live::from_row(&pending_row(now - 900, now - MAX_UNOBSERVED_SECS), now).is_some());
     }
 
-    /// The other end of the same rule: a two-second restart must not throw away
-    /// evidence the rule had already accumulated.
+    /// Inside the window a restart must not throw away evidence the rule had
+    /// already accumulated — only the gap itself is discounted.
     #[test]
     fn rehydrated_pending_keeps_evidence_across_a_short_restart() {
         let now = 1_000_000;
-        let live = Live::from_row(&pending_row(now - 500, now - 2), now);
+        let live = Live::from_row(&pending_row(now - 500, now - 2), now).expect("within the window");
 
         assert_eq!(live.state_since, now - 498, "only the 2s gap is discounted");
         let s = transition(live.state, live.state_since, true, 600, now);
