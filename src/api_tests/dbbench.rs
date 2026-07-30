@@ -150,7 +150,24 @@ fn rss_bytes() -> u64 {
 /// A file-backed database in the OS temp dir, wired exactly like production
 /// (same pragmas, same pool construction) via the normal harness.
 async fn app_on_disk(tag: &str) -> (TestApp, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!("remon-dbbench-{}-{}", tag, std::process::id()));
+    let pid = std::process::id();
+
+    // A killed run never reaches its own cleanup, and each seeded database is a
+    // few hundred MB — a handful of them fills a disk. The suite is single
+    // threaded and one process per run, so any directory tagged with another
+    // pid belongs to a run that is already over.
+    if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
+        let mine = format!("-{pid}");
+        for e in entries.flatten() {
+            let name = e.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if name.starts_with("remon-dbbench-") && !name.ends_with(&mine) {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
+
+    let dir = std::env::temp_dir().join(format!("remon-dbbench-{}-{}", tag, pid));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create bench dir");
     let path = dir.join("bench.sqlite3");
