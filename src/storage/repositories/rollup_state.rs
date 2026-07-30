@@ -1,16 +1,11 @@
+use std::collections::HashMap;
+
 use sqlx::SqlitePool;
 
 use crate::error::AppResult;
 
-/// Bookkeeping cursor: how far has the rollup task progressed for a given
-/// (resource, resolution)? Tracked so that, after a restart, the task can
-/// resume from `last_bucket_ts` rather than rebuilding the whole history,
-/// and after extended downtime it can clamp how far back it tries to go.
-#[derive(Debug, Clone)]
-pub struct RollupCursor {
-    pub last_bucket_ts: i64,
-}
-
+/// Bookkeeping cursors: how far the rollup has progressed per
+/// (resource, resolution), so a restart resumes rather than rebuilding history.
 pub struct RollupStateRepository {
     pool: SqlitePool,
 }
@@ -20,18 +15,18 @@ impl RollupStateRepository {
         Self { pool }
     }
 
-    pub async fn get(&self, resource: &str, resolution: &str) -> AppResult<RollupCursor> {
-        let row: Option<(i64,)> = sqlx::query_as(
-            "SELECT last_bucket_ts FROM rollup_state WHERE resource = ? AND resolution = ?",
-        )
-        .bind(resource)
-        .bind(resolution)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(RollupCursor {
-            last_bucket_ts: row.map(|r| r.0).unwrap_or(0),
-        })
+    /// Every cursor, keyed `(resource, resolution)`. One read per tick instead
+    /// of one per pair: the table holds a couple of dozen integers and the
+    /// rollup wants all of them, its own and its parents'.
+    pub async fn load_all(&self) -> AppResult<HashMap<(String, String), i64>> {
+        let rows: Vec<(String, String, i64)> =
+            sqlx::query_as("SELECT resource, resolution, last_bucket_ts FROM rollup_state")
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(resource, resolution, ts)| ((resource, resolution), ts))
+            .collect())
     }
 
     pub async fn set(

@@ -103,10 +103,15 @@ pub(crate) async fn run_once(state: &AppState) -> anyhow::Result<()> {
     }
 
     let now = chrono::Utc::now().timestamp();
+    // Read once, then kept current as cursors advance: a child tier reads its
+    // parent's cursor, and the parent may have moved earlier in this same tick.
+    let mut cursors = cursor_repo.load_all().await?;
 
     for target in &targets {
         for resource in ROLLUP_RESOURCES {
-            if let Err(e) = rollup_resource(state, &cursor_repo, target, resource, now).await {
+            if let Err(e) =
+                rollup_resource(state, &cursor_repo, &mut cursors, target, resource, now).await
+            {
                 warn!(
                     "rollup failed for resource={} resolution={}: {:?}",
                     resource, target.name, e
@@ -121,6 +126,7 @@ pub(crate) async fn run_once(state: &AppState) -> anyhow::Result<()> {
 async fn rollup_resource(
     state: &AppState,
     cursor_repo: &RollupStateRepository,
+    cursors: &mut std::collections::HashMap<(String, String), i64>,
     target: &Resolution,
     resource: &str,
     now: i64,
@@ -138,13 +144,14 @@ async fn rollup_resource(
     // Latest fully-closed bucket that is now in the past.
     let latest_closed_start = (now / bucket - 1) * bucket;
 
-    let cursor = cursor_repo.get(resource, &target.name).await?;
-    let start_from = if cursor.last_bucket_ts == 0 {
+    let key = (resource.to_string(), target.name.clone());
+    let cursor_at = cursors.get(&key).copied().unwrap_or(0);
+    let start_from = if cursor_at == 0 {
         // First time: only roll up the most recent bucket; don't back-fill
         // the entire history of the parent table.
         latest_closed_start
     } else {
-        cursor.last_bucket_ts + bucket
+        cursor_at + bucket
     };
 
     if start_from > latest_closed_start {
@@ -164,10 +171,13 @@ async fn rollup_resource(
     let parent_settled_through = if parent == "raw" {
         latest_closed_start + bucket
     } else {
-        cursor_repo.get(resource, parent).await?.last_bucket_ts
+        cursors
+            .get(&(resource.to_string(), parent.to_string()))
+            .copied()
+            .unwrap_or(0)
     };
 
-    let mut commit_through = cursor.last_bucket_ts;
+    let mut commit_through = cursor_at;
     let mut wrote_any = false;
 
     // Bounds the work of one tick without bounding how far back the cursor can
@@ -215,10 +225,11 @@ async fn rollup_resource(
         bucket_start = bucket_end;
     }
 
-    if commit_through != cursor.last_bucket_ts {
+    if commit_through != cursor_at {
         cursor_repo
             .set(resource, &target.name, commit_through)
             .await?;
+        cursors.insert(key, commit_through);
         debug!(
             "rollup committed: resource={} resolution={} last_bucket_ts={} wrote_rows={}",
             resource, target.name, commit_through, wrote_any
