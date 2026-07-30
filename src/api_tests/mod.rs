@@ -17,6 +17,7 @@ mod config_api;
 mod dbbench;
 mod events_api;
 mod heartbeats_api;
+mod history_row_budget;
 mod incidents_api;
 mod lifecycle_api;
 mod logs_api;

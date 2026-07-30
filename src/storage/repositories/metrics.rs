@@ -25,9 +25,72 @@ fn note_collision(table: &str, expected: u64, affected: u64, ts: i64, resolution
     }
 }
 
+/// Ceiling on the rows one history response may carry.
+///
+/// The keyed reads below bound `limit` to distinct *timestamps*, not rows, so
+/// each answers with `limit × keys`. The endpoint's own cap (`MAX_LIMIT`, 5000)
+/// was written to stop a client materialising a whole table, but it counts the
+/// wrong thing: at 5000 timestamps a 128-core host still gets 640 000 rows out
+/// of `read_cpu_cores`. Sized so the key counts an ordinary host carries — four
+/// mounts, eight cores, a dozen sensors — still get the full `limit`, and only
+/// pathological ones are cut.
+const MAX_RESPONSE_ROWS: i64 = 50_000;
+
+/// Distinct timestamps worth asking for once each carries `keys` rows.
+///
+/// Trades points for completeness on purpose: the subquery pattern exists so a
+/// timestamp is never returned half-populated, so the thing to give up under a
+/// row budget is resolution, not keys.
+fn ts_limit(limit: u32, keys: i64) -> i64 {
+    let limit = limit as i64;
+    if keys <= 1 {
+        return limit;
+    }
+    (MAX_RESPONSE_ROWS / keys).clamp(1, limit)
+}
+
 impl MetricsRepository {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
+    }
+
+    /// Rows sharing the newest timestamp in the window — the multiplier between
+    /// a keyed read's `limit` and the rows it returns.
+    ///
+    /// Sampled at one timestamp rather than counted across the range: the key
+    /// set (mounts, cores, sensors, interfaces) is near-constant, and a
+    /// `COUNT(DISTINCT …)` over the whole window would walk every row the
+    /// budget exists to avoid reading.
+    ///
+    /// `table` and `key_col` are literals from the call sites below, never
+    /// request input.
+    async fn keys_per_ts(
+        &self,
+        table: &str,
+        key_col: &str,
+        resolution: Option<&str>,
+        start: i64,
+        end: i64,
+    ) -> AppResult<i64> {
+        let res_clause = if resolution.is_some() {
+            "resolution = ? AND "
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT COUNT(DISTINCT {key_col}) FROM {table}
+              WHERE {res_clause}timestamp = (
+                    SELECT MAX(timestamp) FROM {table}
+                     WHERE {res_clause}timestamp >= ? AND timestamp <= ?)"
+        );
+        let mut q = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql));
+        // Once for the outer predicate, once for the subquery's.
+        if let Some(r) = resolution {
+            q = q.bind(r.to_string()).bind(r.to_string());
+        }
+        let keys = q.bind(start).bind(end).fetch_one(&self.pool).await?;
+        // An empty window reports zero keys; the caller's own limit stands.
+        Ok(keys.max(1))
     }
 
     /// Persist one collector tick (CPU host-level + per-core, memory, disks,
@@ -344,6 +407,10 @@ impl MetricsRepository {
         // Multi-row-per-timestamp (one per core) — pick the most recent
         // `limit` distinct timestamps in a subquery so we don't truncate
         // the live tail when N × cores exceeds the row limit.
+        let keys = self
+            .keys_per_ts("metrics_cpu_cores", "core_index", None, start, end)
+            .await?;
+        let limit = ts_limit(limit, keys);
         let rows = sqlx::query_as::<_, (i64, i64, f64, i64)>(
             r#"
             SELECT timestamp, core_index, usage_percent, freq_mhz
@@ -362,7 +429,7 @@ impl MetricsRepository {
         .bind(end)
         .bind(start)
         .bind(end)
-        .bind(limit as i64)
+        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
@@ -453,6 +520,10 @@ impl MetricsRepository {
         // an incomplete tail and a visible gap in the sparkline.
         // Pick the most recent `limit` distinct timestamps first, then
         // join all mount rows for them.
+        let keys = self
+            .keys_per_ts("metrics_disk", "mount_point", Some(resolution), start, end)
+            .await?;
+        let limit = ts_limit(limit, keys);
         let rows = sqlx::query_as::<
             _,
             (
@@ -492,7 +563,7 @@ impl MetricsRepository {
         .bind(resolution)
         .bind(start)
         .bind(end)
-        .bind(limit as i64)
+        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
@@ -578,6 +649,16 @@ impl MetricsRepository {
         // visible gap between the prefetched history and the first SSE
         // sample. Pick the most recent `limit` distinct timestamps in a
         // subquery and join all interface rows for them.
+        let keys = self
+            .keys_per_ts(
+                "metrics_network",
+                "interface_name",
+                Some(resolution),
+                start,
+                end,
+            )
+            .await?;
+        let limit = ts_limit(limit, keys);
         let rows = sqlx::query_as::<_, (i64, String, i64, i64, i64, i64, i64, i64)>(
             r#"
             SELECT timestamp, interface_name, rx_bytes_per_sec, tx_bytes_per_sec,
@@ -600,7 +681,7 @@ impl MetricsRepository {
         .bind(resolution)
         .bind(start)
         .bind(end)
-        .bind(limit as i64)
+        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
@@ -615,6 +696,10 @@ impl MetricsRepository {
     ) -> AppResult<Vec<(i64, String, Option<f64>, Option<f64>, Option<f64>)>> {
         // Multi-row-per-timestamp (one per component) — same subquery
         // pattern as cpu_cores / network / disk to preserve the live tail.
+        let keys = self
+            .keys_per_ts("metrics_components", "label", Some(resolution), start, end)
+            .await?;
+        let limit = ts_limit(limit, keys);
         let rows = sqlx::query_as::<_, (i64, String, Option<f64>, Option<f64>, Option<f64>)>(
             r#"
             SELECT timestamp, label, temperature_c, max_c, critical_c
@@ -635,7 +720,7 @@ impl MetricsRepository {
         .bind(resolution)
         .bind(start)
         .bind(end)
-        .bind(limit as i64)
+        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
