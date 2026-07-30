@@ -135,10 +135,9 @@ INSERT INTO retention_policy (resource, resolution, keep_seconds) VALUES
     ('probe_runs',      'raw', 2592000),
     ('heartbeat_pings', 'raw', 2592000),
     ('incident_snapshots', 'raw', 2592000),
+    -- raw only: probe metrics have no rollup, because nothing can read one.
+    -- See ROLLUP_RESOURCES in services/rollup.rs.
     ('probe',        'raw', 86400),
-    ('probe',        '1m',  604800),
-    ('probe',        '5m',  2592000),
-    ('probe',        '1h',  31536000),
     ('smart',        'raw', 31536000),
     ('alert_events', 'raw', 7776000),
     ('host_events',  'raw', 7776000);

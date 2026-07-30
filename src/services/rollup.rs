@@ -37,10 +37,14 @@ use crate::storage::repositories::{Resolution, ResolutionRepository, RollupState
 const MAX_BACKFILL_BUCKETS: i64 = 720;
 
 /// Resources that get full rollup coverage (per-bucket aggregation).
+///
 /// `cpu_cores` is intentionally omitted — per-core data is raw-only.
-/// `probe` aggregates on (host, probe_name, metric_name, labels) so two
-/// probes emitting the same metric_name with different labels stay
-/// separate streams through every resolution.
+///
+/// `probe` is omitted too, for a different reason: nothing can read it.
+/// `GET /probes/{name}/metrics/{metric}/history` rejects any resolution but
+/// `raw`, and the assistant's `history_summary` has no `probe` namespace, so
+/// rolled-up probe buckets were written, retained and indexed with no path
+/// back out. Reinstating it means adding the read side in the same change.
 const ROLLUP_RESOURCES: &[&str] = &[
     "cpu",
     "memory",
@@ -50,7 +54,6 @@ const ROLLUP_RESOURCES: &[&str] = &[
     "process",
     "pressure",
     "components",
-    "probe",
 ];
 
 pub fn spawn(state: Arc<AppState>) {
@@ -402,17 +405,6 @@ async fn aggregate_one_bucket(
               FROM metrics_components
              WHERE resolution = ? AND timestamp >= ? AND timestamp < ?
              GROUP BY label
-            "#
-        }
-        "probe" => {
-            r#"
-            INSERT OR REPLACE INTO metrics_probe
-              (resolution, timestamp, probe_name, metric_name, labels, value)
-            SELECT ?, ?, probe_name, metric_name, labels,
-                   AVG(value)
-              FROM metrics_probe
-             WHERE resolution = ? AND timestamp >= ? AND timestamp < ?
-             GROUP BY probe_name, metric_name, labels
             "#
         }
         _ => return Ok(false),

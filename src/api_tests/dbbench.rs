@@ -437,20 +437,24 @@ async fn seed_operational(pool: &SqlitePool) {
             keys = ints_of(containers)
         ));
 
-        // Probes run on a schedule, so their raw tier is as sparse as the runs.
-        let p_step = if *res == "raw" { 60 } else { *interval };
-        let p_ticks = (retained / p_step / div).max(1);
-        let p_base = now - p_ticks * p_step;
-        stmts.push(format!(
-            "{cte} INSERT OR IGNORE INTO metrics_probe
-               (resolution, timestamp, probe_name, metric_name, labels, value)
-             SELECT '{res}', {p_base} + n*{p_step}, 'probe' || p.k, 'metric' || m.k,
-                    '{{}}', 1.0 + (n % 100)
-             FROM t CROSS JOIN ({probes}) p CROSS JOIN ({metrics}) m",
-            cte = series(p_ticks),
-            probes = ints_of(PROBES),
-            metrics = ints_of(PROBE_METRICS)
-        ));
+        // Probes are raw-only — no rollup writes them, so seeding a rolled-up
+        // tier would measure a partition a live database never has. They run on
+        // a schedule, so the raw tier is as sparse as the runs.
+        if *res == "raw" {
+            let p_step = 60;
+            let p_ticks = (retained / p_step / div).max(1);
+            let p_base = now - p_ticks * p_step;
+            stmts.push(format!(
+                "{cte} INSERT OR IGNORE INTO metrics_probe
+                   (resolution, timestamp, probe_name, metric_name, labels, value)
+                 SELECT 'raw', {p_base} + n*{p_step}, 'probe' || p.k, 'metric' || m.k,
+                        '{{}}', 1.0 + (n % 100)
+                 FROM t CROSS JOIN ({probes}) p CROSS JOIN ({metrics}) m",
+                cte = series(p_ticks),
+                probes = ints_of(PROBES),
+                metrics = ints_of(PROBE_METRICS)
+            ));
+        }
     }
 
     // SMART is raw-only and kept for a year; the poller runs every 30 minutes.
@@ -1179,14 +1183,13 @@ async fn dbbench_null_column_fallback() {
         // Bounded to the last hour: the same shape, with the walk cut short.
         (
             "latest_non_null_1h",
-            keyed_latest_sql("metrics_disk", "inode_used_percent", "mount_point", "")
-                .replace(
-                    "AND (inode_used_percent) IS NOT NULL",
-                    &format!(
-                        "AND (inode_used_percent) IS NOT NULL AND t.timestamp >= {}",
-                        now - 3600
-                    ),
+            keyed_latest_sql("metrics_disk", "inode_used_percent", "mount_point", "").replace(
+                "AND (inode_used_percent) IS NOT NULL",
+                &format!(
+                    "AND (inode_used_percent) IS NOT NULL AND t.timestamp >= {}",
+                    now - 3600
                 ),
+            ),
         ),
         // No fallback at all: newest row per key, NULL and all.
         (
@@ -1251,12 +1254,11 @@ async fn dbbench_null_column_fallback() {
             report(&format!("stats.{table}"), "absent", "");
             continue;
         }
-        let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT count(*) FROM {table}"
-        )))
-        .fetch_one(pool)
-        .await
-        .unwrap_or(-1);
+        let rows: i64 =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+                .fetch_one(pool)
+                .await
+                .unwrap_or(-1);
         let disk: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT count(*) FROM {table} WHERE tbl = 'metrics_disk'"
         )))
