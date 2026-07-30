@@ -100,6 +100,16 @@ async fn main() -> std::process::ExitCode {
 const LEDGER_STOP_BUDGET: Duration = Duration::from_secs(3);
 const NOTIFY_STOP_BUDGET: Duration = Duration::from_secs(5);
 
+/// Ceiling on the connection drain.
+///
+/// axum waits on in-flight responses without a bound of its own, and the
+/// assistant's request timeout is 150s — five times `TimeoutStopSec`. One
+/// request in flight when SIGTERM arrives would therefore let the supervisor's
+/// SIGKILL land first, which skips `mark_clean_shutdown` and makes the next boot
+/// report an unclean exit. Sized so the drain plus both worker budgets leave
+/// headroom under the unit's `TimeoutStopSec=30s`.
+const DRAIN_BUDGET: Duration = Duration::from_secs(15);
+
 /// Await a worker under a budget, reporting whichever way it ended.
 async fn stop_worker(handle: tokio::task::JoinHandle<()>, budget: Duration, what: &str) {
     match tokio::time::timeout(budget, handle).await {
@@ -374,19 +384,45 @@ async fn run(
     // blocking shutdown forever.
     let shutdown_state = app_state.clone();
     let intent_rx = app_state.exit_intent.subscribe();
+    let (drain_started, drain_begins) = tokio::sync::oneshot::channel::<()>();
     let graceful_shutdown = async move {
         shutdown::signal(intent_rx).await;
         let _ = shutdown_state.shutdown.send(true);
+        // Timing the drain needs the moment it starts. Wrapping the whole serve
+        // future in a timeout instead would cap the server's uptime.
+        let _ = drain_started.send(());
     };
 
-    if let Err(e) = axum::serve(
+    // Awaited inside the task because `with_graceful_shutdown` returns an
+    // `IntoFuture`, which `spawn` will not take on its own.
+    let serve = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(graceful_shutdown)
-    .await
-    {
-        error!("server error: {}", e);
+    .with_graceful_shutdown(graceful_shutdown);
+    let mut server = tokio::spawn(async move { serve.await });
+
+    fn report(res: Result<std::io::Result<()>, tokio::task::JoinError>) {
+        match res {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => error!("server error: {}", e),
+            Err(e) => error!("server task failed: {}", e),
+        }
+    }
+
+    tokio::select! {
+        // Ended with no stop requested — a bind or accept error.
+        res = &mut server => report(res),
+        // `drain_begins` also resolves (as an error) if the sender drops with
+        // the serve future, which lands here with the task already finished;
+        // the await below then returns its result immediately.
+        _ = drain_begins => match tokio::time::timeout(DRAIN_BUDGET, &mut server).await {
+            Ok(res) => report(res),
+            Err(_) => {
+                warn!("connections still draining after {DRAIN_BUDGET:?}; closing them");
+                server.abort();
+            }
+        },
     }
 
     // Also on the error path, where the graceful-shutdown future was never
