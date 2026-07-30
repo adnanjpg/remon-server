@@ -56,6 +56,78 @@ const ROLLUP_RESOURCES: &[&str] = &[
     "components",
 ];
 
+/// Raw samples a row stands for. Raw rows carry NULL — they are one sample and
+/// predate the column — so every read of it goes through this.
+const SAMPLES: &str = "COALESCE(sample_count, 1)";
+
+/// What a column means once several child buckets are folded into one.
+#[derive(Clone, Copy, PartialEq)]
+enum Agg {
+    /// Weighted mean, kept as REAL.
+    Mean,
+    /// Weighted mean, stored back into an INTEGER column.
+    MeanInt,
+    /// The bucket's end value — for counters cumulative since the producer
+    /// started, where a mean is a number nothing ever reported.
+    Max,
+}
+
+/// One rolled-up column and how it folds.
+type Field = (&'static str, Agg);
+
+/// Fold `col` across child buckets, weighting each by the samples behind it.
+///
+/// `AVG(col)` averages the children's averages, which equals the true mean only
+/// when every child covered the same number of samples. They do not: a restart,
+/// a stalled collector, or a bucket only partly filled when the tier ran all
+/// leave a child standing for fewer samples than its siblings, and chaining
+/// raw→1m→5m→1h compounds the error at every tier. The weighting cannot be
+/// recovered after the fact, which is the whole reason `sample_count` is stored.
+///
+/// The denominator counts only children where `col` is non-NULL, so an optional
+/// field is not diluted by buckets that never carried it.
+fn fold(col: &str, agg: Agg) -> String {
+    if agg == Agg::Max {
+        return format!("MAX({col})");
+    }
+    let mean = format!(
+        "SUM({col} * {SAMPLES}) / \
+         NULLIF(SUM(CASE WHEN {col} IS NULL THEN 0 ELSE {SAMPLES} END), 0)"
+    );
+    if agg == Agg::MeanInt {
+        format!("CAST({mean} AS INTEGER)")
+    } else {
+        mean
+    }
+}
+
+/// The `INSERT … SELECT` that folds one bucket of `table` into `target`.
+///
+/// Placeholder order is (target resolution, bucket start, parent resolution,
+/// bucket start, bucket end) — the binds below depend on it.
+///
+/// Unkeyed tables need `HAVING COUNT(*) > 0` so an empty bucket does not insert
+/// a row of NULLs; a keyed table's `GROUP BY` already yields nothing.
+fn fold_sql(table: &str, key: Option<&str>, fields: &[Field]) -> String {
+    let cols: Vec<&str> = fields.iter().map(|(c, _)| *c).collect();
+    let aggs: Vec<String> = fields.iter().map(|(c, a)| fold(c, *a)).collect();
+    let (key_col, tail) = match key {
+        Some(k) => (format!("{k}, "), format!("GROUP BY {k}")),
+        None => (String::new(), "HAVING COUNT(*) > 0".to_string()),
+    };
+    format!(
+        "INSERT OR REPLACE INTO {table}
+           (resolution, timestamp, {key_col}{cols}, sample_count)
+         SELECT ?, ?, {key_sel}{aggs}, SUM({SAMPLES})
+           FROM {table}
+          WHERE resolution = ? AND timestamp >= ? AND timestamp < ?
+         {tail}",
+        cols = cols.join(", "),
+        key_sel = key_col,
+        aggs = aggs.join(", "),
+    )
+}
+
 pub fn spawn(state: Arc<AppState>) {
     tokio::spawn(async move {
         run(state).await;
@@ -253,89 +325,68 @@ async fn aggregate_one_bucket(
     bucket_start: i64,
     bucket_end: i64,
 ) -> anyhow::Result<bool> {
+    use Agg::{Max, Mean, MeanInt};
+
     let sql = match resource {
-        "cpu" => {
-            r#"
-            INSERT OR REPLACE INTO metrics_cpu
-              (resolution, timestamp, usage_percent, load_1m, load_5m, load_15m,
-               steal_percent, iowait_percent, guest_percent,
-               user_percent, system_percent,
-               context_switches_per_sec, process_forks_per_sec)
-            SELECT ?, ?,
-                   AVG(usage_percent), AVG(load_1m), AVG(load_5m), AVG(load_15m),
-                   AVG(steal_percent), AVG(iowait_percent), AVG(guest_percent),
-                   AVG(user_percent), AVG(system_percent),
-                   CAST(AVG(context_switches_per_sec) AS INTEGER),
-                   CAST(AVG(process_forks_per_sec)    AS INTEGER)
-              FROM metrics_cpu
-             WHERE resolution = ?
-               AND timestamp >= ?
-               AND timestamp <  ?
-            HAVING COUNT(*) > 0
-            "#
-        }
-        "memory" => {
-            r#"
-            INSERT OR REPLACE INTO metrics_memory
-              (resolution, timestamp,
-               total_bytes, used_bytes, available_bytes, cached_bytes, swap_used_bytes,
-               page_faults_minor_per_sec, page_faults_major_per_sec,
-               swap_in_pages_per_sec, swap_out_pages_per_sec)
-            SELECT ?, ?,
-                   CAST(AVG(total_bytes) AS INTEGER),
-                   CAST(AVG(used_bytes) AS INTEGER),
-                   CAST(AVG(available_bytes) AS INTEGER),
-                   CAST(AVG(cached_bytes) AS INTEGER),
-                   CAST(AVG(swap_used_bytes) AS INTEGER),
-                   CAST(AVG(page_faults_minor_per_sec) AS INTEGER),
-                   CAST(AVG(page_faults_major_per_sec) AS INTEGER),
-                   CAST(AVG(swap_in_pages_per_sec)     AS INTEGER),
-                   CAST(AVG(swap_out_pages_per_sec)    AS INTEGER)
-              FROM metrics_memory
-             WHERE resolution = ? AND timestamp >= ? AND timestamp < ?
-            HAVING COUNT(*) > 0
-            "#
-        }
-        "disk" => {
-            r#"
-            INSERT OR REPLACE INTO metrics_disk
-              (resolution, timestamp, mount_point,
-               total_bytes, used_bytes, available_bytes, read_bytes_per_sec, write_bytes_per_sec,
-               inode_used_percent, read_iops, write_iops, io_util_percent)
-            SELECT ?, ?, mount_point,
-                   CAST(AVG(total_bytes) AS INTEGER),
-                   CAST(AVG(used_bytes) AS INTEGER),
-                   CAST(AVG(available_bytes) AS INTEGER),
-                   CAST(AVG(read_bytes_per_sec) AS INTEGER),
-                   CAST(AVG(write_bytes_per_sec) AS INTEGER),
-                   AVG(inode_used_percent),
-                   CAST(AVG(read_iops) AS INTEGER),
-                   CAST(AVG(write_iops) AS INTEGER),
-                   AVG(io_util_percent)
-              FROM metrics_disk
-             WHERE resolution = ? AND timestamp >= ? AND timestamp < ?
-             GROUP BY mount_point
-            "#
-        }
-        "network" => {
-            r#"
-            INSERT OR REPLACE INTO metrics_network
-              (resolution, timestamp, interface_name,
-               rx_bytes_per_sec, tx_bytes_per_sec,
-               rx_packets_per_sec, tx_packets_per_sec,
-               errors_in_per_sec, errors_out_per_sec)
-            SELECT ?, ?, interface_name,
-                   CAST(AVG(rx_bytes_per_sec)   AS INTEGER),
-                   CAST(AVG(tx_bytes_per_sec)   AS INTEGER),
-                   CAST(AVG(rx_packets_per_sec) AS INTEGER),
-                   CAST(AVG(tx_packets_per_sec) AS INTEGER),
-                   CAST(AVG(errors_in_per_sec)  AS INTEGER),
-                   CAST(AVG(errors_out_per_sec) AS INTEGER)
-              FROM metrics_network
-             WHERE resolution = ? AND timestamp >= ? AND timestamp < ?
-             GROUP BY interface_name
-            "#
-        }
+        "cpu" => fold_sql(
+            "metrics_cpu",
+            None,
+            &[
+                ("usage_percent", Mean),
+                ("load_1m", Mean),
+                ("load_5m", Mean),
+                ("load_15m", Mean),
+                ("steal_percent", Mean),
+                ("iowait_percent", Mean),
+                ("guest_percent", Mean),
+                ("user_percent", Mean),
+                ("system_percent", Mean),
+                ("context_switches_per_sec", MeanInt),
+                ("process_forks_per_sec", MeanInt),
+            ],
+        ),
+        "memory" => fold_sql(
+            "metrics_memory",
+            None,
+            &[
+                ("total_bytes", MeanInt),
+                ("used_bytes", MeanInt),
+                ("available_bytes", MeanInt),
+                ("cached_bytes", MeanInt),
+                ("swap_used_bytes", MeanInt),
+                ("page_faults_minor_per_sec", MeanInt),
+                ("page_faults_major_per_sec", MeanInt),
+                ("swap_in_pages_per_sec", MeanInt),
+                ("swap_out_pages_per_sec", MeanInt),
+            ],
+        ),
+        "disk" => fold_sql(
+            "metrics_disk",
+            Some("mount_point"),
+            &[
+                ("total_bytes", MeanInt),
+                ("used_bytes", MeanInt),
+                ("available_bytes", MeanInt),
+                ("read_bytes_per_sec", MeanInt),
+                ("write_bytes_per_sec", MeanInt),
+                ("inode_used_percent", Mean),
+                ("read_iops", MeanInt),
+                ("write_iops", MeanInt),
+                ("io_util_percent", Mean),
+            ],
+        ),
+        "network" => fold_sql(
+            "metrics_network",
+            Some("interface_name"),
+            &[
+                ("rx_bytes_per_sec", MeanInt),
+                ("tx_bytes_per_sec", MeanInt),
+                ("rx_packets_per_sec", MeanInt),
+                ("tx_packets_per_sec", MeanInt),
+                ("errors_in_per_sec", MeanInt),
+                ("errors_out_per_sec", MeanInt),
+            ],
+        ),
         // The four byte columns are Docker's own counters, cumulative since the
         // container started — the collector stores `networks.*.rx_bytes` and the
         // blkio totals as read. Averaging a monotonic counter produces a number
@@ -343,72 +394,56 @@ async fn aggregate_one_bucket(
         // last reading, and every coarser tier then averages that again. MAX is
         // the bucket's end value, and the one reading worth keeping when a
         // restart resets the counter mid-bucket. The rest are gauges (memory,
-        // pids) or an already-derived rate (cpu_percent), where AVG is right.
-        "docker" => {
-            r#"
-            INSERT OR REPLACE INTO metrics_docker
-              (resolution, timestamp, container_id,
-               cpu_percent, memory_used_bytes, memory_limit_bytes,
-               network_rx_bytes, network_tx_bytes,
-               block_read_bytes, block_write_bytes, pids)
-            SELECT ?, ?, container_id,
-                   AVG(cpu_percent),
-                   CAST(AVG(memory_used_bytes)  AS INTEGER),
-                   CAST(AVG(memory_limit_bytes) AS INTEGER),
-                   MAX(network_rx_bytes),
-                   MAX(network_tx_bytes),
-                   MAX(block_read_bytes),
-                   MAX(block_write_bytes),
-                   CAST(AVG(pids)               AS INTEGER)
-              FROM metrics_docker
-             WHERE resolution = ? AND timestamp >= ? AND timestamp < ?
-             GROUP BY container_id
-            "#
-        }
-        "process" => {
-            r#"
-            INSERT OR REPLACE INTO metrics_process
-              (resolution, timestamp, name,
-               pid_count, cpu_percent, memory_bytes, disk_read_bps, disk_write_bps)
-            SELECT ?, ?, name,
-                   CAST(AVG(pid_count) AS INTEGER),
-                   AVG(cpu_percent),
-                   CAST(AVG(memory_bytes)   AS INTEGER),
-                   CAST(AVG(disk_read_bps)  AS INTEGER),
-                   CAST(AVG(disk_write_bps) AS INTEGER)
-              FROM metrics_process
-             WHERE resolution = ? AND timestamp >= ? AND timestamp < ?
-             GROUP BY name
-            "#
-        }
-        "pressure" => {
-            r#"
-            INSERT OR REPLACE INTO metrics_pressure
-              (resolution, timestamp, resource,
-               some_avg10, some_avg60, some_avg300,
-               full_avg10, full_avg60, full_avg300)
-            SELECT ?, ?, resource,
-                   AVG(some_avg10), AVG(some_avg60), AVG(some_avg300),
-                   AVG(full_avg10), AVG(full_avg60), AVG(full_avg300)
-              FROM metrics_pressure
-             WHERE resolution = ? AND timestamp >= ? AND timestamp < ?
-             GROUP BY resource
-            "#
-        }
-        "components" => {
-            r#"
-            INSERT OR REPLACE INTO metrics_components
-              (resolution, timestamp, label,
-               temperature_c, max_c, critical_c)
-            SELECT ?, ?, label,
-                   AVG(temperature_c), AVG(max_c), AVG(critical_c)
-              FROM metrics_components
-             WHERE resolution = ? AND timestamp >= ? AND timestamp < ?
-             GROUP BY label
-            "#
-        }
+        // pids) or an already-derived rate (cpu_percent), where a mean is right.
+        "docker" => fold_sql(
+            "metrics_docker",
+            Some("container_id"),
+            &[
+                ("cpu_percent", Mean),
+                ("memory_used_bytes", MeanInt),
+                ("memory_limit_bytes", MeanInt),
+                ("network_rx_bytes", Max),
+                ("network_tx_bytes", Max),
+                ("block_read_bytes", Max),
+                ("block_write_bytes", Max),
+                ("pids", MeanInt),
+            ],
+        ),
+        "process" => fold_sql(
+            "metrics_process",
+            Some("name"),
+            &[
+                ("pid_count", MeanInt),
+                ("cpu_percent", Mean),
+                ("memory_bytes", MeanInt),
+                ("disk_read_bps", MeanInt),
+                ("disk_write_bps", MeanInt),
+            ],
+        ),
+        "pressure" => fold_sql(
+            "metrics_pressure",
+            Some("resource"),
+            &[
+                ("some_avg10", Mean),
+                ("some_avg60", Mean),
+                ("some_avg300", Mean),
+                ("full_avg10", Mean),
+                ("full_avg60", Mean),
+                ("full_avg300", Mean),
+            ],
+        ),
+        "components" => fold_sql(
+            "metrics_components",
+            Some("label"),
+            &[
+                ("temperature_c", Mean),
+                ("max_c", Mean),
+                ("critical_c", Mean),
+            ],
+        ),
         _ => return Ok(false),
     };
+    let sql = sqlx::AssertSqlSafe(sql);
 
     let result = sqlx::query(sql)
         .bind(target)

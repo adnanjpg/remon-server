@@ -166,6 +166,11 @@ CREATE TABLE metrics_cpu (
     system_percent            REAL,
     context_switches_per_sec  INTEGER,
     process_forks_per_sec     INTEGER,
+    -- Raw samples behind this row. NULL at raw resolution (one sample).
+    -- Rollup folds children by weighted mean; AVG-of-AVG is only correct
+    -- when every child covered the same span, and chained tiers compound
+    -- the error. Without this the weighting cannot be recovered later.
+    sample_count INTEGER,
     PRIMARY KEY (resolution, timestamp)
 ) WITHOUT ROWID;
 
@@ -189,6 +194,11 @@ CREATE TABLE metrics_memory (
     page_faults_major_per_sec  INTEGER,
     swap_in_pages_per_sec      INTEGER,
     swap_out_pages_per_sec     INTEGER,
+    -- Raw samples behind this row. NULL at raw resolution (one sample).
+    -- Rollup folds children by weighted mean; AVG-of-AVG is only correct
+    -- when every child covered the same span, and chained tiers compound
+    -- the error. Without this the weighting cannot be recovered later.
+    sample_count INTEGER,
     PRIMARY KEY (resolution, timestamp)
 ) WITHOUT ROWID;
 
@@ -205,6 +215,11 @@ CREATE TABLE metrics_disk (
     read_iops           INTEGER,
     write_iops          INTEGER,
     io_util_percent     REAL,
+    -- Raw samples behind this row. NULL at raw resolution (one sample).
+    -- Rollup folds children by weighted mean; AVG-of-AVG is only correct
+    -- when every child covered the same span, and chained tiers compound
+    -- the error. Without this the weighting cannot be recovered later.
+    sample_count INTEGER,
     PRIMARY KEY (resolution, timestamp, mount_point)
 ) WITHOUT ROWID;
 
@@ -225,6 +240,11 @@ CREATE TABLE metrics_network (
     tx_packets_per_sec INTEGER NOT NULL,
     errors_in_per_sec  INTEGER NOT NULL DEFAULT 0,
     errors_out_per_sec INTEGER NOT NULL DEFAULT 0,
+    -- Raw samples behind this row. NULL at raw resolution (one sample).
+    -- Rollup folds children by weighted mean; AVG-of-AVG is only correct
+    -- when every child covered the same span, and chained tiers compound
+    -- the error. Without this the weighting cannot be recovered later.
+    sample_count INTEGER,
     PRIMARY KEY (resolution, timestamp, interface_name)
 ) WITHOUT ROWID;
 
@@ -242,6 +262,11 @@ CREATE TABLE metrics_docker (
     block_read_bytes   INTEGER NOT NULL DEFAULT 0,
     block_write_bytes  INTEGER NOT NULL DEFAULT 0,
     pids               INTEGER NOT NULL DEFAULT 0,
+    -- Raw samples behind this row. NULL at raw resolution (one sample).
+    -- Rollup folds children by weighted mean; AVG-of-AVG is only correct
+    -- when every child covered the same span, and chained tiers compound
+    -- the error. Without this the weighting cannot be recovered later.
+    sample_count INTEGER,
     PRIMARY KEY (resolution, timestamp, container_id)
 ) WITHOUT ROWID;
 
@@ -264,6 +289,11 @@ CREATE TABLE metrics_process (
     memory_bytes   INTEGER NOT NULL,
     disk_read_bps  INTEGER NOT NULL DEFAULT 0,
     disk_write_bps INTEGER NOT NULL DEFAULT 0,
+    -- Raw samples behind this row. NULL at raw resolution (one sample).
+    -- Rollup folds children by weighted mean; AVG-of-AVG is only correct
+    -- when every child covered the same span, and chained tiers compound
+    -- the error. Without this the weighting cannot be recovered later.
+    sample_count INTEGER,
     PRIMARY KEY (resolution, timestamp, name)
 ) WITHOUT ROWID;
 
@@ -276,6 +306,11 @@ CREATE TABLE metrics_components (
     temperature_c REAL,
     max_c         REAL,
     critical_c    REAL,
+    -- Raw samples behind this row. NULL at raw resolution (one sample).
+    -- Rollup folds children by weighted mean; AVG-of-AVG is only correct
+    -- when every child covered the same span, and chained tiers compound
+    -- the error. Without this the weighting cannot be recovered later.
+    sample_count INTEGER,
     PRIMARY KEY (resolution, timestamp, label)
 ) WITHOUT ROWID;
 
@@ -291,6 +326,11 @@ CREATE TABLE metrics_pressure (
     full_avg10  REAL    NOT NULL,
     full_avg60  REAL    NOT NULL,
     full_avg300 REAL    NOT NULL,
+    -- Raw samples behind this row. NULL at raw resolution (one sample).
+    -- Rollup folds children by weighted mean; AVG-of-AVG is only correct
+    -- when every child covered the same span, and chained tiers compound
+    -- the error. Without this the weighting cannot be recovered later.
+    sample_count INTEGER,
     PRIMARY KEY (resolution, timestamp, resource)
 ) WITHOUT ROWID;
 

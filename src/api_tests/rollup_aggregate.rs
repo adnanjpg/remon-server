@@ -84,3 +84,83 @@ async fn docker_counters_roll_up_by_max_and_gauges_by_average() {
     );
     assert_eq!(row.1, 2_000, "memory_used_bytes should be the mean");
 }
+
+async fn set_cursor(app: &TestApp, resource: &str, resolution: &str, ts: i64) {
+    sqlx::query(
+        "INSERT INTO rollup_state (resource, resolution, last_bucket_ts, last_run_at)
+         VALUES (?, ?, ?, 0)
+         ON CONFLICT(resource, resolution) DO UPDATE SET last_bucket_ts = excluded.last_bucket_ts",
+    )
+    .bind(resource)
+    .bind(resolution)
+    .bind(ts)
+    .execute(&app.state.db)
+    .await
+    .expect("set cursor");
+}
+
+/// One already-rolled 1m row, standing for `samples` raw samples.
+async fn child_cpu(app: &TestApp, ts: i64, usage: f64, samples: i64, steal: Option<f64>) {
+    sqlx::query(
+        "INSERT INTO metrics_cpu
+             (resolution, timestamp, usage_percent, load_1m, load_5m, load_15m,
+              steal_percent, sample_count)
+         VALUES ('1m', ?, ?, 1.0, 1.0, 1.0, ?, ?)",
+    )
+    .bind(ts)
+    .bind(usage)
+    .bind(steal)
+    .bind(samples)
+    .execute(&app.state.db)
+    .await
+    .expect("child bucket");
+}
+
+/// A child that covered 30 raw samples and one that covered a single sample are
+/// not equal evidence. `AVG` treats them as equal, and chaining raw→1m→5m→1h
+/// compounds that at every tier — the error is invisible in the output because
+/// the row is written and the chart draws.
+#[tokio::test]
+async fn a_chained_tier_weights_children_by_the_samples_behind_them() {
+    let app = TestApp::spawn().await;
+    let now = chrono::Utc::now().timestamp();
+    let bucket = (now / 300 - 3) * 300;
+
+    // The 1m tier has to be settled past the 5m bucket, or the 5m tier
+    // correctly declines to fold a window its parent has not finished.
+    set_cursor(&app, "cpu", "1m", bucket + 300).await;
+    set_cursor(&app, "cpu", "5m", bucket - 300).await;
+
+    // A full minute at 10%, then a minute the collector barely sampled at 100%.
+    child_cpu(&app, bucket, 10.0, 30, Some(10.0)).await;
+    child_cpu(&app, bucket + 60, 100.0, 1, None).await;
+
+    crate::services::rollup::run_once(&app.state)
+        .await
+        .expect("rollup tick");
+
+    let (usage, steal, samples): (f64, Option<f64>, i64) = sqlx::query_as(
+        "SELECT usage_percent, steal_percent, sample_count
+           FROM metrics_cpu WHERE resolution = '5m' AND timestamp = ?",
+    )
+    .bind(bucket)
+    .fetch_one(&app.state.db)
+    .await
+    .expect("rolled-up bucket");
+
+    // Unweighted this reads 55.0 — the stray sample outvoting a full minute.
+    let expected = (10.0 * 30.0 + 100.0) / 31.0;
+    assert!(
+        (usage - expected).abs() < 1e-9,
+        "usage_percent {usage} is not the weighted mean {expected}"
+    );
+    assert_eq!(samples, 31, "sample_count must carry the total, not the count");
+
+    // The second child has no steal_percent at all. Counting it in the
+    // denominator would dilute a field it never carried.
+    let steal = steal.expect("steal_percent should survive one NULL child");
+    assert!(
+        (steal - 10.0).abs() < 1e-9,
+        "steal_percent {steal} was diluted by a child that carried none"
+    );
+}
