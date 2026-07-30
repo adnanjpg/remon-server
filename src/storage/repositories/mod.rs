@@ -17,14 +17,14 @@ mod rollup_state;
 mod runtime_state;
 mod smart;
 
-pub use alerts::{AlertRepository, UpsertAlertRule};
+pub use alerts::{AlertEventWithRule, AlertRepository, UpsertAlertRule};
 pub use config::{ConfigRepository, RuntimeOverrides};
 pub use devices::DeviceRepository;
 #[cfg(feature = "docker")]
 pub use docker::{DockerMetricsRepository, DockerStatsRow};
 pub use heartbeats::{HeartbeatRepository, UpsertHeartbeatCheck};
-pub use host_events::{HostEventRepository, NewHostEvent};
-pub use incidents::{IncidentRepository, NewIncident};
+pub use host_events::{HostEventRepository, HostEventRow, NewHostEvent};
+pub use incidents::{IncidentRepository, IncidentSummaryRow, NewIncident};
 pub use logs::LogRepository;
 pub use metrics::MetricsRepository;
 pub use notifications::{NotificationChannelRepository, NotificationChannelRow};
