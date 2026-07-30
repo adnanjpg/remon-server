@@ -532,8 +532,12 @@ CREATE TABLE incident_snapshots (
     metric_value REAL,
     -- Manual captures; the caller's stated reason.
     reason       TEXT,
-    bundle       TEXT    NOT NULL,
-    after_bundle TEXT
+    -- Both blobs last, and `after_bundle` before `bundle`: the listing selects
+    -- summary columns plus `after_bundle IS NOT NULL`, and reaching a column
+    -- means stepping over everything declared before it — including a several-KB
+    -- blob and its overflow pages.
+    after_bundle TEXT,
+    bundle       TEXT    NOT NULL
 );
 CREATE INDEX idx_incident_snapshots_ts   ON incident_snapshots(created_at DESC);
 CREATE INDEX idx_incident_snapshots_rule ON incident_snapshots(rule_id, created_at DESC);
