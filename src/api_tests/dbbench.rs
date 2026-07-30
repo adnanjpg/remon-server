@@ -734,20 +734,21 @@ async fn dbbench_resolver() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The collector write path. The `with`/`without` pair brackets exactly what
-/// gating the per-tick components write would save: today every tick carries
-/// them, while the sensor read behind it only refreshes every 30th.
-#[tokio::test]
-#[ignore]
-async fn dbbench_write_tick() {
+/// One collector tick, shaped like the real one. A function rather than a
+/// closure so the write and freelist cases insert identical rows — a page
+/// count only compares across cases if the row widths match.
+type Tick = (
+    crate::models::stats::CpuStats,
+    crate::models::stats::MemoryStats,
+    Vec<crate::models::stats::DiskStats>,
+    Vec<crate::models::stats::NetworkStats>,
+    crate::models::stats::PressureSnapshot,
+    crate::models::stats::ComponentsSnapshot,
+);
+
+fn tick_stats(ts: i64) -> Tick {
     use crate::models::stats::*;
-    use crate::storage::repositories::MetricsRepository;
-
-    let (app, dir) = app_on_disk("write").await;
-    let repo = MetricsRepository::new(app.state.db.clone());
-    let base = 1_800_000_000i64;
-
-    let mk = |ts: i64| {
+    {
         let cpu = CpuStats {
             usage_percent: 30.0,
             per_core: (0..CORES)
@@ -840,7 +841,21 @@ async fn dbbench_write_tick() {
             timestamp: ts,
         };
         (cpu, memory, disks, nets, pressure, components)
-    };
+    }
+}
+
+/// The collector write path. The `with`/`without` pair brackets exactly what
+/// gating the per-tick components write would save: today every tick carries
+/// them, while the sensor read behind it only refreshes every 30th.
+#[tokio::test]
+#[ignore]
+async fn dbbench_write_tick() {
+    use crate::storage::repositories::MetricsRepository;
+
+    let (app, dir) = app_on_disk("write").await;
+    let repo = MetricsRepository::new(app.state.db.clone());
+    let base = 1_800_000_000i64;
+    let mk = tick_stats;
 
     const TICKS: i64 = 20;
     const REPS: usize = 9;
@@ -1503,5 +1518,98 @@ async fn dbbench_retention() {
     report("retention.wal_bytes", wal_bytes, "bytes");
 
     page_stats(&app.state.db, "retention").await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Whether `auto_vacuum=NONE` strands freed pages or merely recycles them.
+///
+/// Retention deletes roughly what the collector inserts, so the question is not
+/// whether the file carries a freelist — it is whether that freelist is reused.
+/// If it is, `page_count` plateaus and NONE is the cheaper setting; if pages
+/// strand, the file grows without bound and incremental vacuum earns the
+/// pointer-map page it adds to every insert that extends the database.
+///
+/// One number decides it: `pages vs cycle0` across balanced cycles.
+#[tokio::test]
+#[ignore]
+async fn dbbench_freelist_reuse() {
+    use crate::storage::repositories::MetricsRepository;
+
+    let (app, dir) = app_on_disk("freelist").await;
+    seed(&app.state.db).await;
+    let repo = MetricsRepository::new(app.state.db.clone());
+
+    // The tables a raw tick writes — the ones the raw window ages out.
+    const RAW: &[&str] = &[
+        "cpu",
+        "memory",
+        "disk",
+        "network",
+        "cpu_cores",
+        "components",
+        "pressure",
+    ];
+    const RAW_KEEP_SECS: i64 = 86_400;
+    // Each cycle inserts this span and ages out the same span at the far end,
+    // so what gets measured is a balanced steady state rather than net growth.
+    const SPAN_SECS: i64 = 1_800;
+    const CYCLES: i64 = 6;
+
+    let now = chrono::Utc::now().timestamp();
+    let file = dir.join("bench.sqlite3");
+    let page_size: i64 = sqlx::query_scalar("PRAGMA page_size")
+        .fetch_one(&app.state.db)
+        .await
+        .expect("page_size");
+
+    let mut first_pages = 0i64;
+    for cycle in 0..=CYCLES {
+        if cycle > 0 {
+            let start = now + (cycle - 1) * SPAN_SECS;
+            for i in 0..(SPAN_SECS / 2) {
+                let (c, m, d, n, p, comp) = tick_stats(start + i * 2);
+                repo.insert_raw_tick(&c, &m, &d, &n, Some(&p), Some(&comp))
+                    .await
+                    .expect("tick");
+            }
+            let cutoff = now - RAW_KEEP_SECS + cycle * SPAN_SECS;
+            for resource in RAW {
+                repo.delete_older_than(resource, "raw", cutoff)
+                    .await
+                    .expect("delete");
+            }
+        }
+
+        // Checkpointed first: pages a delete frees only reach the freelist once
+        // the WAL is folded back into the database file.
+        let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&app.state.db)
+            .await;
+
+        let pages: i64 = sqlx::query_scalar("PRAGMA page_count")
+            .fetch_one(&app.state.db)
+            .await
+            .expect("page_count");
+        let free: i64 = sqlx::query_scalar("PRAGMA freelist_count")
+            .fetch_one(&app.state.db)
+            .await
+            .expect("freelist_count");
+        if cycle == 0 {
+            first_pages = pages;
+        }
+        let bytes = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+        report(
+            &format!("freelist.cycle{cycle}.pages"),
+            pages,
+            &format!(
+                "({} MB file, {} MB free, {:+} pages vs cycle0)",
+                bytes / 1024 / 1024,
+                free * page_size / 1024 / 1024,
+                pages - first_pages
+            ),
+        );
+    }
+
+    app.state.db.close().await;
     let _ = std::fs::remove_dir_all(&dir);
 }
