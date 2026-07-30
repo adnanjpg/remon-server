@@ -74,7 +74,11 @@ impl TimelineRow {
                     // crit is an error-level moment on the timeline.
                     "fired" => (
                         "alert_fired",
-                        if e.severity == "crit" { "error" } else { "warn" },
+                        if e.severity == "crit" {
+                            "error"
+                        } else {
+                            "warn"
+                        },
                         "fired",
                     ),
                     _ => ("alert_resolved", "info", "resolved"),

@@ -1119,7 +1119,8 @@ mod tests {
     #[test]
     fn rehydrated_pending_keeps_evidence_across_a_short_restart() {
         let now = 1_000_000;
-        let live = Live::from_row(&pending_row(now - 500, now - 2), now).expect("within the window");
+        let live =
+            Live::from_row(&pending_row(now - 500, now - 2), now).expect("within the window");
 
         assert_eq!(live.state_since, now - 498, "only the 2s gap is discounted");
         let s = transition(live.state, live.state_since, true, 600, now);
