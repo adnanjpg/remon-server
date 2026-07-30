@@ -21,9 +21,11 @@ use crate::services::system as system_svc;
 use crate::state::AppState;
 use crate::storage::repositories::{AlertRepository, LogRepository};
 
-/// How far back `read_logs` looks, matching `GET /logs`. The assistant asks
-/// about what is happening now; unbounded reads scale with retention.
+/// Default look-back for `read_logs`, matching `GET /logs`. Widenable per call
+/// up to [`LOG_RETENTION_SECS`], past which there is nothing left to read —
+/// the `('logs', 'raw')` retention seed in the migration.
 const LOG_LOOKBACK_SECS: i64 = 86_400;
+const LOG_RETENTION_SECS: i64 = 2_592_000;
 
 /// OpenAI-format `tools` array advertised to the model on every turn. Built at
 /// call time so the Docker tool (compile-gated) and the Prometheus tool
@@ -44,8 +46,9 @@ pub fn definitions(state: &AppState) -> Value {
             "type": "function",
             "function": {
                 "name": "read_logs",
-                "description": "Read this daemon's most recent log lines, newest first. \
-        Use it to find recent errors or warnings that explain a problem.",
+                "description": "Read this daemon's log lines, newest first. Use it to find \
+        errors or warnings that explain a problem. Covers the last day by default; widen \
+        `since_minutes` to look further back, up to the 30 days retained.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -57,6 +60,12 @@ pub fn definitions(state: &AppState) -> Value {
                         "limit": {
                             "type": "integer",
                             "description": "Maximum lines to return (1-200). Default 50."
+                        },
+                        "since_minutes": {
+                            "type": "integer",
+                            "description": "How far back to look, in minutes. Default 1440 (a day), \
+        maximum 43200 (30 days, the retention window). A narrow window is much cheaper: a selective \
+        level over a wide one walks every row in it."
                         }
                     }
                 }
@@ -597,12 +606,19 @@ async fn read_logs(state: &Arc<AppState>, args: &Value) -> Result<Value, String>
         .unwrap_or(50)
         .clamp(1, 200) as u32;
 
-    // Bounded like `GET /logs`, which defaults to the last day. Reading from 0
-    // makes a selective level walk the whole retained window — thirty days of
-    // it — to fill one page.
+    // Bounded like `GET /logs`, and widenable: an unbounded read walks every
+    // row in the retained window to fill one page, but past incidents are a
+    // real question, so the caller can ask for more.
+    let since_secs = args
+        .get("since_minutes")
+        .and_then(Value::as_u64)
+        .map(|m| (m as i64).saturating_mul(60))
+        .unwrap_or(LOG_LOOKBACK_SECS)
+        .clamp(60, LOG_RETENTION_SECS);
+
     let now = chrono::Utc::now().timestamp();
     let rows = LogRepository::new(state.db.clone())
-        .list(max_level, now - LOG_LOOKBACK_SECS, now, limit)
+        .list(max_level, now - since_secs, now, limit)
         .await
         .map_err(|e| e.to_string())?;
 
