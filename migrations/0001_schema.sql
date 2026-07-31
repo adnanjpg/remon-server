@@ -134,7 +134,11 @@ INSERT INTO retention_policy (resource, resolution, keep_seconds) VALUES
     ('logs',            'raw', 2592000),
     ('probe_runs',      'raw', 2592000),
     ('heartbeat_pings', 'raw', 2592000),
-    ('incident_snapshots', 'raw', 2592000),
+    -- Matches the two event stores below, not the 30 days the other bulky
+    -- tables get: `GET /events` unions all three into one timeline, so a
+    -- shorter window here makes captures disappear out of a feed that still
+    -- shows the alerts which produced them, and says nothing about the gap.
+    ('incident_snapshots', 'raw', 7776000),
     -- raw only: probe metrics have no rollup, because nothing can read one.
     -- See ROLLUP_RESOURCES in services/rollup.rs.
     ('probe',        'raw', 86400),
