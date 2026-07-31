@@ -646,10 +646,10 @@ async fn dbbench_resolver_cardinality() {
             for (label, parsed) in [("populated", &populated), ("all_null", &all_null)] {
                 // One untimed pass so first-touch page faults land outside the
                 // measurement, matching `dbbench_resolver`.
-                let _ = resolver::resolve(&app.state.db, &parsed.metric).await;
+                let _ = resolver::resolve(&app.state.db, &parsed.metric, i64::MIN).await;
 
                 let t = Instant::now();
-                let out = resolver::resolve(&app.state.db, &parsed.metric).await;
+                let out = resolver::resolve(&app.state.db, &parsed.metric, i64::MIN).await;
                 let took = micros(t.elapsed());
                 let samples = out.map(|v| v.len()).unwrap_or(0);
                 report(
@@ -717,20 +717,41 @@ async fn dbbench_resolver() {
         ("resolve.cpu.steal(unkeyed,null)", "cpu.steal_percent > 1"),
     ];
 
-    for (name, expr) in cases {
-        let parsed = expression::parse(expr).expect("parse");
-        // One untimed pass so the measurement isn't dominated by first-touch
-        // page faults on a freshly written file.
-        let _ = resolver::resolve(&app.state.db, &parsed.metric).await;
+    // Both arms in one run, because only a within-run A/B travels: across runs
+    // this box has moved an unchanged seed by well over the difference being
+    // measured.
+    //
+    // `bounded` goes through the entry the evaluator uses, so each namespace
+    // gets the window its own producer's cadence earns it — one fixed window
+    // would report the process series as stale, since it is written once a
+    // minute against the two-second stats tick. No collector runs here, so the
+    // in-memory snapshot is empty and it falls through to the DB, which is the
+    // path being measured. `unbounded` is the same search allowed to walk a day
+    // of history for a value no rule should act on.
+    for arm in ["bounded", "unbounded"] {
+        for (name, expr) in cases {
+            let parsed = expression::parse(expr).expect("parse");
+            let run = || async {
+                if arm == "bounded" {
+                    resolver::resolve_with_state(&app.state, &parsed.metric).await
+                } else {
+                    resolver::resolve(&app.state.db, &parsed.metric, i64::MIN).await
+                }
+            };
+            // One untimed pass so the measurement isn't dominated by first-touch
+            // page faults on a freshly written file.
+            let _ = run().await;
 
-        let t = Instant::now();
-        let out = resolver::resolve(&app.state.db, &parsed.metric).await;
-        let took = micros(t.elapsed());
-        // A resolve that errors returns instantly; reported as a sample count
-        // it would read as a fast query rather than one that never ran.
-        match out {
-            Ok(v) => report(name, took, &format!("us  ({} samples)", v.len())),
-            Err(e) => report(name, took, &format!("us  ERROR: {e}")),
+            let t = Instant::now();
+            let out = run().await;
+            let took = micros(t.elapsed());
+            // A resolve that errors returns instantly; reported as a sample count
+            // it would read as a fast query rather than one that never ran.
+            let label = format!("{name}.{arm}");
+            match out {
+                Ok(v) => report(&label, took, &format!("us  ({} samples)", v.len())),
+                Err(e) => report(&label, took, &format!("us  ERROR: {e}")),
+            }
         }
     }
 
