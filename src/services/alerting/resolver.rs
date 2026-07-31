@@ -221,14 +221,116 @@ const HEARTBEAT_FIELDS: &[&str] = &["up", "late"];
 
 // ===== Public entry =====
 
+/// How many write intervals a sample may be behind and still be "current", and
+/// the smallest window regardless.
+///
+/// A rule asks a question about *now*, and "the newest non-NULL sample, however
+/// old" answers a different one. Two things follow from the difference. An
+/// optional field a host never populates — `disk.inode_used_percent` without the
+/// stat behind it, `cpu.steal_percent` off a VM — has no current value at all,
+/// yet the search for one walks that key's whole retained history on every
+/// evaluation and finds nothing; and a reading from the far side of the window
+/// would fire a rule on history while the notification claims the condition
+/// holds now.
+///
+/// The window is derived from how often the namespace's producer writes, never
+/// fixed: SMART is polled every half hour, and a window sized for the two-second
+/// stats tick would report every device as stale.
+const FRESHNESS_INTERVALS: i64 = 5;
+const FRESHNESS_FLOOR_SECS: i64 = 60;
+
+/// Oldest timestamp that still counts as current, for a producer writing every
+/// `write_interval_secs`. `i64::MIN` means unbounded — the query keeps its
+/// placeholder either way, so the bind arity and the plan do not change with it.
+fn freshness_since(now: i64, write_interval_secs: i64) -> i64 {
+    now - (write_interval_secs * FRESHNESS_INTERVALS).max(FRESHNESS_FLOOR_SECS)
+}
+
+/// The write cadence of whatever fills a namespace's table, in seconds.
+/// `None` for namespaces this does not apply to: `probe` derives its own from
+/// the cadence its runs were actually observed at, and `heartbeat`/`service`
+/// are not time series.
+fn write_interval_secs(namespace: &str, state: &crate::state::AppState) -> Option<i64> {
+    use std::sync::atomic::Ordering;
+    let ms = match namespace {
+        "cpu" | "memory" | "disk" | "network" | "pressure" | "components" => {
+            state.collector_stats_interval_ms.load(Ordering::Relaxed)
+        }
+        "docker" => state.collector_docker_interval_ms.load(Ordering::Relaxed),
+        "smart" => state.collector_smart_interval_ms.load(Ordering::Relaxed),
+        // Written once a minute whatever the tick rate is.
+        "process" => {
+            return Some(crate::collectors::processes::SERIES_WRITE_INTERVAL_SECS);
+        }
+        _ => return None,
+    };
+    Some((ms / 1000).max(1) as i64)
+}
+
+/// `(table, key column)` for the namespaces backed by a metrics series. The key
+/// column is `None` where the series has one implicit key: the host itself.
+fn series_of(namespace: &str) -> Option<(&'static str, Option<&'static str>)> {
+    Some(match namespace {
+        "cpu" => ("metrics_cpu", None),
+        "memory" => ("metrics_memory", None),
+        "disk" => ("metrics_disk", Some("mount_point")),
+        "network" => ("metrics_network", Some("interface_name")),
+        "pressure" => ("metrics_pressure", Some("resource")),
+        "components" => ("metrics_components", Some("label")),
+        "smart" => ("metrics_smart", Some("device")),
+        "docker" => ("metrics_docker", Some("container_id")),
+        "process" => ("metrics_process", Some("name")),
+        _ => return None,
+    })
+}
+
+/// Whether a key the resolver stopped returning still exists in its series at
+/// all, ignoring how old its newest sample is.
+///
+/// A key leaves the resolver's output for two opposite reasons once a freshness
+/// window applies, and they need opposite answers. A container that was removed
+/// has no condition left to meet, so resolving its rule states a fact. A
+/// container that is still there and simply stopped being sampled is a gap in
+/// what we know, and calling that a recovery converts a monitoring failure into
+/// an all-clear — the one direction a monitoring tool must never round toward.
+///
+/// Anything unparseable answers "gone", which is the behaviour that existed
+/// before the window and cannot be made worse by a bad label set.
+pub(crate) async fn key_still_present(pool: &SqlitePool, namespace: &str, label_set: &str) -> bool {
+    let Some((table, key_column)) = series_of(namespace) else {
+        return false;
+    };
+
+    let sql = match key_column {
+        Some(col) => {
+            format!("SELECT 1 FROM {table} WHERE resolution = 'raw' AND {col} = ? LIMIT 1")
+        }
+        None => format!("SELECT 1 FROM {table} WHERE resolution = 'raw' LIMIT 1"),
+    };
+    let mut q = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql.as_str()));
+
+    if let Some(col) = key_column {
+        let Ok(serde_json::Value::Object(labels)) = serde_json::from_str(label_set) else {
+            return false;
+        };
+        let Some(value) = labels.get(col).and_then(|v| v.as_str()).map(str::to_owned) else {
+            return false;
+        };
+        q = q.bind(value);
+    }
+
+    q.fetch_optional(pool).await.ok().flatten().is_some()
+}
+
 /// DB-only entry. Service-namespace rules error out here; use
 /// [`resolve_with_state`] for those.
 #[cfg(test)]
 pub async fn resolve(
     pool: &SqlitePool,
     metric: &MetricRef,
+    since: i64,
 ) -> Result<Vec<ResolvedSample>, ResolveError> {
-    resolve_inner(pool, None, metric).await
+    resolve_inner(pool, None, metric, since).await
 }
 
 pub async fn resolve_with_state(
@@ -248,18 +350,31 @@ pub async fn resolve_with_state(
     {
         return result;
     }
-    resolve_inner(&state.db, Some(&state.service_manager), metric).await
+    let since = match write_interval_secs(&metric.namespace, state) {
+        Some(secs) => freshness_since(chrono::Utc::now().timestamp(), secs),
+        None => i64::MIN,
+    };
+    resolve_inner(&state.db, Some(&state.service_manager), metric, since).await
 }
 
 async fn resolve_inner(
     pool: &SqlitePool,
     services: Option<&Arc<dyn ServiceManager>>,
     metric: &MetricRef,
+    since: i64,
 ) -> Result<Vec<ResolvedSample>, ResolveError> {
     match metric.namespace.as_str() {
-        "cpu" => resolve_unkeyed(pool, metric, "metrics_cpu", CPU_FIELDS, CPU_I64).await,
+        "cpu" => resolve_unkeyed(pool, metric, "metrics_cpu", CPU_FIELDS, CPU_I64, since).await,
         "memory" => {
-            resolve_unkeyed(pool, metric, "metrics_memory", MEMORY_FIELDS, MEMORY_I64).await
+            resolve_unkeyed(
+                pool,
+                metric,
+                "metrics_memory",
+                MEMORY_FIELDS,
+                MEMORY_I64,
+                since,
+            )
+            .await
         }
         "disk" => {
             resolve_keyed(
@@ -270,6 +385,7 @@ async fn resolve_inner(
                 DISK_I64,
                 "mount_point",
                 DISK_COMPUTED,
+                since,
             )
             .await
         }
@@ -282,6 +398,7 @@ async fn resolve_inner(
                 NETWORK_I64,
                 "interface_name",
                 NO_COMPUTED,
+                since,
             )
             .await
         }
@@ -294,6 +411,7 @@ async fn resolve_inner(
                 PRESSURE_I64,
                 "resource",
                 NO_COMPUTED,
+                since,
             )
             .await
         }
@@ -306,6 +424,7 @@ async fn resolve_inner(
                 COMPONENTS_I64,
                 "label",
                 NO_COMPUTED,
+                since,
             )
             .await
         }
@@ -318,6 +437,7 @@ async fn resolve_inner(
                 SMART_I64,
                 "device",
                 NO_COMPUTED,
+                since,
             )
             .await
         }
@@ -330,6 +450,7 @@ async fn resolve_inner(
                 DOCKER_I64,
                 "container_id",
                 DOCKER_COMPUTED,
+                since,
             )
             .await
         }
@@ -342,6 +463,7 @@ async fn resolve_inner(
                 PROCESS_I64,
                 "name",
                 NO_COMPUTED,
+                since,
             )
             .await
         }
@@ -365,7 +487,7 @@ async fn resolve_inner(
 pub(crate) fn unkeyed_latest_sql(table: &str, column: &str) -> String {
     format!(
         "SELECT {col} FROM {table}
-          WHERE resolution = 'raw' AND {col} IS NOT NULL
+          WHERE resolution = 'raw' AND {col} IS NOT NULL AND timestamp >= ?
           ORDER BY timestamp DESC LIMIT 1",
         col = column,
         table = table
@@ -378,6 +500,7 @@ async fn resolve_unkeyed(
     table: &str,
     valid_fields: &[&str],
     i64_fields: &[&str],
+    since: i64,
 ) -> Result<Vec<ResolvedSample>, ResolveError> {
     let column = check_field(metric, valid_fields)?;
     if !metric.labels.is_empty() {
@@ -390,12 +513,14 @@ async fn resolve_unkeyed(
 
     let value_opt: Option<f64> = if i64_fields.contains(&column) {
         sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql.as_str()))
+            .bind(since)
             .fetch_optional(pool)
             .await
             .map_err(|e| ResolveError::msg(e.to_string()))?
             .map(|v| v as f64)
     } else {
         sqlx::query_scalar::<_, f64>(sqlx::AssertSqlSafe(sql.as_str()))
+            .bind(since)
             .fetch_optional(pool)
             .await
             .map_err(|e| ResolveError::msg(e.to_string()))?
@@ -440,6 +565,7 @@ pub(crate) fn keyed_latest_sql(
                     WHERE t.resolution = 'raw'
                       AND t.{label} = k.{label}
                       AND ({col}) IS NOT NULL
+                      AND t.timestamp >= ?
                     ORDER BY t.timestamp DESC
                     LIMIT 1) AS val
              FROM (SELECT DISTINCT {label}
@@ -453,6 +579,10 @@ pub(crate) fn keyed_latest_sql(
     )
 }
 
+// Five of these describe one namespace's table and never vary at a call site;
+// they belong in a descriptor the dispatch passes by reference, which is the
+// shape to move to when another parameter is needed.
+#[allow(clippy::too_many_arguments)]
 async fn resolve_keyed(
     pool: &SqlitePool,
     metric: &MetricRef,
@@ -461,6 +591,7 @@ async fn resolve_keyed(
     i64_fields: &[&str],
     label_column: &str,
     computed: &[(&str, &str)],
+    since: i64,
 ) -> Result<Vec<ResolvedSample>, ResolveError> {
     let column = check_field(metric, valid_fields)?;
 
@@ -491,8 +622,11 @@ async fn resolve_keyed(
 
     let sql = keyed_latest_sql(table, select_expr, label_column, &where_label);
 
+    // `since` first: the correlated subquery it belongs to appears before the
+    // key subquery the label filter lands in.
     let rows: Vec<(String, f64)> = if i64_fields.contains(&column) {
-        let mut q2 = sqlx::query_as::<_, (String, i64)>(sqlx::AssertSqlSafe(sql.as_str()));
+        let mut q2 =
+            sqlx::query_as::<_, (String, i64)>(sqlx::AssertSqlSafe(sql.as_str())).bind(since);
         if let Some(v) = filter_value {
             q2 = q2.bind(v);
         }
@@ -503,7 +637,8 @@ async fn resolve_keyed(
             .map(|(k, v)| (k, v as f64))
             .collect()
     } else {
-        let mut q2 = sqlx::query_as::<_, (String, f64)>(sqlx::AssertSqlSafe(sql.as_str()));
+        let mut q2 =
+            sqlx::query_as::<_, (String, f64)>(sqlx::AssertSqlSafe(sql.as_str())).bind(since);
         if let Some(v) = filter_value {
             q2 = q2.bind(v);
         }
@@ -1270,6 +1405,38 @@ mod tests {
         pool
     }
 
+    /// The discriminator the prune path leans on. A key whose samples are old
+    /// still answers "present" — that is the whole point, since the alternative
+    /// is telling an operator a rule recovered when the collector stopped.
+    #[tokio::test]
+    async fn a_stale_key_is_present_and_a_removed_one_is_not() {
+        let pool = fixture().await;
+        sqlx::query(
+            "INSERT INTO metrics_disk
+               (resolution, timestamp, mount_point, total_bytes, used_bytes, available_bytes)
+             VALUES ('raw', 100, '/', 1, 1, 1)",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed");
+
+        assert!(
+            key_still_present(&pool, "disk", r#"{"mount_point":"/"}"#).await,
+            "a mount with only old samples is still a mount"
+        );
+        assert!(
+            !key_still_present(&pool, "disk", r#"{"mount_point":"/gone"}"#).await,
+            "a mount with no samples at all has been removed"
+        );
+        // The unkeyed series answers for the host as a whole; this fixture
+        // never wrote a memory sample, so there is nothing to hold state for.
+        assert!(!key_still_present(&pool, "memory", "{}").await);
+        assert!(
+            !key_still_present(&pool, "service", "{}").await,
+            "namespaces with no metrics series cannot answer this"
+        );
+    }
+
     fn metric(ns: &str, field: &str, labels: &[(&str, &str)]) -> MetricRef {
         let mut m = BTreeMap::new();
         for (k, v) in labels {
@@ -1292,7 +1459,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let out = resolve(&pool, &metric("cpu", "usage_percent", &[]))
+        let out = resolve(&pool, &metric("cpu", "usage_percent", &[]), i64::MIN)
             .await
             .unwrap();
         assert_eq!(out.len(), 1);
@@ -1303,7 +1470,7 @@ mod tests {
     #[tokio::test]
     async fn cpu_unknown_field_rejected() {
         let pool = fixture().await;
-        let err = resolve(&pool, &metric("cpu", "no_such_field", &[]))
+        let err = resolve(&pool, &metric("cpu", "no_such_field", &[]), i64::MIN)
             .await
             .unwrap_err();
         assert!(err.message.contains("not valid"));
@@ -1312,16 +1479,20 @@ mod tests {
     #[tokio::test]
     async fn cpu_with_labels_rejected() {
         let pool = fixture().await;
-        let err = resolve(&pool, &metric("cpu", "usage_percent", &[("x", "y")]))
-            .await
-            .unwrap_err();
+        let err = resolve(
+            &pool,
+            &metric("cpu", "usage_percent", &[("x", "y")]),
+            i64::MIN,
+        )
+        .await
+        .unwrap_err();
         assert!(err.message.contains("no label dimensions"));
     }
 
     #[tokio::test]
     async fn cpu_no_data_returns_empty() {
         let pool = fixture().await;
-        let out = resolve(&pool, &metric("cpu", "usage_percent", &[]))
+        let out = resolve(&pool, &metric("cpu", "usage_percent", &[]), i64::MIN)
             .await
             .unwrap();
         assert!(out.is_empty());
@@ -1337,9 +1508,13 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let out = resolve(&pool, &metric("cpu", "context_switches_per_sec", &[]))
-            .await
-            .unwrap();
+        let out = resolve(
+            &pool,
+            &metric("cpu", "context_switches_per_sec", &[]),
+            i64::MIN,
+        )
+        .await
+        .unwrap();
         assert_eq!(out[0].value, 35469.0);
     }
 
@@ -1353,7 +1528,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let out = resolve(&pool, &metric("memory", "used_bytes", &[]))
+        let out = resolve(&pool, &metric("memory", "used_bytes", &[]), i64::MIN)
             .await
             .unwrap();
         assert_eq!(out[0].value, 6_291_456_000.0);
@@ -1373,7 +1548,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let mut out = resolve(&pool, &metric("disk", "used_bytes", &[]))
+        let mut out = resolve(&pool, &metric("disk", "used_bytes", &[]), i64::MIN)
             .await
             .unwrap();
         out.sort_by(|a, b| a.label_set.cmp(&b.label_set));
@@ -1397,6 +1572,7 @@ mod tests {
         let out = resolve(
             &pool,
             &metric("disk", "used_bytes", &[("mount_point", "/")]),
+            i64::MIN,
         )
         .await
         .unwrap();
@@ -1410,6 +1586,7 @@ mod tests {
         let err = resolve(
             &pool,
             &metric("disk", "used_bytes", &[("interface_name", "eth0")]),
+            i64::MIN,
         )
         .await
         .unwrap_err();
@@ -1429,6 +1606,7 @@ mod tests {
         let out = resolve(
             &pool,
             &metric("disk", "total_bytes", &[("mount_point", "/")]),
+            i64::MIN,
         )
         .await
         .unwrap();
@@ -1449,6 +1627,7 @@ mod tests {
         let out = resolve(
             &pool,
             &metric("disk", "used_percent", &[("mount_point", "/data")]),
+            i64::MIN,
         )
         .await
         .unwrap();
@@ -1475,7 +1654,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let out = resolve(&pool, &metric("disk", "used_percent", &[]))
+        let out = resolve(&pool, &metric("disk", "used_percent", &[]), i64::MIN)
             .await
             .unwrap();
         assert_eq!(
@@ -1503,7 +1682,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let out = resolve(&pool, &metric("disk", "inode_used_percent", &[]))
+        let out = resolve(&pool, &metric("disk", "inode_used_percent", &[]), i64::MIN)
             .await
             .unwrap();
         assert_eq!(
@@ -1533,6 +1712,7 @@ mod tests {
         let out = resolve(
             &pool,
             &metric("pressure", "some_avg10", &[("resource", "cpu")]),
+            i64::MIN,
         )
         .await
         .unwrap();
@@ -1562,6 +1742,7 @@ mod tests {
                 "banned",
                 &[("probe_name", "fail2ban"), ("jail", "sshd")],
             ),
+            i64::MIN,
         )
         .await
         .unwrap();
@@ -1586,7 +1767,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let mut out = resolve(&pool, &metric("probe", "banned", &[]))
+        let mut out = resolve(&pool, &metric("probe", "banned", &[]), i64::MIN)
             .await
             .unwrap();
         out.sort_by(|a, b| a.label_set.cmp(&b.label_set));
@@ -1609,7 +1790,7 @@ mod tests {
         .unwrap();
 
         // health_passed is INTEGER → coerced to f64; latest row per device wins.
-        let mut out = resolve(&pool, &metric("smart", "health_passed", &[]))
+        let mut out = resolve(&pool, &metric("smart", "health_passed", &[]), i64::MIN)
             .await
             .unwrap();
         out.sort_by(|a, b| a.label_set.cmp(&b.label_set));
@@ -1623,6 +1804,7 @@ mod tests {
         let out = resolve(
             &pool,
             &metric("smart", "reallocated_sectors", &[("device", "/dev/sda")]),
+            i64::MIN,
         )
         .await
         .unwrap();
@@ -1666,7 +1848,7 @@ mod tests {
         seed_heartbeat(&pool, "silent", 60, 30, true, Some(now - 86_400)).await;
         seed_heartbeat(&pool, "off", 60, 30, false, Some(now - 86_400)).await;
 
-        let mut out = resolve(&pool, &metric("heartbeat", "up", &[]))
+        let mut out = resolve(&pool, &metric("heartbeat", "up", &[]), i64::MIN)
             .await
             .unwrap();
         out.sort_by(|a, b| a.label_set.cmp(&b.label_set));
@@ -1690,7 +1872,7 @@ mod tests {
         seed_heartbeat(&pool, "graceful", 60, 3600, true, Some(now - 120)).await;
         seed_heartbeat(&pool, "gone", 60, 30, true, Some(now - 86_400)).await;
 
-        let mut out = resolve(&pool, &metric("heartbeat", "late", &[]))
+        let mut out = resolve(&pool, &metric("heartbeat", "late", &[]), i64::MIN)
             .await
             .unwrap();
         out.sort_by(|a, b| a.label_set.cmp(&b.label_set));
@@ -1700,9 +1882,13 @@ mod tests {
         assert_eq!(out[1].value, 1.0);
 
         // The graceful one is still up=1 while late.
-        let out = resolve(&pool, &metric("heartbeat", "up", &[("check", "graceful")]))
-            .await
-            .unwrap();
+        let out = resolve(
+            &pool,
+            &metric("heartbeat", "up", &[("check", "graceful")]),
+            i64::MIN,
+        )
+        .await
+        .unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].value, 1.0);
     }
@@ -1713,6 +1899,7 @@ mod tests {
         let out = resolve(
             &pool,
             &metric("heartbeat", "up", &[("check", "no-such-check")]),
+            i64::MIN,
         )
         .await
         .unwrap();
@@ -1722,20 +1909,24 @@ mod tests {
     #[tokio::test]
     async fn heartbeat_unknown_field_and_label_rejected() {
         let pool = fixture().await;
-        let err = resolve(&pool, &metric("heartbeat", "age_secs", &[]))
+        let err = resolve(&pool, &metric("heartbeat", "age_secs", &[]), i64::MIN)
             .await
             .unwrap_err();
         assert!(err.message.contains("not valid"));
-        let err = resolve(&pool, &metric("heartbeat", "up", &[("unit", "x")]))
-            .await
-            .unwrap_err();
+        let err = resolve(
+            &pool,
+            &metric("heartbeat", "up", &[("unit", "x")]),
+            i64::MIN,
+        )
+        .await
+        .unwrap_err();
         assert!(err.message.contains("'check'"));
     }
 
     #[tokio::test]
     async fn unknown_namespace_rejected() {
         let pool = fixture().await;
-        let err = resolve(&pool, &metric("nonsense", "x", &[]))
+        let err = resolve(&pool, &metric("nonsense", "x", &[]), i64::MIN)
             .await
             .unwrap_err();
         assert!(err.message.contains("unknown namespace"));

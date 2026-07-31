@@ -24,7 +24,7 @@ const HISTORY_WINDOW_SECS: i64 = 900;
 /// Cadence of the persistent name-grouped series (`metrics_process`). One
 /// write a minute keeps the row volume near the other metrics tables no
 /// matter how fast the sampling tick runs.
-const SERIES_WRITE_INTERVAL_SECS: i64 = 60;
+pub(crate) const SERIES_WRITE_INTERVAL_SECS: i64 = 60;
 
 /// Pick the groups worth persisting: top-K by cpu plus top-K by memory,
 /// deduplicated. Two rankings because the interesting culprits differ — a

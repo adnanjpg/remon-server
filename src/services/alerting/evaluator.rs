@@ -600,6 +600,17 @@ async fn evaluate_rule(
         let Some(prior) = live.get(&label_set).cloned() else {
             continue;
         };
+
+        // "Not in the output" and "not there any more" stopped being the same
+        // thing once the resolver applied a freshness window: a key whose
+        // samples merely went stale drops out too. Its target is still in the
+        // series, so hold the state instead of announcing a recovery nobody
+        // observed — the row stays, and the next tick with fresh samples picks
+        // it up where it left off.
+        if resolver::key_still_present(&state.db, &expr.metric.namespace, &label_set).await {
+            continue;
+        }
+
         match repo.delete_state_if(rule.id, &label_set, prior.state).await {
             Ok(true) if prior.state == AlertLifecycle::Firing => {
                 let value = prior.last_value.unwrap_or(0.0);

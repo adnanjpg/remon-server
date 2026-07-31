@@ -1,6 +1,6 @@
 #[cfg(feature = "docker")]
 mod docker;
-mod processes;
+pub(crate) mod processes;
 pub mod smart;
 mod stats;
 
