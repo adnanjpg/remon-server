@@ -19,6 +19,9 @@ pub struct ListEventsQuery {
     pub sources: Option<String>,
     /// Hard cap on events returned. Defaults to 500, max 1000.
     pub limit: Option<u32>,
+    /// `next_cursor` from the previous page. Opaque: its contents encode this
+    /// endpoint's internal sort key and are not part of the contract.
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -61,4 +64,9 @@ pub struct ListEventsResponse {
     pub end: i64,
     pub count: usize,
     pub events: Vec<EventDto>,
+    /// Pass as `?cursor=` for the next page. Present whenever a full page came
+    /// back, so the last page of a range is followed by one empty response
+    /// rather than being detectable in advance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
 }

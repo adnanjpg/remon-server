@@ -156,7 +156,12 @@ impl IncidentRepository {
         end: i64,
         alert_triggered: Option<bool>,
         limit: u32,
+        cursor: Option<(i64, i64)>,
     ) -> AppResult<Vec<IncidentSummaryRow>> {
+        let (cur_ts, cur_id) = match cursor {
+            Some((ts, id)) => (Some(ts), Some(id)),
+            None => (None, None),
+        };
         let rows = sqlx::query!(
             r#"SELECT id as "id!", created_at as "created_at!",
                       trigger_kind as "trigger_kind!", category as "category!",
@@ -167,12 +172,17 @@ impl IncidentRepository {
                 AND (?3 IS NULL
                      OR (?3 = 1 AND trigger_kind =  'alert')
                      OR (?3 = 0 AND trigger_kind <> 'alert'))
+                AND (?5 IS NULL
+                     OR created_at < ?5
+                     OR (created_at = ?5 AND id < ?6))
               ORDER BY created_at DESC, id DESC
               LIMIT ?4"#,
             start,
             end,
             alert_triggered,
             limit,
+            cur_ts,
+            cur_id,
         )
         .fetch_all(&self.pool)
         .await?;

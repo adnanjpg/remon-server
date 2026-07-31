@@ -30,6 +30,10 @@ pub struct NewHostEvent {
 
 #[derive(Debug, Clone)]
 pub struct HostEventRow {
+    /// Tiebreak for the timeline's sort key. Timestamps are not unique — an
+    /// alert firing and the capture it triggers share a second — so paging by
+    /// timestamp alone would skip or repeat whatever shares the boundary.
+    pub id: i64,
     pub created_at: i64,
     pub source: String,
     pub kind: String,
@@ -87,11 +91,16 @@ impl HostEventRepository {
         kinds: Option<&[String]>,
         sources: Option<&[String]>,
         limit: u32,
+        cursor: Option<(i64, i64)>,
     ) -> AppResult<Vec<HostEventRow>> {
         let kinds_csv = kinds.map(wrap_csv);
         let sources_csv = sources.map(wrap_csv);
+        let (cur_ts, cur_id) = match cursor {
+            Some((ts, id)) => (Some(ts), Some(id)),
+            None => (None, None),
+        };
         let rows = sqlx::query!(
-            r#"SELECT created_at as "created_at!",
+            r#"SELECT id as "id!", created_at as "created_at!",
                       source as "source!", kind as "kind!",
                       severity as "severity!", message as "message!",
                       actor_device_id, actor_name, ref_type, ref_id, details
@@ -99,6 +108,9 @@ impl HostEventRepository {
               WHERE created_at >= ?1 AND created_at <= ?2
                 AND (?3 IS NULL OR instr(?3, ',' || kind || ',') > 0)
                 AND (?4 IS NULL OR instr(?4, ',' || source || ',') > 0)
+                AND (?6 IS NULL
+                     OR created_at < ?6
+                     OR (created_at = ?6 AND id < ?7))
               ORDER BY created_at DESC, id DESC
               LIMIT ?5"#,
             start,
@@ -106,12 +118,15 @@ impl HostEventRepository {
             kinds_csv,
             sources_csv,
             limit,
+            cur_ts,
+            cur_id,
         )
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
             .into_iter()
             .map(|r| HostEventRow {
+                id: r.id,
                 created_at: r.created_at,
                 source: r.source,
                 kind: r.kind,

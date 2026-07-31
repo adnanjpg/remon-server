@@ -385,10 +385,16 @@ impl AlertRepository {
         end: i64,
         event_types: Option<&[String]>,
         limit: u32,
+        cursor: Option<(i64, i64)>,
     ) -> AppResult<Vec<AlertEventWithRule>> {
         let types_csv = event_types.map(wrap_csv);
+        let (cur_ts, cur_id) = match cursor {
+            Some((ts, id)) => (Some(ts), Some(id)),
+            None => (None, None),
+        };
         let rows = sqlx::query!(
-            r#"SELECT e.occurred_at as "occurred_at!", e.event_type as "event_type!",
+            r#"SELECT e.id as "id!", e.occurred_at as "occurred_at!",
+                      e.event_type as "event_type!",
                       e.severity as "severity!", e.rule_id as "rule_id!",
                       r.name as "rule_name!", e.label_set as "label_set!",
                       e.metric_value
@@ -396,18 +402,24 @@ impl AlertRepository {
                JOIN alert_rules r ON r.id = e.rule_id
               WHERE e.occurred_at >= ?1 AND e.occurred_at <= ?2
                 AND (?3 IS NULL OR instr(?3, ',' || e.event_type || ',') > 0)
+                AND (?5 IS NULL
+                     OR e.occurred_at < ?5
+                     OR (e.occurred_at = ?5 AND e.id < ?6))
               ORDER BY e.occurred_at DESC, e.id DESC
               LIMIT ?4"#,
             start,
             end,
             types_csv,
             limit,
+            cur_ts,
+            cur_id,
         )
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
             .into_iter()
             .map(|r| AlertEventWithRule {
+                id: r.id,
                 occurred_at: r.occurred_at,
                 event_type: r.event_type,
                 severity: r.severity,
@@ -445,6 +457,8 @@ impl AlertRepository {
 /// the union endpoint passes them through.
 #[derive(Debug, Clone)]
 pub struct AlertEventWithRule {
+    /// Tiebreak for the timeline's sort key; see `HostEventRow::id`.
+    pub id: i64,
     pub occurred_at: i64,
     pub event_type: String,
     pub severity: String,

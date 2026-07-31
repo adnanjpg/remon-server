@@ -373,3 +373,116 @@ async fn alert_silence_writes_audit_event() {
         "got: {ev}"
     );
 }
+
+/// Paging a merged timeline cannot cut on a timestamp alone. The three stores
+/// have independent id spaces and routinely write the same second — an alert
+/// firing and the capture it triggers are the standard case — so a `ts`-only
+/// cursor either drops whatever shares the boundary or serves it twice.
+///
+/// `limit=1` puts the cursor *inside* the shared second twice over, which is
+/// the shape that breaks. The loop is bounded because a cursor that fails to
+/// advance does not return a wrong answer, it hangs.
+#[tokio::test]
+async fn paging_does_not_drop_or_repeat_events_sharing_a_second() {
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let now = chrono::Utc::now().timestamp();
+    let shared = now - 100;
+
+    // Three stores, one second.
+    HostEventRepository::new(app.state.db.clone())
+        .insert(&NewHostEvent {
+            created_at: Some(shared),
+            source: "system",
+            kind: "boot",
+            severity: "warn",
+            message: "boot at the shared second".to_string(),
+            ..Default::default()
+        })
+        .await
+        .expect("insert ledger row");
+
+    let rule_id = seed_rule(&app, "shared-second rule").await;
+    sqlx::query(
+        "INSERT INTO alert_events
+           (rule_id, label_set, event_type, severity, occurred_at, metric_value, notified)
+         VALUES (?, '{}', 'fired', 'crit', ?, 99.0, 1)",
+    )
+    .bind(rule_id)
+    .bind(shared)
+    .execute(&app.state.db)
+    .await
+    .expect("insert alert event");
+
+    sqlx::query(
+        "INSERT INTO incident_snapshots (created_at, trigger_kind, category, bundle)
+         VALUES (?, 'manual', 'resource', '{}')",
+    )
+    .bind(shared)
+    .execute(&app.state.db)
+    .await
+    .expect("insert incident");
+
+    // Two more seconds either side, so the cursor also has to cross a boundary
+    // where only one store has anything.
+    for (offset, msg) in [(1i64, "older ledger row"), (-1, "newer ledger row")] {
+        HostEventRepository::new(app.state.db.clone())
+            .insert(&NewHostEvent {
+                created_at: Some(shared - offset),
+                source: "system",
+                kind: "boot",
+                severity: "warn",
+                message: msg.to_string(),
+                ..Default::default()
+            })
+            .await
+            .expect("insert ledger row");
+    }
+
+    let path = "/events?kinds=boot,alert_fired,incident_captured&limit=1";
+    let mut seen: Vec<(i64, String, String)> = Vec::new();
+    let mut cursor: Option<String> = None;
+
+    for _ in 0..20 {
+        let url = match &cursor {
+            Some(c) => format!("{path}&cursor={c}"),
+            None => path.to_string(),
+        };
+        let (st, body) = app.request("GET", &url, Some(&token), None).await;
+        assert_eq!(st, StatusCode::OK, "got: {body}");
+
+        for e in body["events"].as_array().expect("events array") {
+            seen.push((
+                e["ts"].as_i64().expect("ts"),
+                e["kind"].as_str().expect("kind").to_string(),
+                e["message"].as_str().unwrap_or_default().to_string(),
+            ));
+        }
+        match body["next_cursor"].as_str() {
+            Some(c) => cursor = Some(c.to_string()),
+            None => break,
+        }
+    }
+
+    assert_eq!(
+        seen.len(),
+        5,
+        "expected every seeded event exactly once, got {seen:?}"
+    );
+    let mut unique = seen.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        seen.len(),
+        "an event was served twice: {seen:?}"
+    );
+
+    // Newest first, and the shared second is contiguous rather than split.
+    let ts: Vec<i64> = seen.iter().map(|(t, _, _)| *t).collect();
+    assert_eq!(
+        ts,
+        vec![shared + 1, shared, shared, shared, shared - 1],
+        "page boundaries reordered the timeline"
+    );
+}

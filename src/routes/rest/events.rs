@@ -30,6 +30,61 @@ const MAX_LIMIT: u32 = 1000;
 const ALERT_KINDS: [&str; 2] = ["alert_fired", "alert_resolved"];
 const INCIDENT_KIND: &str = "incident_captured";
 
+/// Where each store sits in the timeline's sort key. Fixed and internal, not
+/// the projected `source`: an incident's source follows its trigger, so it is
+/// not stable enough to order by.
+const RANK_LEDGER: u8 = 0;
+const RANK_ALERT: u8 = 1;
+const RANK_INCIDENT: u8 = 2;
+
+/// The point the previous page stopped at, in the order `(ts DESC, rank ASC,
+/// id DESC)`.
+///
+/// A timestamp alone cannot be the cursor. Timestamps are not unique and the
+/// collision is routine rather than theoretical: an alert firing and the
+/// incident capture it triggers land in the same second, in two different
+/// stores. Cutting on `ts` alone then either drops whatever shares the boundary
+/// or returns it twice.
+#[derive(Clone, Copy)]
+struct Cursor {
+    ts: i64,
+    rank: u8,
+    id: i64,
+}
+
+impl Cursor {
+    fn encode(&self) -> String {
+        format!("{}.{}.{}", self.ts, self.rank, self.id)
+    }
+
+    fn parse(raw: &str) -> Option<Self> {
+        let mut parts = raw.split('.');
+        let ts = parts.next()?.parse().ok()?;
+        let rank = parts.next()?.parse().ok()?;
+        let id = parts.next()?.parse().ok()?;
+        if parts.next().is_some() || rank > RANK_INCIDENT {
+            return None;
+        }
+        Some(Self { ts, rank, id })
+    }
+
+    /// The id bound one store gets, so a single SQL predicate covers all three
+    /// positions relative to the cursor. `MIN` admits nothing at the boundary
+    /// second (the store already passed it), `MAX` admits all of it (the store
+    /// has yet to be read at that second).
+    fn id_bound_for(&self, rank: u8) -> i64 {
+        match rank.cmp(&self.rank) {
+            std::cmp::Ordering::Less => i64::MIN,
+            std::cmp::Ordering::Equal => self.id,
+            std::cmp::Ordering::Greater => i64::MAX,
+        }
+    }
+
+    fn bounds_for(this: Option<Self>, rank: u8) -> Option<(i64, i64)> {
+        this.map(|c| (c.ts, c.id_bound_for(rank)))
+    }
+}
+
 /// A row from one of the three stores, still in its own shape.
 ///
 /// The merge only needs a timestamp, so projection waits until the page is
@@ -47,6 +102,30 @@ impl TimelineRow {
             Self::Ledger(r) => r.created_at,
             Self::Alert(e) => e.occurred_at,
             Self::Incident(i) => i.created_at,
+        }
+    }
+
+    fn rank(&self) -> u8 {
+        match self {
+            Self::Ledger(_) => RANK_LEDGER,
+            Self::Alert(_) => RANK_ALERT,
+            Self::Incident(_) => RANK_INCIDENT,
+        }
+    }
+
+    fn id(&self) -> i64 {
+        match self {
+            Self::Ledger(r) => r.id,
+            Self::Alert(e) => e.id,
+            Self::Incident(i) => i.id,
+        }
+    }
+
+    fn cursor(&self) -> Cursor {
+        Cursor {
+            ts: self.ts(),
+            rank: self.rank(),
+            id: self.id(),
         }
     }
 
@@ -153,6 +232,15 @@ pub async fn list_events(
     }
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
 
+    // Rejected rather than ignored: a cursor that silently does nothing reads
+    // as "the range ended here" and quietly truncates a client's history.
+    let cursor = match q.cursor.as_deref() {
+        Some(raw) => Some(
+            Cursor::parse(raw).ok_or_else(|| AppError::BadRequest("invalid cursor".to_string()))?,
+        ),
+        None => None,
+    };
+
     // `kinds` is an open vocabulary (unknown kind = empty result, not an
     // error); `sources` is a closed enum, so a typo is caught here.
     let kinds: Option<Vec<String>> = q.kinds.as_deref().map(parse_csv);
@@ -185,7 +273,14 @@ pub async fn list_events(
 
     // ── host_events ledger ──
     let ledger = HostEventRepository::new(state.db.clone())
-        .list_range(start, end, kinds.as_deref(), sources.as_deref(), limit)
+        .list_range(
+            start,
+            end,
+            kinds.as_deref(),
+            sources.as_deref(),
+            limit,
+            Cursor::bounds_for(cursor, RANK_LEDGER),
+        )
         .await?;
     rows.extend(ledger.into_iter().map(TimelineRow::Ledger));
 
@@ -205,7 +300,13 @@ pub async fn list_events(
             wanted
         });
         let alert_rows = AlertRepository::new(state.db.clone())
-            .events_in_range(start, end, event_types.as_deref(), limit)
+            .events_in_range(
+                start,
+                end,
+                event_types.as_deref(),
+                limit,
+                Cursor::bounds_for(cursor, RANK_ALERT),
+            )
             .await?;
         rows.extend(alert_rows.into_iter().map(TimelineRow::Alert));
     }
@@ -221,15 +322,36 @@ pub async fn list_events(
             Some(source_wanted("system"))
         };
         let incident_rows = IncidentRepository::new(state.db.clone())
-            .list_range(start, end, alert_triggered, limit)
+            .list_range(
+                start,
+                end,
+                alert_triggered,
+                limit,
+                Cursor::bounds_for(cursor, RANK_INCIDENT),
+            )
             .await?;
         rows.extend(incident_rows.into_iter().map(TimelineRow::Incident));
     }
 
     // Each store returned ≤ limit rows already sorted; the merged stream
-    // re-sorts and re-caps so the newest `limit` across all stores win.
-    rows.sort_by_key(|r| std::cmp::Reverse(r.ts()));
+    // re-sorts and re-caps so the newest `limit` across all stores win. The
+    // sort must be total, not just by timestamp: the cursor is a position in
+    // this order, and two rows the sort considers equal cannot be resumed from.
+    rows.sort_by(|a, b| {
+        b.ts()
+            .cmp(&a.ts())
+            .then(a.rank().cmp(&b.rank()))
+            .then(b.id().cmp(&a.id()))
+    });
     rows.truncate(limit as usize);
+
+    // Offered whenever the page filled: each store was read up to `limit`, so a
+    // full page proves nothing about what is left, and the cheap honest answer
+    // is to let the next request come back empty.
+    let next_cursor = (rows.len() == limit as usize)
+        .then(|| rows.last().map(|r| r.cursor().encode()))
+        .flatten();
+
     let events: Vec<EventDto> = rows.into_iter().map(TimelineRow::into_dto).collect();
 
     Ok(Json(ListEventsResponse {
@@ -237,6 +359,7 @@ pub async fn list_events(
         end,
         count: events.len(),
         events,
+        next_cursor,
     }))
 }
 

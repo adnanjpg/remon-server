@@ -1,11 +1,22 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT e.occurred_at as \"occurred_at!\", e.event_type as \"event_type!\",\n                      e.severity as \"severity!\", e.rule_id as \"rule_id!\",\n                      r.name as \"rule_name!\", e.label_set as \"label_set!\",\n                      e.metric_value\n               FROM alert_events e\n               JOIN alert_rules r ON r.id = e.rule_id\n              WHERE e.occurred_at >= ?1 AND e.occurred_at <= ?2\n                AND (?3 IS NULL OR instr(?3, ',' || e.event_type || ',') > 0)\n              ORDER BY e.occurred_at DESC, e.id DESC\n              LIMIT ?4",
+  "query": "SELECT e.id as \"id!\", e.occurred_at as \"occurred_at!\",\n                      e.event_type as \"event_type!\",\n                      e.severity as \"severity!\", e.rule_id as \"rule_id!\",\n                      r.name as \"rule_name!\", e.label_set as \"label_set!\",\n                      e.metric_value\n               FROM alert_events e\n               JOIN alert_rules r ON r.id = e.rule_id\n              WHERE e.occurred_at >= ?1 AND e.occurred_at <= ?2\n                AND (?3 IS NULL OR instr(?3, ',' || e.event_type || ',') > 0)\n                AND (?5 IS NULL\n                     OR e.occurred_at < ?5\n                     OR (e.occurred_at = ?5 AND e.id < ?6))\n              ORDER BY e.occurred_at DESC, e.id DESC\n              LIMIT ?4",
   "describe": {
     "columns": [
       {
-        "name": "occurred_at!",
+        "name": "id!",
         "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_events",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "occurred_at!",
+        "ordinal": 1,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -16,7 +27,7 @@
       },
       {
         "name": "event_type!",
-        "ordinal": 1,
+        "ordinal": 2,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -27,7 +38,7 @@
       },
       {
         "name": "severity!",
-        "ordinal": 2,
+        "ordinal": 3,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -38,7 +49,7 @@
       },
       {
         "name": "rule_id!",
-        "ordinal": 3,
+        "ordinal": 4,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -49,7 +60,7 @@
       },
       {
         "name": "rule_name!",
-        "ordinal": 4,
+        "ordinal": 5,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -60,7 +71,7 @@
       },
       {
         "name": "label_set!",
-        "ordinal": 5,
+        "ordinal": 6,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -71,7 +82,7 @@
       },
       {
         "name": "metric_value",
-        "ordinal": 6,
+        "ordinal": 7,
         "type_info": "Float",
         "origin": {
           "Table": {
@@ -82,9 +93,10 @@
       }
     ],
     "parameters": {
-      "Right": 4
+      "Right": 6
     },
     "nullable": [
+      false,
       false,
       false,
       false,
@@ -94,5 +106,5 @@
       true
     ]
   },
-  "hash": "4b1f0b5e7ca16a9657e20ce8d308b6fe3cc3b9bed11f637c0db1c5cea6f12551"
+  "hash": "49fb8e1ea092cde51fdab9b0af32663d69142d0952f9ae0f542edb4dd10d0584"
 }
