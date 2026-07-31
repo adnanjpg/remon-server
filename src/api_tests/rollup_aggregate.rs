@@ -154,7 +154,10 @@ async fn a_chained_tier_weights_children_by_the_samples_behind_them() {
         (usage - expected).abs() < 1e-9,
         "usage_percent {usage} is not the weighted mean {expected}"
     );
-    assert_eq!(samples, 31, "sample_count must carry the total, not the count");
+    assert_eq!(
+        samples, 31,
+        "sample_count must carry the total, not the count"
+    );
 
     // The second child has no steal_percent at all. Counting it in the
     // denominator would dilute a field it never carried.
