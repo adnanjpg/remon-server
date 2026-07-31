@@ -23,6 +23,14 @@ runs:
         REMON__AUTH__JWT_SECRET: "ci-test-secret-minimum-32-characters-long-12345678"
       run: cargo clippy --all-targets --all-features -- -D warnings
 
+    # Before the release build because it takes seconds and the release build
+    # takes minutes: a packaging change should not wait on a compile to hear
+    # that it broke the installer. Hermetic — stubs the system commands and
+    # builds its own tarball, so no network and no init system involved.
+    - name: Packaging
+      shell: bash
+      run: bash packaging/tests/install-test.sh
+
     - name: Build
       shell: bash
       env:
