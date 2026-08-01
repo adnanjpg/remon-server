@@ -91,6 +91,20 @@ The deliberate paths are:
 
 Both answer `202` before acting, drain in-flight requests and SSE streams, and write the clean-shutdown marker so the next boot does not report a crash.
 
+### `[assistant]`
+An OpenAI-compatible chat endpoint (`POST /assistant`, `/assistant/stream`) that answers questions about this host by calling read-only tools against its own data. Inert until `api_key` is set — `enabled` defaults to true, so the key is the real switch. Put the key in the environment rather than the file: `REMON__ASSISTANT__API_KEY`.
+- `enabled` — master switch (default: true, but without a key nothing runs)
+- `api_key` — bearer key for the provider (default: empty = assistant off)
+- `base_url` — provider endpoint; `/chat/completions` is appended (default: `https://generativelanguage.googleapis.com/v1beta/openai`)
+- `model` — model id passed straight through (default: `gemini-2.5-flash`)
+- `max_tokens` — response ceiling per model turn (default: 2048)
+- `prometheus_url` — a Prometheus to answer PromQL against, e.g. `http://localhost:9090` (default: empty = the `prometheus_query` tool is not offered). Read-only: only the instant and range query APIs are called.
+- `dev` — allow per-ask overrides (system prompt, step and token limits, loop trace) for working on the assistant itself (default: false; auth and the read-only tool contract apply either way)
+
+Two keys here are not about the assistant alone, because the collector they drive also feeds alert rules:
+- `process_history` — run the continuous process collector, so process answers carry a short history (avg/max over ~15 min) instead of a bare snapshot (default: true). Costs one full process refresh per tick; worth turning off on hosts with very large process tables.
+- `process_series_top_k` — once a minute, persist the top-K process groups by cpu and by memory (union) into `metrics_process` (default: 20; `0` disables). This is what opens the `process` namespace to alert rules and history queries, e.g. `process.cpu_percent{name="clickhouse-server"} > 80`. Bounded by K, not by the host's process table. Requires `process_history`.
+
 ### `[cors]`
 CORS is a browser mechanism. Native clients (mobile app, curl) authenticate with bearer tokens and are unaffected by anything here.
 - `allow_any_origin` — `true` in dev, `false` in production
