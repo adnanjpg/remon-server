@@ -2,7 +2,7 @@
 mod docker;
 pub(crate) mod processes;
 pub mod smart;
-mod stats;
+pub(crate) mod stats;
 
 use log::info;
 use std::sync::Arc;

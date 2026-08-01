@@ -11,6 +11,16 @@ use crate::services::tick_timer::TickStats;
 use crate::state::AppState;
 use crate::storage::repositories::MetricsRepository;
 
+/// Components refresh hits WMI/COM on Windows and is by far the heaviest
+/// sysinfo call on that platform. Temperatures don't change fast enough to
+/// justify per-tick polling; skip on most ticks.
+///
+/// A row is written only on these ticks — persisting the cached reading would
+/// stamp a measurement that was never taken — so this is the `components`
+/// series' real write cadence, not the tick rate. Anything deciding how old a
+/// components sample may be has to multiply by it.
+pub(crate) const COMPONENTS_REFRESH_EVERY_N_TICKS: u32 = 30;
+
 #[cfg(target_os = "linux")]
 use crate::models::stats::{CpuStats, DiskStats, MemoryStats};
 #[cfg(target_os = "linux")]
@@ -65,10 +75,6 @@ pub async fn run(state: Arc<AppState>) {
     // `refresh(true)` re-enumerates hot-plug entries; `refresh(false)`
     // only updates counters. Hot-plug is rare relative to the tick rate.
     const DISCOVERY_EVERY_N_TICKS: u32 = 15;
-    // Components refresh hits WMI/COM on Windows and is by far the heaviest
-    // sysinfo call on that platform. Temperatures don't change fast enough
-    // to justify per-tick polling; skip on most ticks.
-    const COMPONENTS_REFRESH_EVERY_N_TICKS: u32 = 30;
     let mut tick_count: u32 = 0;
 
     // MissedTickBehavior::Skip: drop overrun ticks, don't burst-catch up.

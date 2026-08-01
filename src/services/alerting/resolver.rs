@@ -250,14 +250,26 @@ fn freshness_since(now: i64, write_interval_secs: i64) -> i64 {
 /// `None` for namespaces this does not apply to: `probe` derives its own from
 /// the cadence its runs were actually observed at, and `heartbeat`/`service`
 /// are not time series.
-fn write_interval_secs(namespace: &str, state: &crate::state::AppState) -> Option<i64> {
-    use std::sync::atomic::Ordering;
+/// Taken as plain values rather than read off `AppState` here, so the mapping
+/// can be asserted without standing one up: the bug this guards against is
+/// feeding a namespace the wrong cadence, not the arithmetic on it.
+fn write_interval_secs(
+    namespace: &str,
+    stats_ms: u64,
+    docker_ms: u64,
+    smart_ms: u64,
+) -> Option<i64> {
     let ms = match namespace {
-        "cpu" | "memory" | "disk" | "network" | "pressure" | "components" => {
-            state.collector_stats_interval_ms.load(Ordering::Relaxed)
+        "cpu" | "memory" | "disk" | "network" | "pressure" => stats_ms,
+        // Sensors are re-read every Nth tick and a row is written only then,
+        // so the tick rate is not this series' cadence. Read as one, the newest
+        // sample sits at the edge of its own window from the moment it lands,
+        // and temperature rules go quiet with nothing reporting that they have.
+        "components" => {
+            stats_ms * crate::collectors::stats::COMPONENTS_REFRESH_EVERY_N_TICKS as u64
         }
-        "docker" => state.collector_docker_interval_ms.load(Ordering::Relaxed),
-        "smart" => state.collector_smart_interval_ms.load(Ordering::Relaxed),
+        "docker" => docker_ms,
+        "smart" => smart_ms,
         // Written once a minute whatever the tick rate is.
         "process" => {
             return Some(crate::collectors::processes::SERIES_WRITE_INTERVAL_SECS);
@@ -350,7 +362,13 @@ pub async fn resolve_with_state(
     {
         return result;
     }
-    let since = match write_interval_secs(&metric.namespace, state) {
+    use std::sync::atomic::Ordering;
+    let since = match write_interval_secs(
+        &metric.namespace,
+        state.collector_stats_interval_ms.load(Ordering::Relaxed),
+        state.collector_docker_interval_ms.load(Ordering::Relaxed),
+        state.collector_smart_interval_ms.load(Ordering::Relaxed),
+    ) {
         Some(secs) => freshness_since(chrono::Utc::now().timestamp(), secs),
         None => i64::MIN,
     };
@@ -1434,6 +1452,49 @@ mod tests {
         assert!(
             !key_still_present(&pool, "service", "{}").await,
             "namespaces with no metrics series cannot answer this"
+        );
+    }
+
+    /// Every namespace must get a window wider than its own write cadence, or
+    /// its newest sample is stale on arrival and rules go quiet. The failure
+    /// that reached this: `components` writes a row every 30th stats tick, and
+    /// was given the tick rate, putting the window exactly on the cadence.
+    #[test]
+    fn every_namespace_outlives_its_own_write_cadence() {
+        const STATS_MS: u64 = 2_000;
+        const DOCKER_MS: u64 = 3_000;
+        const SMART_MS: u64 = 1_800_000;
+
+        for ns in [
+            "cpu",
+            "memory",
+            "disk",
+            "network",
+            "pressure",
+            "components",
+            "docker",
+            "smart",
+            "process",
+        ] {
+            let cadence = write_interval_secs(ns, STATS_MS, DOCKER_MS, SMART_MS)
+                .unwrap_or_else(|| panic!("{ns} has no write cadence"));
+            let now = 1_000_000;
+            let window = now - freshness_since(now, cadence);
+            assert!(
+                window > cadence,
+                "{ns}: window {window}s does not outlive its {cadence}s cadence"
+            );
+        }
+
+        // The one that was wrong, pinned to the collector it comes from.
+        assert_eq!(
+            write_interval_secs("components", STATS_MS, DOCKER_MS, SMART_MS),
+            Some(60),
+            "components follows the sensor refresh, not the tick"
+        );
+        assert!(
+            write_interval_secs("probe", STATS_MS, DOCKER_MS, SMART_MS).is_none(),
+            "probe derives its own window from observed runs"
         );
     }
 
