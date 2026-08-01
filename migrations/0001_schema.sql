@@ -541,7 +541,13 @@ CREATE INDEX idx_alert_state_state ON alert_state(state);
 -- `notified` is false on cooldown-suppressed fires (still recorded for audit).
 CREATE TABLE alert_events (
     id           INTEGER PRIMARY KEY,
-    rule_id      INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+    -- The record outlives the rule, the same way an incident capture does:
+    -- cascading turned an append-only audit log into one that could be erased
+    -- by deleting the rule it audits, taking with it the evidence that the rule
+    -- ever fired. The name is denormalized so a row still says what it was
+    -- about once the join has nothing to reach.
+    rule_id      INTEGER REFERENCES alert_rules(id) ON DELETE SET NULL,
+    rule_name    TEXT    NOT NULL,
     label_set    TEXT    NOT NULL DEFAULT '{}',
     event_type   TEXT    NOT NULL CHECK (event_type IN ('fired','resolved')),
     severity     TEXT    NOT NULL CHECK (severity IN ('warn','crit')),

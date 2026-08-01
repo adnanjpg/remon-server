@@ -527,6 +527,7 @@ async fn evaluate_rule(
             let receipt = match repo
                 .insert_event(
                     rule.id,
+                    &rule.name,
                     &sample.label_set,
                     et,
                     rule.severity,
@@ -617,6 +618,7 @@ async fn evaluate_rule(
                 let receipt = match repo
                     .insert_event(
                         rule.id,
+                        &rule.name,
                         &label_set,
                         AlertEventType::Resolved,
                         rule.severity,

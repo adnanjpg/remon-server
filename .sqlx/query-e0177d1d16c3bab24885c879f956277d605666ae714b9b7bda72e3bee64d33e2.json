@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT e.id as \"id!\", e.occurred_at as \"occurred_at!\",\n                      e.event_type as \"event_type!\",\n                      e.severity as \"severity!\", e.rule_id as \"rule_id!\",\n                      r.name as \"rule_name!\", e.label_set as \"label_set!\",\n                      e.metric_value\n               FROM alert_events e\n               JOIN alert_rules r ON r.id = e.rule_id\n              WHERE e.occurred_at >= ?1 AND e.occurred_at <= ?2\n                AND (?3 IS NULL OR instr(?3, ',' || e.event_type || ',') > 0)\n                AND (?5 IS NULL\n                     OR e.occurred_at < ?5\n                     OR (e.occurred_at = ?5 AND e.id < ?6))\n              ORDER BY e.occurred_at DESC, e.id DESC\n              LIMIT ?4",
+  "query": "SELECT e.id as \"id!\", e.occurred_at as \"occurred_at!\",\n                      e.event_type as \"event_type!\",\n                      e.severity as \"severity!\", e.rule_id,\n                      e.rule_name as \"rule_name!\", e.label_set as \"label_set!\",\n                      e.metric_value\n               FROM alert_events e\n              WHERE e.occurred_at >= ?1 AND e.occurred_at <= ?2\n                AND (?3 IS NULL OR instr(?3, ',' || e.event_type || ',') > 0)\n                AND (?5 IS NULL\n                     OR e.occurred_at < ?5\n                     OR (e.occurred_at = ?5 AND e.id < ?6))\n              ORDER BY e.occurred_at DESC, e.id DESC\n              LIMIT ?4",
   "describe": {
     "columns": [
       {
@@ -48,7 +48,7 @@
         }
       },
       {
-        "name": "rule_id!",
+        "name": "rule_id",
         "ordinal": 4,
         "type_info": "Integer",
         "origin": {
@@ -64,8 +64,8 @@
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "alert_rules",
-            "name": "name"
+            "table": "alert_events",
+            "name": "rule_name"
           }
         }
       },
@@ -100,11 +100,11 @@
       false,
       false,
       false,
-      false,
+      true,
       false,
       false,
       true
     ]
   },
-  "hash": "49fb8e1ea092cde51fdab9b0af32663d69142d0952f9ae0f542edb4dd10d0584"
+  "hash": "e0177d1d16c3bab24885c879f956277d605666ae714b9b7bda72e3bee64d33e2"
 }

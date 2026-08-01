@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, rule_id, label_set, event_type, severity,\n                    occurred_at, metric_value, notified as \"notified: bool\"\n               FROM alert_events\n              ORDER BY occurred_at DESC, id DESC\n              LIMIT ? OFFSET ?",
+  "query": "SELECT id, rule_id, rule_name, label_set, event_type, severity,\n                    occurred_at, metric_value, notified as \"notified: bool\"\n               FROM alert_events\n              ORDER BY occurred_at DESC, id DESC\n              LIMIT ? OFFSET ?",
   "describe": {
     "columns": [
       {
@@ -26,8 +26,19 @@
         }
       },
       {
-        "name": "label_set",
+        "name": "rule_name",
         "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_events",
+            "name": "rule_name"
+          }
+        }
+      },
+      {
+        "name": "label_set",
+        "ordinal": 3,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -38,7 +49,7 @@
       },
       {
         "name": "event_type",
-        "ordinal": 3,
+        "ordinal": 4,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -49,7 +60,7 @@
       },
       {
         "name": "severity",
-        "ordinal": 4,
+        "ordinal": 5,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -60,7 +71,7 @@
       },
       {
         "name": "occurred_at",
-        "ordinal": 5,
+        "ordinal": 6,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -71,7 +82,7 @@
       },
       {
         "name": "metric_value",
-        "ordinal": 6,
+        "ordinal": 7,
         "type_info": "Float",
         "origin": {
           "Table": {
@@ -82,7 +93,7 @@
       },
       {
         "name": "notified: bool",
-        "ordinal": 7,
+        "ordinal": 8,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -97,6 +108,7 @@
     },
     "nullable": [
       false,
+      true,
       false,
       false,
       false,
@@ -106,5 +118,5 @@
       false
     ]
   },
-  "hash": "ad364838a0e2733cc4fdc720525b41f55ea62e41ac05ca557f1ae85095f4a304"
+  "hash": "00ca3f35fe14f9ea30a0a2a80c0dccffc44f59fa04788fd3356166416a741a35"
 }

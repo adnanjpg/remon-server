@@ -117,7 +117,10 @@ pub struct AlertStateRow {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlertEvent {
     pub id: i64,
-    pub rule_id: i64,
+    /// `None` once the rule has been deleted; the event outlives it.
+    pub rule_id: Option<i64>,
+    /// Denormalized at insert, so the event still says what it was about.
+    pub rule_name: String,
     pub label_set: String,
     pub event_type: AlertEventType,
     pub severity: AlertSeverity,

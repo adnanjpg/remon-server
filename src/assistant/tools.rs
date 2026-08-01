@@ -1273,8 +1273,10 @@ async fn metric_history(state: &Arc<AppState>, args: &Value) -> Result<Value, St
     }))
 }
 
-/// Alert fire/resolve timeline, joined to rule names so the model reads
-/// "high-cpu fired" rather than a bare rule id. Answers "when did this start".
+/// Alert fire/resolve timeline. Each event carries the rule's name, so the
+/// model reads "high-cpu fired" rather than a bare id without a second read,
+/// and an event whose rule has since been deleted still reads as itself.
+/// Answers "when did this start".
 async fn recent_alert_events(state: &Arc<AppState>, args: &Value) -> Result<Value, String> {
     let limit = args
         .get("limit")
@@ -1283,13 +1285,6 @@ async fn recent_alert_events(state: &Arc<AppState>, args: &Value) -> Result<Valu
         .clamp(1, 100) as u32;
 
     let repo = AlertRepository::new(state.db.clone());
-    let names: std::collections::HashMap<i64, String> = repo
-        .list()
-        .await
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .map(|r| (r.id, r.name))
-        .collect();
     let events = repo
         .recent_events(limit, 0)
         .await
@@ -1299,7 +1294,9 @@ async fn recent_alert_events(state: &Arc<AppState>, args: &Value) -> Result<Valu
         .into_iter()
         .map(|e| {
             json!({
-                "rule": names.get(&e.rule_id).cloned().unwrap_or_else(|| format!("rule#{}", e.rule_id)),
+                // Straight off the event: the rule it names may be deleted, and
+                // the lookup below would then have nothing to offer.
+                "rule": e.rule_name,
                 "event": e.event_type.as_str(),
                 "severity": e.severity.as_str(),
                 "occurred_at": e.occurred_at,

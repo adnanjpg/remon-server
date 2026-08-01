@@ -305,9 +305,13 @@ impl AlertRepository {
 
     // ===== alert_events =====
 
+    /// `rule_name` is stored on the row rather than joined for at read time:
+    /// the rule it names may be gone by then, and the event is still a fact.
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_event(
         &self,
         rule_id: i64,
+        rule_name: &str,
         label_set: &str,
         event_type: AlertEventType,
         severity: AlertSeverity,
@@ -316,10 +320,11 @@ impl AlertRepository {
     ) -> AppResult<i64> {
         let r = sqlx::query!(
             "INSERT INTO alert_events
-                (rule_id, label_set, event_type, severity,
+                (rule_id, rule_name, label_set, event_type, severity,
                  occurred_at, metric_value, notified)
-             VALUES (?, ?, ?, ?, unixepoch(), ?, ?)",
+             VALUES (?, ?, ?, ?, ?, unixepoch(), ?, ?)",
             rule_id,
+            rule_name,
             label_set,
             event_type.as_str(),
             severity.as_str(),
@@ -343,7 +348,7 @@ impl AlertRepository {
         let offset = offset as i64;
         let rows = sqlx::query_as!(
             AlertEventRow,
-            r#"SELECT id, rule_id, label_set, event_type, severity,
+            r#"SELECT id, rule_id, rule_name, label_set, event_type, severity,
                     occurred_at, metric_value, notified as "notified: bool"
                FROM alert_events
               WHERE rule_id = ?
@@ -393,13 +398,14 @@ impl AlertRepository {
             None => (None, None),
         };
         let rows = sqlx::query!(
+            // No join: the name is on the row, so the timeline neither pays for
+            // one nor loses events whose rule has since been deleted.
             r#"SELECT e.id as "id!", e.occurred_at as "occurred_at!",
                       e.event_type as "event_type!",
-                      e.severity as "severity!", e.rule_id as "rule_id!",
-                      r.name as "rule_name!", e.label_set as "label_set!",
+                      e.severity as "severity!", e.rule_id,
+                      e.rule_name as "rule_name!", e.label_set as "label_set!",
                       e.metric_value
                FROM alert_events e
-               JOIN alert_rules r ON r.id = e.rule_id
               WHERE e.occurred_at >= ?1 AND e.occurred_at <= ?2
                 AND (?3 IS NULL OR instr(?3, ',' || e.event_type || ',') > 0)
                 AND (?5 IS NULL
@@ -438,7 +444,7 @@ impl AlertRepository {
         let offset = offset as i64;
         let rows = sqlx::query_as!(
             AlertEventRow,
-            r#"SELECT id, rule_id, label_set, event_type, severity,
+            r#"SELECT id, rule_id, rule_name, label_set, event_type, severity,
                     occurred_at, metric_value, notified as "notified: bool"
                FROM alert_events
               ORDER BY occurred_at DESC, id DESC
@@ -459,10 +465,12 @@ impl AlertRepository {
 pub struct AlertEventWithRule {
     /// Tiebreak for the timeline's sort key; see `HostEventRow::id`.
     pub id: i64,
+    /// `None` once the rule has been deleted. `rule_name` still says what the
+    /// event was about; only the link to a live rule is gone.
+    pub rule_id: Option<i64>,
     pub occurred_at: i64,
     pub event_type: String,
     pub severity: String,
-    pub rule_id: i64,
     pub rule_name: String,
     pub label_set: String,
     pub metric_value: Option<f64>,
@@ -566,7 +574,8 @@ impl ActiveStateJoinRow {
 #[derive(sqlx::FromRow)]
 struct AlertEventRow {
     id: i64,
-    rule_id: i64,
+    rule_id: Option<i64>,
+    rule_name: String,
     label_set: String,
     event_type: String,
     severity: String,
@@ -580,6 +589,7 @@ impl AlertEventRow {
         Some(AlertEvent {
             id: self.id,
             rule_id: self.rule_id,
+            rule_name: self.rule_name,
             label_set: self.label_set,
             event_type: AlertEventType::parse(&self.event_type)?,
             severity: AlertSeverity::parse(&self.severity)?,

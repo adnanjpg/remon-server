@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, rule_id, label_set, event_type, severity,\n                    occurred_at, metric_value, notified as \"notified: bool\"\n               FROM alert_events\n              WHERE rule_id = ?\n              ORDER BY occurred_at DESC, id DESC\n              LIMIT ? OFFSET ?",
+  "query": "SELECT id, rule_id, rule_name, label_set, event_type, severity,\n                    occurred_at, metric_value, notified as \"notified: bool\"\n               FROM alert_events\n              WHERE rule_id = ?\n              ORDER BY occurred_at DESC, id DESC\n              LIMIT ? OFFSET ?",
   "describe": {
     "columns": [
       {
@@ -26,8 +26,19 @@
         }
       },
       {
-        "name": "label_set",
+        "name": "rule_name",
         "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_events",
+            "name": "rule_name"
+          }
+        }
+      },
+      {
+        "name": "label_set",
+        "ordinal": 3,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -38,7 +49,7 @@
       },
       {
         "name": "event_type",
-        "ordinal": 3,
+        "ordinal": 4,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -49,7 +60,7 @@
       },
       {
         "name": "severity",
-        "ordinal": 4,
+        "ordinal": 5,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -60,7 +71,7 @@
       },
       {
         "name": "occurred_at",
-        "ordinal": 5,
+        "ordinal": 6,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -71,7 +82,7 @@
       },
       {
         "name": "metric_value",
-        "ordinal": 6,
+        "ordinal": 7,
         "type_info": "Float",
         "origin": {
           "Table": {
@@ -82,7 +93,7 @@
       },
       {
         "name": "notified: bool",
-        "ordinal": 7,
+        "ordinal": 8,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -97,6 +108,7 @@
     },
     "nullable": [
       false,
+      true,
       false,
       false,
       false,
@@ -106,5 +118,5 @@
       false
     ]
   },
-  "hash": "20d5718bcafc06739d2fabcf1ab977ba3d66e6aecc62a8188c90772d1a618e06"
+  "hash": "2688554492e70b806b16c882002dacb428550bba4be1a571cd309045ba8fb4fb"
 }

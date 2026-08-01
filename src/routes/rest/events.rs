@@ -174,9 +174,12 @@ impl TimelineRow {
                     severity: severity.to_string(),
                     message: format!("Alert '{}'{} {}", e.rule_name, labels, verb),
                     actor: None,
-                    reference: Some(EventRefDto {
+                    // Dropped once the rule is gone: the event still names it,
+                    // but pointing a client at a rule it cannot fetch is worse
+                    // than saying nothing.
+                    reference: e.rule_id.map(|id| EventRefDto {
                         ref_type: "alert_rule".to_string(),
-                        id: e.rule_id.to_string(),
+                        id: id.to_string(),
                     }),
                     details: Some(serde_json::json!({
                         "rule_severity": e.severity,

@@ -131,7 +131,8 @@ pub struct ListAlertStateResponse {
 #[derive(Debug, Serialize)]
 pub struct AlertEventDto {
     pub id: i64,
-    pub rule_id: i64,
+    pub rule_id: Option<i64>,
+    pub rule_name: String,
     pub label_set: String,
     pub event_type: AlertEventType,
     pub severity: AlertSeverity,
@@ -145,6 +146,7 @@ impl From<AlertEvent> for AlertEventDto {
         Self {
             id: e.id,
             rule_id: e.rule_id,
+            rule_name: e.rule_name,
             label_set: e.label_set,
             event_type: e.event_type,
             severity: e.severity,

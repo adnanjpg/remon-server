@@ -61,6 +61,7 @@ async fn events_union_merges_all_three_stores() {
     AlertRepository::new(app.state.db.clone())
         .insert_event(
             rule_id,
+            "cpu crit",
             "{}",
             AlertEventType::Fired,
             AlertSeverity::Crit,
@@ -184,6 +185,7 @@ async fn kind_filter_survives_a_window_full_of_the_other_kind() {
     for _ in 0..3 {
         repo.insert_event(
             rule_id,
+            "cpu crit",
             "{}",
             AlertEventType::Fired,
             AlertSeverity::Crit,
@@ -196,6 +198,7 @@ async fn kind_filter_survives_a_window_full_of_the_other_kind() {
     for _ in 0..12 {
         repo.insert_event(
             rule_id,
+            "cpu crit",
             "{}",
             AlertEventType::Resolved,
             AlertSeverity::Crit,
@@ -405,8 +408,8 @@ async fn paging_does_not_drop_or_repeat_events_sharing_a_second() {
     let rule_id = seed_rule(&app, "shared-second rule").await;
     sqlx::query(
         "INSERT INTO alert_events
-           (rule_id, label_set, event_type, severity, occurred_at, metric_value, notified)
-         VALUES (?, '{}', 'fired', 'crit', ?, 99.0, 1)",
+           (rule_id, rule_name, label_set, event_type, severity, occurred_at, metric_value, notified)
+         VALUES (?, 'shared-second rule', '{}', 'fired', 'crit', ?, 99.0, 1)",
     )
     .bind(rule_id)
     .bind(shared)
@@ -484,5 +487,48 @@ async fn paging_does_not_drop_or_repeat_events_sharing_a_second() {
         ts,
         vec![shared + 1, shared, shared, shared, shared - 1],
         "page boundaries reordered the timeline"
+    );
+}
+
+/// The event log outlives the rule it audits. Deleting a rule used to cascade
+/// its events away, which meant an operator could erase the evidence that a
+/// rule had ever fired by removing the rule; the timeline would also have
+/// hidden them regardless, because it reached the rule's name through an inner
+/// join. Both are why the name is on the row now.
+#[tokio::test]
+async fn deleting_a_rule_keeps_the_alerts_it_fired() {
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let repo = AlertRepository::new(app.state.db.clone());
+
+    let rule_id = seed_rule(&app, "doomed rule").await;
+    repo.insert_event(
+        rule_id,
+        "doomed rule",
+        "{}",
+        AlertEventType::Fired,
+        AlertSeverity::Crit,
+        Some(93.5),
+        true,
+    )
+    .await
+    .expect("insert alert event");
+
+    assert!(repo.delete(rule_id).await.expect("delete rule"));
+
+    let (st, body) = app
+        .request("GET", "/events?kinds=alert_fired", Some(&token), None)
+        .await;
+    assert_eq!(st, StatusCode::OK, "got: {body}");
+    assert_eq!(body["count"], 1, "the event went with the rule: {body}");
+
+    let fired = &body["events"][0];
+    assert!(
+        fired["message"].as_str().unwrap().contains("doomed rule"),
+        "the event no longer says what it was about: {fired}"
+    );
+    assert!(
+        fired["ref"].is_null(),
+        "a deleted rule must not be offered as a link: {fired}"
     );
 }

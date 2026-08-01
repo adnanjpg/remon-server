@@ -281,6 +281,7 @@ async fn notified_starts_false_and_is_raised_by_receipt() {
     let event_id = repo
         .insert_event(
             rule_id,
+            "cpu crit",
             "{}",
             AlertEventType::Fired,
             AlertSeverity::Crit,
