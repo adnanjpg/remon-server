@@ -29,7 +29,9 @@ runs:
     # builds its own tarball, so no network and no init system involved.
     - name: Packaging
       shell: bash
-      run: bash packaging/tests/install-test.sh
+      run: |
+        bash packaging/tests/install-test.sh
+        bash packaging/tests/uninstall-test.sh
 
     - name: Build
       shell: bash
