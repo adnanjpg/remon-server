@@ -301,20 +301,13 @@ async fn the_retention_pass_leaves_planner_statistics_behind() {
     );
 }
 
-/// The per-key seek must reach its key through the index built for it.
+/// The per-key seek must reach its key through the index built for it. Separate
+/// from the scan/sorter audit: that one runs against an empty schema, and a seek
+/// that constrains only `resolution` is neither a scan nor a sort, so it passes
+/// there while walking the whole partition per key.
 ///
-/// Separate from the scan/sorter audit because it asks a different question of a
-/// different fixture. That audit runs against an empty schema, where there are
-/// no statistics and every plan comes from SQLite's built-in guesses; the guess
-/// for this shape is the primary key, which constrains only `resolution` and so
-/// walks that whole partition once per key. Nothing in the other detectors sees
-/// it — it is not a scan and it sorts nothing — so the cost the indexes were
-/// added to remove came back while the gate stayed green.
-///
-/// The assertion is on the table accesses that are *not* covered by an index: a
-/// covering index legitimately constrains only `resolution` when it is
-/// collecting the DISTINCT key list, but anything that has to fetch rows must
-/// have fixed the key first.
+/// Asserted on the accesses not covered by an index — a covering index may
+/// constrain only `resolution` while collecting the DISTINCT key list.
 #[tokio::test]
 async fn resolver_per_key_seek_constrains_the_key() {
     let app = TestApp::spawn().await;

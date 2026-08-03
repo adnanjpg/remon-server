@@ -12,26 +12,14 @@
 //! run in parallel they measure each other's contention, which is enough to
 //! invert an A/B pair.
 //!
-//! Three deliberate choices, each of which changes the numbers if ignored:
+//! Three choices that change the numbers if ignored: `bench-fast` rather than
+//! `dev`, where SQLite is built at `opt-level = 0`; file-backed rather than
+//! `:memory:`, since WAL growth and checkpointing are part of what is measured;
+//! and seeded to the retention windows, where the rolled-up tiers outweigh raw.
+//! `BENCH_DIV` divides all four windows for a quick run.
 //!
-//! * **`bench-fast`, never `dev`.** Under `dev` the bundled SQLite is compiled
-//!   at `opt-level = 0`, which inflates everything by roughly an order of
-//!   magnitude and does so unevenly — a query dominated by SQLite's b-tree
-//!   walk and one dominated by Rust-side row mapping move by different
-//!   factors, so even the *ratios* stop being comparable.
-//! * **File-backed, never `:memory:`.** WAL growth, checkpointing, page
-//!   eviction and delete lock-hold are the things being measured and none of
-//!   them exist in an in-memory database.
-//! * **Seeded to the real steady state, not to a convenient size.** A live
-//!   database is not "N hours of samples": retention holds raw for 24 h, 1m
-//!   for 7 days, 5m for 30 days and 1h for a year, so the rolled-up tiers
-//!   outweigh the raw one and every b-tree is correspondingly deeper. Seeding
-//!   raw alone understates every measurement here. `BENCH_DIV` divides all
-//!   four windows for a quick run (default 1 = the real thing); the row count
-//!   each run actually produced is printed.
-//!
-//! Absolute timings are machine-specific. What travels between runs is the
-//! ratio before and after a change, at the same `BENCH_DIV` on the same box.
+//! Absolute timings are machine-specific; the ratio across a change is what
+//! travels, at the same `BENCH_DIV` on the same box.
 
 use std::time::Instant;
 
@@ -360,14 +348,10 @@ async fn seed(pool: &SqlitePool) -> i64 {
     rows
 }
 
-/// Fill the tables the tier loop does not reach: `metrics_docker`,
-/// `metrics_probe` and `metrics_smart`, which are written on their producers'
-/// own schedules, and the ledgers and histories that grow at event rate.
-///
-/// Seeding stopped at the eight tier tables, so the retention pass walked eight
-/// of the seventeen tables production gives it and reported a total that could
-/// only be a lower bound, while any plan over `logs`, `host_events` or
-/// `incident_snapshots` was measured against an empty b-tree.
+/// Fill the tables the tier loop does not reach: the three metric series written
+/// on their producers' own schedules, and the ledgers and histories that grow at
+/// event rate. Without them the retention pass is timed over eight of the
+/// seventeen tables production gives it.
 async fn seed_operational(pool: &SqlitePool) {
     let div = bench_div();
     let now = chrono::Utc::now().timestamp();
@@ -717,17 +701,10 @@ async fn dbbench_resolver() {
         ("resolve.cpu.steal(unkeyed,null)", "cpu.steal_percent > 1"),
     ];
 
-    // Both arms in one run, because only a within-run A/B travels: across runs
-    // this box has moved an unchanged seed by well over the difference being
-    // measured.
-    //
-    // `bounded` goes through the entry the evaluator uses, so each namespace
-    // gets the window its own producer's cadence earns it — one fixed window
-    // would report the process series as stale, since it is written once a
-    // minute against the two-second stats tick. No collector runs here, so the
-    // in-memory snapshot is empty and it falls through to the DB, which is the
-    // path being measured. `unbounded` is the same search allowed to walk a day
-    // of history for a value no rule should act on.
+    // Both arms in one run: only a within-run A/B travels. `bounded` goes
+    // through the entry the evaluator uses, so each namespace gets the window
+    // its own cadence earns; `unbounded` is the same search allowed to walk a
+    // day of history.
     for arm in ["bounded", "unbounded"] {
         for (name, expr) in cases {
             let parsed = expression::parse(expr).expect("parse");

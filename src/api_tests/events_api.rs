@@ -377,14 +377,10 @@ async fn alert_silence_writes_audit_event() {
     );
 }
 
-/// Paging a merged timeline cannot cut on a timestamp alone. The three stores
-/// have independent id spaces and routinely write the same second — an alert
-/// firing and the capture it triggers are the standard case — so a `ts`-only
-/// cursor either drops whatever shares the boundary or serves it twice.
-///
-/// `limit=1` puts the cursor *inside* the shared second twice over, which is
-/// the shape that breaks. The loop is bounded because a cursor that fails to
-/// advance does not return a wrong answer, it hangs.
+/// A `ts`-only cursor drops or repeats whatever shares the boundary second, and
+/// the three stores routinely write the same one. `limit=1` puts the cursor
+/// inside that second twice over; the loop is bounded because a stalled cursor
+/// hangs rather than answering wrongly.
 #[tokio::test]
 async fn paging_does_not_drop_or_repeat_events_sharing_a_second() {
     let app = TestApp::spawn().await;

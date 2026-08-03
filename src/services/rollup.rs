@@ -22,18 +22,10 @@ use log::{debug, warn};
 use crate::state::AppState;
 use crate::storage::repositories::{Resolution, ResolutionRepository, RollupStateRepository};
 
-/// How many child buckets one tick will aggregate before leaving the rest to
-/// the next one. Usually 1-2 are due; this bounds a tick that finds a long gap.
-///
-/// A budget, not a horizon. It used to clamp how far *back* a tick would reach,
-/// and the buckets older than the clamp were not deferred but skipped — the
-/// cursor resumed ahead of them and nothing ever came back. 720 buckets is 30
-/// days at 1h, which is where the "30 days" reading came from, but only 12
-/// hours at 1m, and `raw` — what the 1m tier is built from — is kept for a day.
-/// So a gap between 12 and 24 hours punched a permanent hole in the 1m tier
-/// with the raw rows to fill it sitting right there. Stopping where the budget
-/// runs out and resuming there next tick costs several ticks to catch up and
-/// loses nothing.
+/// Child buckets one tick will aggregate before leaving the rest to the next.
+/// A per-tick budget, not a reach limit: the same count spans 30 days at 1h but
+/// 12 hours at 1m, so clamping how far back a tick looks would skip buckets the
+/// retained raw could still fill.
 const MAX_BACKFILL_BUCKETS: i64 = 720;
 
 /// Resources that get full rollup coverage (per-bucket aggregation).

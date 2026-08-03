@@ -221,21 +221,9 @@ const HEARTBEAT_FIELDS: &[&str] = &["up", "late"];
 
 // ===== Public entry =====
 
-/// How many write intervals a sample may be behind and still be "current", and
-/// the smallest window regardless.
-///
-/// A rule asks a question about *now*, and "the newest non-NULL sample, however
-/// old" answers a different one. Two things follow from the difference. An
-/// optional field a host never populates — `disk.inode_used_percent` without the
-/// stat behind it, `cpu.steal_percent` off a VM — has no current value at all,
-/// yet the search for one walks that key's whole retained history on every
-/// evaluation and finds nothing; and a reading from the far side of the window
-/// would fire a rule on history while the notification claims the condition
-/// holds now.
-///
-/// The window is derived from how often the namespace's producer writes, never
-/// fixed: SMART is polled every half hour, and a window sized for the two-second
-/// stats tick would report every device as stale.
+/// How many write intervals a sample may be behind and still count as current,
+/// and the smallest window regardless. Multiplied by the namespace's own
+/// cadence, never fixed: SMART is polled every half hour.
 const FRESHNESS_INTERVALS: i64 = 5;
 const FRESHNESS_FLOOR_SECS: i64 = 60;
 
@@ -246,13 +234,9 @@ fn freshness_since(now: i64, write_interval_secs: i64) -> i64 {
     now - (write_interval_secs * FRESHNESS_INTERVALS).max(FRESHNESS_FLOOR_SECS)
 }
 
-/// The write cadence of whatever fills a namespace's table, in seconds.
-/// `None` for namespaces this does not apply to: `probe` derives its own from
-/// the cadence its runs were actually observed at, and `heartbeat`/`service`
-/// are not time series.
-/// Taken as plain values rather than read off `AppState` here, so the mapping
-/// can be asserted without standing one up: the bug this guards against is
-/// feeding a namespace the wrong cadence, not the arithmetic on it.
+/// The write cadence of whatever fills a namespace's table, in seconds. `None`
+/// where it does not apply: `heartbeat`/`service` are not time series. Takes
+/// plain values rather than `AppState` so the mapping is testable on its own.
 fn write_interval_secs(
     namespace: &str,
     stats_ms: u64,
@@ -296,18 +280,11 @@ fn series_of(namespace: &str) -> Option<(&'static str, Option<&'static str>)> {
     })
 }
 
-/// Whether a key the resolver stopped returning still exists in its series at
-/// all, ignoring how old its newest sample is.
-///
-/// A key leaves the resolver's output for two opposite reasons once a freshness
-/// window applies, and they need opposite answers. A container that was removed
-/// has no condition left to meet, so resolving its rule states a fact. A
-/// container that is still there and simply stopped being sampled is a gap in
-/// what we know, and calling that a recovery converts a monitoring failure into
-/// an all-clear — the one direction a monitoring tool must never round toward.
-///
-/// Anything unparseable answers "gone", which is the behaviour that existed
-/// before the window and cannot be made worse by a bad label set.
+/// Whether a key the resolver stopped returning still exists in its series,
+/// ignoring how old its newest sample is. A removed target has no condition
+/// left to meet and its rule resolves; one that merely stopped being sampled
+/// holds its state, since calling that a recovery would report an all-clear
+/// nobody observed. Unparseable answers "gone".
 pub(crate) async fn key_still_present(pool: &SqlitePool, namespace: &str, label_set: &str) -> bool {
     let Some((table, key_column)) = series_of(namespace) else {
         return false;

@@ -37,14 +37,9 @@ const RANK_LEDGER: u8 = 0;
 const RANK_ALERT: u8 = 1;
 const RANK_INCIDENT: u8 = 2;
 
-/// The point the previous page stopped at, in the order `(ts DESC, rank ASC,
-/// id DESC)`.
-///
-/// A timestamp alone cannot be the cursor. Timestamps are not unique and the
-/// collision is routine rather than theoretical: an alert firing and the
-/// incident capture it triggers land in the same second, in two different
-/// stores. Cutting on `ts` alone then either drops whatever shares the boundary
-/// or returns it twice.
+/// Where the previous page stopped, in the order `(ts DESC, rank ASC, id DESC)`.
+/// A timestamp alone would drop or repeat whatever shares the boundary second,
+/// and an alert firing lands in the same second as the capture it triggers.
 #[derive(Clone, Copy)]
 struct Cursor {
     ts: i64,
