@@ -47,18 +47,73 @@ impl ServiceState {
 #[serde(rename_all = "snake_case")]
 pub enum ServiceBackend {
     Systemd,
+    /// Not `open_rc`: the tool spells itself OpenRC, and this is the value
+    /// clients have always been served.
+    #[serde(rename = "openrc")]
     OpenRc,
     WindowsScm,
     Unknown,
 }
 
 impl ServiceBackend {
+    /// Must stay identical to what the `snake_case` rename above produces:
+    /// `ServiceDto` builds `backend` from this rather than serialising the
+    /// enum, so a disagreement here means the wire value depends on which
+    /// path a response happened to take. `windows_scm` read `windowsscm`
+    /// until the web client's declared union caught it.
     pub fn as_str(&self) -> &'static str {
         match self {
             ServiceBackend::Systemd => "systemd",
             ServiceBackend::OpenRc => "openrc",
-            ServiceBackend::WindowsScm => "windowsscm",
+            ServiceBackend::WindowsScm => "windows_scm",
             ServiceBackend::Unknown => "unknown",
+        }
+    }
+}
+
+#[cfg(test)]
+mod wire_value_tests {
+    use super::*;
+
+    /// The DTO path and the serde path have to name the same thing. Both of
+    /// these enums reach clients through `as_str` (via `ServiceDto`) while
+    /// still deriving `Serialize`, so nothing but a test stops the two from
+    /// drifting — which is exactly how `windowsscm` shipped.
+    #[test]
+    fn backend_as_str_matches_serde() {
+        for backend in [
+            ServiceBackend::Systemd,
+            ServiceBackend::OpenRc,
+            ServiceBackend::WindowsScm,
+            ServiceBackend::Unknown,
+        ] {
+            let serialised = serde_json::to_string(&backend).expect("enum serialises");
+            assert_eq!(
+                serialised.trim_matches('"'),
+                backend.as_str(),
+                "{backend:?} disagrees between as_str and serde"
+            );
+        }
+    }
+
+    #[test]
+    fn state_as_str_matches_serde() {
+        for state in [
+            ServiceState::Running,
+            ServiceState::Stopped,
+            ServiceState::Starting,
+            ServiceState::Stopping,
+            ServiceState::Paused,
+            ServiceState::Failed,
+            ServiceState::Reloading,
+            ServiceState::Unknown,
+        ] {
+            let serialised = serde_json::to_string(&state).expect("enum serialises");
+            assert_eq!(
+                serialised.trim_matches('"'),
+                state.as_str(),
+                "{state:?} disagrees between as_str and serde"
+            );
         }
     }
 }
