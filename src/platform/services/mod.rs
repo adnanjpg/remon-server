@@ -56,11 +56,8 @@ pub enum ServiceBackend {
 }
 
 impl ServiceBackend {
-    /// Must stay identical to what the `snake_case` rename above produces:
-    /// `ServiceDto` builds `backend` from this rather than serialising the
-    /// enum, so a disagreement here means the wire value depends on which
-    /// path a response happened to take. `windows_scm` read `windowsscm`
-    /// until the web client's declared union caught it.
+    /// Must match the `snake_case` rename above: `ServiceDto` builds `backend`
+    /// from this rather than serialising the enum.
     pub fn as_str(&self) -> &'static str {
         match self {
             ServiceBackend::Systemd => "systemd",
@@ -75,10 +72,7 @@ impl ServiceBackend {
 mod wire_value_tests {
     use super::*;
 
-    /// The DTO path and the serde path have to name the same thing. Both of
-    /// these enums reach clients through `as_str` (via `ServiceDto`) while
-    /// still deriving `Serialize`, so nothing but a test stops the two from
-    /// drifting — which is exactly how `windowsscm` shipped.
+    /// Nothing but this test stops the two encodings from drifting apart.
     #[test]
     fn backend_as_str_matches_serde() {
         for backend in [
