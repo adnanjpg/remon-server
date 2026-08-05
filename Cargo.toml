@@ -57,7 +57,7 @@ tokio = { version = "1.53", features = [
     "io-util",
     "process",
 ] }
-tokio-stream = { version = "0.1.18", features = ["sync", "io-util"] }
+tokio-stream = { version = "0.1", features = ["sync", "io-util"] }
 colored = "3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "tracing-log"] }
