@@ -46,7 +46,8 @@ fn ts_limit(limit: u32, keys: i64) -> i64 {
     if keys <= 1 {
         return limit;
     }
-    (MAX_RESPONSE_ROWS / keys).clamp(1, limit)
+    // Not `clamp(1, limit)`: `limit` is request input, and zero inverts the bounds.
+    (MAX_RESPONSE_ROWS / keys).max(1).min(limit)
 }
 
 impl MetricsRepository {

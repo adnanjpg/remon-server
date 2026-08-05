@@ -73,6 +73,45 @@ async fn a_large_key_count_bounds_the_response_instead_of_the_timestamps() {
     );
 }
 
+/// `?limit=0` reaches the budget with a bound of zero; `clamp(1, limit)` panicked on it.
+#[tokio::test]
+async fn a_zero_limit_yields_an_empty_page_rather_than_a_panic() {
+    let app = TestApp::spawn().await;
+    let now = chrono::Utc::now().timestamp();
+    // Enough keys to get past the `keys <= 1` shortcut and into the budget.
+    seed_cores(&app, now, 10, 8).await;
+
+    let rows = MetricsRepository::new(app.state.db.clone())
+        .read_cpu_cores(now - 3600, now, 0)
+        .await
+        .expect("read cores");
+    assert!(rows.is_empty());
+}
+
+/// The same input over the wire.
+#[tokio::test]
+async fn the_cores_endpoint_survives_a_zero_limit() {
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let now = chrono::Utc::now().timestamp();
+    seed_cores(&app, now, 10, 8).await;
+
+    let (status, body) = app
+        .request(
+            "GET",
+            &format!(
+                "/metrics/cpu/cores?start={}&end={}&limit=0",
+                now - 3600,
+                now
+            ),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["points"].as_array().expect("points array").len(), 0);
+}
+
 /// An empty window reports zero keys; the caller's limit has to survive that
 /// rather than collapse to a single point.
 #[tokio::test]
