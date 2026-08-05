@@ -7,18 +7,15 @@ edition = "2024"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-panic = "abort"
+panic = "unwind" # a panic costs one task, not the daemon
 strip = "symbols"
 
-# Optimised like release, but without the fat-LTO link the shipped profile
-# pays. Measurements taken under `dev` are meaningless — SQLite itself is
-# compiled at opt-level 0 there — and a full release build is too slow to sit
-# in a measure-change-measure loop. Used by the `dbbench` suite.
+# Release without the fat-LTO link, for the `dbbench` suite: `dev` compiles
+# SQLite at opt-level 0, and a full release build is too slow to iterate on.
 [profile.bench-fast]
 inherits = "release"
 lto = false
 codegen-units = 16
-panic = "unwind"
 strip = "none"
 debug-assertions = false
 
@@ -30,7 +27,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 config = "0.15"
 axum = { version = "0.8.9", features = ["ws"] }
 tower = { version = "0.5.3", features = ["util"] }
-tower-http = { version = "0.7", features = ["trace", "compression-gzip", "compression-br", "compression-zstd", "cors", "limit", "timeout"] }
+tower-http = { version = "0.7", features = ["trace", "compression-gzip", "compression-br", "compression-zstd", "cors", "limit", "timeout", "catch-panic"] }
 jsonwebtoken = { version = "11", features = ["rust_crypto"] }
 reqwest = { version = "0.13", default-features = false, features = [
     "rustls",
@@ -84,8 +81,7 @@ docker = ["dep:bollard"]
 windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     "Win32_Foundation",
-    # Resident-set readout for the measurement suite; SQLite's page cache is
-    # per connection and there is no SQL-visible counter for what it holds.
+    # Resident-set readout for the measurement suite.
     "Win32_System_ProcessStatus",
 ] }
 

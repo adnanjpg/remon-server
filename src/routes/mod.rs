@@ -9,8 +9,9 @@ mod cors;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::{Router, http::StatusCode};
+use axum::{Router, http::StatusCode, response::IntoResponse};
 use tower_http::LatencyUnit;
+use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::compression::{
     CompressionLayer,
     predicate::{DefaultPredicate, NotForContentType, Predicate},
@@ -23,6 +24,16 @@ use tracing::Level;
 use crate::config::Config;
 use crate::request_log;
 use crate::state::AppState;
+
+/// Turn a panicking handler into a 500 for that request rather than a dead daemon.
+fn panic_to_500(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
+    let payload = err
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| err.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "non-string panic payload".to_string());
+    crate::error::AppError::Internal(format!("handler panicked: {payload}")).into_response()
+}
 
 /// Assemble the full application router: REST (with request timeouts) merged
 /// with the long-lived SSE/WS streams, wrapped in the shared tower-http stack.
@@ -59,6 +70,8 @@ pub fn build_app(app_state: Arc<AppState>, config: &Config) -> anyhow::Result<Ro
         .with_state(app_state)
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(compression)
+        // Inside trace and CORS so its 500 is logged and a browser can read it.
+        .layer(CatchPanicLayer::custom(panic_to_500))
         // SSE/WS browser clients authenticate via query string and
         // heartbeat pings carry their capability slug in the path, so
         // scrub both before the URI reaches stdout or DB-backed logs.
@@ -84,4 +97,28 @@ pub fn build_app(app_state: Arc<AppState>, config: &Config) -> anyhow::Result<Ro
         .layer(cors_layer);
 
     Ok(app)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::Body, http::Request, routing::get};
+    use tower::ServiceExt;
+
+    async fn boom() -> axum::response::Response {
+        panic!("boom")
+    }
+
+    #[tokio::test]
+    async fn a_panicking_handler_answers_500_instead_of_taking_the_process() {
+        let app = Router::new()
+            .route("/boom", get(boom))
+            .layer(CatchPanicLayer::custom(panic_to_500));
+
+        let resp = app
+            .oneshot(Request::builder().uri("/boom").body(Body::empty()).unwrap())
+            .await
+            .expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }

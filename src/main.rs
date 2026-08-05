@@ -81,6 +81,8 @@ async fn main() -> std::process::ExitCode {
         }
     };
 
+    install_panic_logger();
+
     if let Err(e) = run(config, log_rx).await {
         // A requested restart comes back as an error only so it can carry an
         // exit code out; it is not a failure and must not be logged as one.
@@ -93,6 +95,15 @@ async fn main() -> std::process::ExitCode {
     }
 
     std::process::ExitCode::SUCCESS
+}
+
+/// Log panics, which unwinding otherwise loses along with the task.
+fn install_panic_logger() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        error!("panic: {info}");
+        default(info);
+    }));
 }
 
 /// Per-worker flush budget. Both together must fit inside the supervisor's
