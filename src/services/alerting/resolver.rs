@@ -326,19 +326,6 @@ pub async fn resolve_with_state(
     state: &crate::state::AppState,
     metric: &MetricRef,
 ) -> Result<Vec<ResolvedSample>, ResolveError> {
-    // Hot host-metric namespaces resolve from the live in-memory snapshot the
-    // stats collector maintains (`stats_latest`, refreshed every tick) — the
-    // current value for alerting is already in RAM, so the evaluator needn't
-    // round-trip to the DB every tick. Only always-present fields take this
-    // path; optional/enriched fields (steal, iowait, inode_used_percent, …)
-    // and the boot window (snapshot not yet populated) fall through to the DB
-    // query, which preserves the latest-non-null fallback the resolver
-    // guarantees. See `resolve_from_snapshot`.
-    if let Some(snap) = state.stats_latest.read().await.clone()
-        && let Some(result) = resolve_from_snapshot(metric, &snap)
-    {
-        return result;
-    }
     use std::sync::atomic::Ordering;
     let since = match write_interval_secs(
         &metric.namespace,
@@ -349,6 +336,27 @@ pub async fn resolve_with_state(
         Some(secs) => freshness_since(chrono::Utc::now().timestamp(), secs),
         None => i64::MIN,
     };
+
+    // Hot host-metric namespaces resolve from the live in-memory snapshot the
+    // stats collector maintains (`stats_latest`, refreshed every tick) — the
+    // current value for alerting is already in RAM, so the evaluator needn't
+    // round-trip to the DB every tick. Only always-present fields take this
+    // path; optional/enriched fields (steal, iowait, inode_used_percent, …)
+    // and the boot window (snapshot not yet populated) fall through to the DB
+    // query, which preserves the latest-non-null fallback the resolver
+    // guarantees. See `resolve_from_snapshot`.
+    //
+    // Held to the same window as the DB path: nothing clears the snapshot, so
+    // a collector that dies or stalls leaves its last tick readable forever,
+    // and every rule on a hot namespace would keep evaluating that one value.
+    // The whole bundle is written per tick, so `cpu` carries its age.
+    if let Some(snap) = state.stats_latest.read().await.clone()
+        && snap.cpu.timestamp >= since
+        && let Some(result) = resolve_from_snapshot(metric, &snap)
+    {
+        return result;
+    }
+
     resolve_inner(&state.db, Some(&state.service_manager), metric, since).await
 }
 

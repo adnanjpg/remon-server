@@ -9,6 +9,7 @@
 //! This is the integration tier of the test pyramid; the per-module `#[cfg]`
 //! unit tests cover pure logic (parsing, expressions, filters) underneath.
 
+mod alert_resolver;
 mod alerts_api;
 mod assistant_api;
 mod assistant_tools;
