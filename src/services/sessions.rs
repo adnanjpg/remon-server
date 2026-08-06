@@ -12,9 +12,12 @@ use crate::storage::repositories::DeviceRepository;
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(3600);
 
 pub fn spawn(state: Arc<AppState>) {
-    tokio::spawn(async move {
-        run(state).await;
-    });
+    crate::supervision::supervise(
+        "session cleanup",
+        tokio::spawn(async move {
+            run(state).await;
+        }),
+    );
 }
 
 async fn run(state: Arc<AppState>) {

@@ -396,7 +396,10 @@ fn classify_startup(
 /// a future addition.
 pub fn spawn_system_event_sweep(state: Arc<AppState>) {
     #[cfg(any(target_os = "linux", windows))]
-    tokio::spawn(system_event_sweep_loop(state));
+    crate::supervision::supervise(
+        "system event sweep",
+        tokio::spawn(system_event_sweep_loop(state)),
+    );
     #[cfg(not(any(target_os = "linux", windows)))]
     let _ = state;
 }

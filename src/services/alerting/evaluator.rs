@@ -63,7 +63,10 @@ const FALLBACK_TICK: Duration = Duration::from_secs(2);
 const RELOAD_EVERY: Duration = Duration::from_secs(30);
 
 pub fn spawn(state: Arc<AppState>) {
-    tokio::spawn(async move { run(state).await });
+    crate::supervision::supervise(
+        "alert evaluator",
+        tokio::spawn(async move { run(state).await }),
+    );
 }
 
 /// In-memory lifecycle for one `(rule, label_set)` — the persisted

@@ -15,9 +15,12 @@ use crate::state::AppState;
 use crate::storage::repositories::{MetricsRepository, RetentionRepository};
 
 pub fn spawn(state: Arc<AppState>) {
-    tokio::spawn(async move {
-        run(state).await;
-    });
+    crate::supervision::supervise(
+        "retention pass",
+        tokio::spawn(async move {
+            run(state).await;
+        }),
+    );
 }
 
 async fn run(state: Arc<AppState>) {

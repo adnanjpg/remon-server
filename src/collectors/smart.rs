@@ -51,7 +51,10 @@ pub fn spawn(state: Arc<AppState>, cfg: SmartConfig) {
         info!("SMART collector disabled by config");
         return;
     }
-    tokio::spawn(async move { run(state, cfg).await });
+    crate::supervision::supervise(
+        "smart collector",
+        tokio::spawn(async move { run(state, cfg).await }),
+    );
 }
 
 async fn run(state: Arc<AppState>, cfg: SmartConfig) {

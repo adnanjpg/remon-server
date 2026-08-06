@@ -202,7 +202,7 @@ const WRITE_BATCH: usize = 64;
 /// there is no time-based buffering to lose on crash.
 pub fn start_db_writer(mut rx: mpsc::Receiver<AppLog>, pool: SqlitePool) {
     let repo = LogRepository::new(pool);
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let mut buf: Vec<AppLog> = Vec::with_capacity(WRITE_BATCH);
         loop {
             buf.clear();
@@ -241,6 +241,7 @@ pub fn start_db_writer(mut rx: mpsc::Receiver<AppLog>, pool: SqlitePool) {
             }
         }
     });
+    crate::supervision::supervise("log writer", handle);
 }
 
 /// Map the `monitoring.log_insertion_level` config string to a tracing Level.

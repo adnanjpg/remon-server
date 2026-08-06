@@ -8,10 +8,14 @@ use log::info;
 use std::sync::Arc;
 
 use crate::state::AppState;
+use crate::supervision::supervise;
 
 pub fn spawn_all(state: Arc<AppState>) {
     // System stats collector
-    tokio::spawn(stats::run(Arc::clone(&state)));
+    supervise(
+        "stats collector",
+        tokio::spawn(stats::run(Arc::clone(&state))),
+    );
 
     // Container stats (Docker/Podman); exits quietly if the daemon is absent.
     #[cfg(feature = "docker")]
@@ -23,7 +27,10 @@ pub fn spawn_all(state: Arc<AppState>) {
     // hosts with very large process tables; off, GET /processes falls back
     // to on-demand refresh with TTL caching.
     if state.assistant_config.process_history {
-        tokio::spawn(processes::run(Arc::clone(&state)));
+        supervise(
+            "process collector",
+            tokio::spawn(processes::run(Arc::clone(&state))),
+        );
     }
 
     info!("collectors started");

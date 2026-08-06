@@ -26,7 +26,10 @@ use crate::storage::repositories::{DockerMetricsRepository, DockerStatsRow};
 const MIN_INTERVAL_MS: u64 = 1000;
 
 pub fn spawn(state: Arc<AppState>) {
-    tokio::spawn(async move { run(state).await });
+    crate::supervision::supervise(
+        "docker collector",
+        tokio::spawn(async move { run(state).await }),
+    );
 }
 
 async fn run(state: Arc<AppState>) {

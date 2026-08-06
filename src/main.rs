@@ -32,6 +32,7 @@ mod request_log;
 mod services;
 mod shutdown;
 mod storage;
+mod supervision;
 
 use std::time::Duration;
 
@@ -125,6 +126,7 @@ const DRAIN_BUDGET: Duration = Duration::from_secs(15);
 async fn stop_worker(handle: tokio::task::JoinHandle<()>, budget: Duration, what: &str) {
     match tokio::time::timeout(budget, handle).await {
         Ok(Ok(())) => {}
+        Ok(Err(e)) if e.is_panic() => error!("{what} had panicked; its queue was never drained"),
         Ok(Err(e)) => warn!("{what} did not shut down cleanly: {e}"),
         Err(_) => warn!("{what} still busy after {budget:?}; abandoning what it had queued"),
     }

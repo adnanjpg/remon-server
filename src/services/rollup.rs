@@ -121,9 +121,12 @@ fn fold_sql(table: &str, key: Option<&str>, fields: &[Field]) -> String {
 }
 
 pub fn spawn(state: Arc<AppState>) {
-    tokio::spawn(async move {
-        run(state).await;
-    });
+    crate::supervision::supervise(
+        "rollup pass",
+        tokio::spawn(async move {
+            run(state).await;
+        }),
+    );
 }
 
 async fn run(state: Arc<AppState>) {
