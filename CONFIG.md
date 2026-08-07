@@ -114,6 +114,43 @@ The shipped default (`allow_any_origin = false`, empty list) is the tightest pol
 
 Note that a web UI served over HTTPS cannot call a server over plain HTTP — browsers block the mixed content outright, with no override. Either terminate TLS in front of the server, or serve the UI from the same origin.
 
+### Alert expressions
+
+Rules are `metric comparator threshold`, e.g. `cpu.usage_percent > 80` or `disk.used_percent{mount_point="/"} > 90`.
+
+A metric on its own is read **at the tick** — whatever the gauge says the moment the rule evaluates. That makes the rule's sensitivity depend on `eval_interval_secs`, not just the threshold: a signal that spikes for two seconds between two ten-second polls is invisible, and a rule with a non-zero `for_duration_secs` can never fire on it because it needs the violation present at two consecutive polls.
+
+Wrap the metric in `max(…)`, `min(…)` or `avg(…)` with a window to aggregate every raw sample in the span instead:
+
+```
+max(cpu.usage_percent, 30s) > 80      # any sample in the last 30s cleared 80
+avg(cpu.load_1m, 5m) > 8              # sustained, not a momentary peak
+min(memory.available_bytes, 1m) < 536870912
+```
+
+Windows accept `s` / `m` / `h`, cap at 1 hour, and read the `raw` tier. Available on `cpu`, `memory`, `disk`, `network`, `pressure`, `docker` and `process` — the namespaces that keep sample history; `probe`, `heartbeat`, `service`, `smart` and `components` reject a window with a 400. `GET /alerts/schema` publishes the list for rule editors.
+
+Use a window for spiky signals (CPU, load, I/O rates) and leave slow-moving ones (disk fill) bare with a `for_duration_secs` instead.
+
+### `[liveness]`
+Outbound dead-man's switch. remon pings `url` on a schedule; an external service alarms when the pings stop.
+
+- `url` — push endpoint; empty (default) disables it
+- `interval_secs` — seconds between pings (default 60)
+- `timeout_secs` — per-ping timeout, must be below `interval_secs` (default 10)
+
+This covers the one outage remon cannot report itself. Every alert rule is evaluated by a task *inside* the daemon, so when the host dies the evaluator dies with it: the outage produces no notification and is only discovered afterwards, from the boot event written once it is over. Don't confuse it with heartbeat checks (`heartbeat_checks`, the `heartbeat` alert namespace) — those are the inbound mirror, where an external job proves its liveness to remon and remon's own tick is the clock.
+
+Works with any push-monitoring endpoint that treats "no request" as the failure — healthchecks.io, Uptime Kuma push monitors, Better Stack, Cronitor:
+
+```toml
+[liveness]
+url = "https://hc-ping.com/<your-uuid>"
+interval_secs = 60
+```
+
+Set the grace period on the receiving end, not here — that grace decides how fast an outage is reported, and it should be a few multiples of `interval_secs` so one dropped packet doesn't page you. A non-empty `url` that is unparseable, non-HTTP(S), or paired with a timeout at or above the interval fails boot rather than leaving you uncovered.
+
 ## Runtime config (DB-backed, no restart)
 
 Everything above is boot-time TOML. A separate set of knobs lives in the database, applies live, and is meant to be driven from the web UI:
