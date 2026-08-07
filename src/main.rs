@@ -366,6 +366,7 @@ async fn run(
     services::retention::spawn(app_state.clone());
     services::alerts::spawn(app_state.clone());
     services::sessions::spawn(app_state.clone());
+    services::liveness::spawn(app_state.clone(), config.liveness.clone());
     info!("rollup, retention, alert evaluator, and session cleanup workers spawned");
 
     let _ = probes::scheduler::load_and_spawn(

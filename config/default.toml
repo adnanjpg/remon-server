@@ -144,3 +144,19 @@ process_history = true
 # by K, never by the host's process count. 0 disables; needs process_history.
 # Env: REMON__ASSISTANT__PROCESS_SERIES_TOP_K
 process_series_top_k = 20
+
+[liveness]
+# Outbound dead-man's switch: ping `url` on a schedule so an external service
+# raises the alarm when the pings stop. Covers the one outage this daemon
+# cannot report itself — its own. Works with any push endpoint that treats "no
+# request" as failure: healthchecks.io, Uptime Kuma push, Better Stack,
+# Cronitor. Empty = disabled.
+# Env: REMON__LIVENESS__URL
+url = ""
+# Seconds between pings. Keep it well under the grace period on the receiving
+# end — that grace, not this, decides how fast an outage is reported.
+# Env: REMON__LIVENESS__INTERVAL_SECS
+interval_secs = 60
+# Per-ping timeout; must be less than interval_secs.
+# Env: REMON__LIVENESS__TIMEOUT_SECS
+timeout_secs = 10

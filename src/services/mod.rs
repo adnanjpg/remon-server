@@ -3,6 +3,7 @@ pub mod alerts;
 pub mod docker;
 pub mod events;
 pub mod incidents;
+pub mod liveness;
 pub mod logging;
 pub mod process;
 pub mod retention;

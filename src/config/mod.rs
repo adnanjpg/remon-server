@@ -33,6 +33,83 @@ pub struct Config {
     pub assistant: AssistantConfig,
     #[serde(default)]
     pub control: ControlConfig,
+    #[serde(default)]
+    pub liveness: LivenessConfig,
+}
+
+/// Outbound dead-man's switch — see `[liveness]` in `config/default.toml`.
+///
+/// No SSRF policy: `url` comes from config/env only, never the API, and
+/// pinging Uptime Kuma on the LAN is the common deployment.
+#[derive(Debug, Deserialize, Clone)]
+pub struct LivenessConfig {
+    /// Push-monitoring endpoint. Empty disables the pinger.
+    #[serde(default)]
+    pub url: String,
+    #[serde(default = "default_liveness_interval_secs")]
+    pub interval_secs: u64,
+    #[serde(default = "default_liveness_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+impl LivenessConfig {
+    pub fn enabled(&self) -> bool {
+        !self.url.trim().is_empty()
+    }
+
+    /// Empty `url` means "no dead-man" and passes. A non-empty one is a
+    /// request for coverage, and every way of getting it wrong looks the same
+    /// from outside — nothing pings, invisibly. Same call `server.host` gets.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if !self.enabled() {
+            return Ok(());
+        }
+        let url = self.url.trim();
+        let parsed = reqwest::Url::parse(url)
+            .map_err(|e| ConfigError::Message(format!("invalid liveness.url '{url}': {e}")))?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(ConfigError::Message(format!(
+                "invalid liveness.url '{url}': expected an http or https URL, got scheme '{}'",
+                parsed.scheme()
+            )));
+        }
+        if self.interval_secs == 0 {
+            return Err(ConfigError::Message(
+                "liveness.interval_secs must be greater than 0".to_string(),
+            ));
+        }
+        if self.timeout_secs == 0 {
+            return Err(ConfigError::Message(
+                "liveness.timeout_secs must be greater than 0".to_string(),
+            ));
+        }
+        // A timeout at or past the interval lets one hung ping eat the next slot.
+        if self.timeout_secs >= self.interval_secs {
+            return Err(ConfigError::Message(format!(
+                "liveness.timeout_secs ({}) must be less than liveness.interval_secs ({})",
+                self.timeout_secs, self.interval_secs
+            )));
+        }
+        Ok(())
+    }
+}
+
+fn default_liveness_interval_secs() -> u64 {
+    60
+}
+
+fn default_liveness_timeout_secs() -> u64 {
+    10
+}
+
+impl Default for LivenessConfig {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            interval_secs: default_liveness_interval_secs(),
+            timeout_secs: default_liveness_timeout_secs(),
+        }
+    }
 }
 
 /// Guard rails on the endpoints that change the host rather than report on it.
@@ -363,6 +440,7 @@ impl Config {
 
         let cfg: Self = config.try_deserialize()?;
         cfg.server.bind_addr()?;
+        cfg.liveness.validate()?;
         Ok(cfg)
     }
 }
