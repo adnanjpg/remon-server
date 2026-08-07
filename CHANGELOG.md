@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.20.2] - 2026-08-07
+
+### Added
+
+- **Windowed aggregates, so `for_duration_secs` means what it looks like it means.** The evaluator compares the *instantaneous* value at each tick, which quietly makes a rule's sensitivity a function of its poll rate rather than its threshold: a spike shorter than `eval_interval_secs` is either missed outright or seen exactly once, and a rule needing two consecutive violating ticks can then never fire on it however severe it is. Measured on a live host — `cpu.usage_percent > 80`, `for 10s`, `eval 10s`, samples every 2s — 24 hours held 43,991 samples, exactly two above the threshold, neither consecutive; a day with fourteen threshold crossings peaked at a 26.8% five-minute average. Seventeen days produced twelve incident captures and no alert events, and nothing in the state row said the rule had stopped being able to fire. `max(…)`, `min(…)` and `avg(…)` over a window now read every raw sample in the span instead of the one that landed under the poll: `max(cpu.usage_percent, 30s) > 80`. Windows cap at an hour and are limited to the namespaces that keep sample history, which the rule editor learns from `GET /alerts/schema`; a window over one that doesn't is a 400 at write time rather than a warning on every tick.
+
+- **An outbound dead-man's switch, for the one outage this daemon cannot report itself.** Every alert rule is evaluated by a task inside the process, so when the host dies the evaluator dies with it: the outage produces no notification at all and surfaces only afterwards, from the boot event written once it is already over. Observed on a live host — a nine-minute reboot window passed with a correct `clean_shutdown` verdict, a matching metric gap and a `host_rebooted` marker, and not one thing sent while it was happening. `[liveness]` inverts the direction: remon pings a push endpoint on a schedule and *absence* becomes the signal, so healthchecks.io, Uptime Kuma or Better Stack raises the alarm on remon's behalf. Off by default; a non-empty `url` that is unparseable, non-HTTP(S), or paired with a timeout at or above the interval fails boot rather than leaving the operator believing they are covered. A ping carries no health verdict on purpose — gating it on host health would fold a sick host and a dead one into the same silence. This is not the existing `heartbeat_checks`, which is the inbound mirror and stops when we do.
+
 ## [0.19.0] - 2026-07-28
 
 ### Fixed
