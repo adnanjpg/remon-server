@@ -1,9 +1,13 @@
 //! Expression DSL — parser, AST, and evaluator for the comparison.
 //!
-//! v1 grammar (recursive-descent friendly):
+//! Grammar (recursive-descent friendly):
 //!
 //! ```text
-//! rule       := metric_ref WS comparator WS number
+//! rule       := operand WS comparator WS number
+//! operand    := aggregate | metric_ref
+//! aggregate  := agg_fn "(" WS metric_ref WS "," WS duration WS ")"
+//! agg_fn     := "max" | "min" | "avg"
+//! duration   := [0-9]+ ( "s" | "m" | "h" )
 //! metric_ref := ident "." ident label_set?
 //! label_set  := "{" pair ( "," pair )* "}"
 //! pair       := ident "=" '"' string '"'
@@ -94,10 +98,66 @@ impl fmt::Display for MetricRef {
     }
 }
 
-/// One parsed rule: `metric_ref comparator threshold`.
+/// Aggregate applied over a window of raw samples.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Aggregate {
+    Max,
+    Min,
+    Avg,
+}
+
+impl Aggregate {
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "max" => Some(Aggregate::Max),
+            "min" => Some(Aggregate::Min),
+            "avg" => Some(Aggregate::Avg),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Aggregate::Max => "max",
+            Aggregate::Min => "min",
+            Aggregate::Avg => "avg",
+        }
+    }
+
+    /// The SQL function to wrap the column expression in.
+    pub fn sql_fn(self) -> &'static str {
+        match self {
+            Aggregate::Max => "MAX",
+            Aggregate::Min => "MIN",
+            Aggregate::Avg => "AVG",
+        }
+    }
+}
+
+/// Longest window allowed. Windows read the `raw` tier, whose retention is
+/// operator-tunable and defaults to a day; past an hour a rule would quietly
+/// aggregate over whatever survived the sweep.
+pub const MAX_WINDOW_SECS: i64 = 3600;
+
+/// `max(cpu.usage_percent, 30s)` — an aggregate over the last `secs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Window {
+    pub agg: Aggregate,
+    pub secs: i64,
+}
+
+/// One parsed rule: `operand comparator threshold`.
+///
+/// `window` is what makes `for_duration_secs` mean what it looks like it
+/// means. Without one the evaluator compares the *instantaneous* value at each
+/// tick, so a spike shorter than `eval_interval_secs` is either missed or seen
+/// exactly once — and a rule needing two consecutive violating ticks can never
+/// fire on it, however severe. A window looks at every raw sample in the span
+/// instead of the one that happened to land under the poll.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expression {
     pub metric: MetricRef,
+    pub window: Option<Window>,
     pub comparator: Comparator,
     pub threshold: f64,
 }
@@ -125,7 +185,7 @@ impl std::error::Error for ParseError {}
 pub fn parse(input: &str) -> Result<Expression, ParseError> {
     let mut p = Parser::new(input);
     p.skip_ws();
-    let metric = p.parse_metric_ref()?;
+    let (metric, window) = p.parse_operand()?;
     p.skip_ws();
     let comparator = p.parse_comparator()?;
     p.skip_ws();
@@ -136,6 +196,7 @@ pub fn parse(input: &str) -> Result<Expression, ParseError> {
     }
     Ok(Expression {
         metric,
+        window,
         comparator,
         threshold,
     })
@@ -216,6 +277,70 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(self.src[start..self.pos].to_string())
+    }
+
+    /// `max(cpu.usage_percent, 30s)` or a bare `cpu.usage_percent`.
+    ///
+    /// An aggregate name is only an aggregate when a `(` follows; a namespace
+    /// needs a `.` next, so rewinding on anything else keeps the two apart
+    /// without reserving the words.
+    fn parse_operand(&mut self) -> Result<(MetricRef, Option<Window>), ParseError> {
+        let start = self.pos;
+        if let Ok(ident) = self.parse_ident()
+            && let Some(agg) = Aggregate::parse(&ident)
+            && self.peek() == Some('(')
+        {
+            self.bump();
+            self.skip_ws();
+            let metric = self.parse_metric_ref()?;
+            self.skip_ws();
+            if !self.eat(",") {
+                return Err(self.err("expected ',' after the metric in an aggregate"));
+            }
+            self.skip_ws();
+            let secs = self.parse_duration()?;
+            self.skip_ws();
+            if !self.eat(")") {
+                return Err(self.err("expected ')' to close the aggregate"));
+            }
+            return Ok((metric, Some(Window { agg, secs })));
+        }
+        self.pos = start;
+        Ok((self.parse_metric_ref()?, None))
+    }
+
+    /// `30s` / `5m` / `1h`, in seconds. A bare number is rejected — the unit
+    /// is what stops `max(cpu.usage_percent, 5)` reading as five minutes.
+    fn parse_duration(&mut self) -> Result<i64, ParseError> {
+        let start = self.pos;
+        while self.peek().is_some_and(|c| c.is_ascii_digit()) {
+            self.bump();
+        }
+        if self.pos == start {
+            return Err(self.err("expected a window duration, e.g. 30s / 5m / 1h"));
+        }
+        let digits: i64 = self.src[start..self.pos]
+            .parse()
+            .map_err(|_| self.err("window duration is out of range"))?;
+        let mult = match self.peek() {
+            Some('s') => 1,
+            Some('m') => 60,
+            Some('h') => 3600,
+            _ => {
+                return Err(self.err("window duration needs a unit: 's', 'm' or 'h'"));
+            }
+        };
+        self.bump();
+        let secs = digits.saturating_mul(mult);
+        if secs == 0 {
+            return Err(self.err("window duration must be greater than 0"));
+        }
+        if secs > MAX_WINDOW_SECS {
+            return Err(self.err(format!(
+                "window duration {secs}s exceeds the {MAX_WINDOW_SECS}s maximum"
+            )));
+        }
+        Ok(secs)
     }
 
     fn parse_metric_ref(&mut self) -> Result<MetricRef, ParseError> {
@@ -390,6 +515,75 @@ mod tests {
         assert!(e.metric.labels.is_empty());
         assert_eq!(e.comparator, Comparator::Gt);
         assert_eq!(e.threshold, 80.0);
+        assert_eq!(e.window, None, "a bare metric stays instantaneous");
+    }
+
+    #[test]
+    fn aggregate_over_a_window() {
+        let e = must_parse("max(cpu.usage_percent, 30s) > 80");
+        assert_eq!(e.metric.namespace, "cpu");
+        assert_eq!(e.metric.field, "usage_percent");
+        assert_eq!(
+            e.window,
+            Some(Window {
+                agg: Aggregate::Max,
+                secs: 30
+            })
+        );
+        assert_eq!(e.threshold, 80.0);
+
+        for (src, agg) in [
+            ("min(memory.available_bytes, 5m) < 1000", Aggregate::Min),
+            ("avg(cpu.load_1m, 1h) > 4", Aggregate::Avg),
+        ] {
+            assert_eq!(must_parse(src).window.unwrap().agg, agg);
+        }
+    }
+
+    #[test]
+    fn window_units_and_labels() {
+        assert_eq!(must_parse("max(a.b, 45s) > 1").window.unwrap().secs, 45);
+        assert_eq!(must_parse("max(a.b, 5m) > 1").window.unwrap().secs, 300);
+        assert_eq!(must_parse("max(a.b, 1h) > 1").window.unwrap().secs, 3600);
+
+        let e = must_parse("avg(disk.used_percent{mount_point=\"/\"}, 5m) > 90");
+        assert_eq!(e.metric.labels.get("mount_point"), Some(&"/".to_string()));
+        assert_eq!(e.window.unwrap().secs, 300);
+    }
+
+    /// `max` is only a function when a `(` follows, so nothing stops a future
+    /// namespace or field from being spelled the same way.
+    #[test]
+    fn aggregate_names_are_not_reserved() {
+        let e = must_parse("max.avg > 1");
+        assert_eq!(e.metric.namespace, "max");
+        assert_eq!(e.metric.field, "avg");
+        assert_eq!(e.window, None);
+    }
+
+    #[test]
+    fn malformed_windows_rejected() {
+        for src in [
+            // A bare number would silently pick a unit for the operator.
+            "max(cpu.usage_percent, 5) > 80",
+            "max(cpu.usage_percent, 5d) > 80",
+            "max(cpu.usage_percent, 0s) > 80",
+            "max(cpu.usage_percent) > 80",
+            "max(cpu.usage_percent, 30s > 80",
+            "avg(cpu.usage_percent, ) > 80",
+            // Past the cap a window reads whatever survived raw retention.
+            "max(cpu.usage_percent, 2h) > 80",
+        ] {
+            assert!(parse(src).is_err(), "expected '{src}' to be rejected");
+        }
+        // The cap itself is inclusive.
+        assert_eq!(
+            must_parse("max(cpu.usage_percent, 3600s) > 80")
+                .window
+                .unwrap()
+                .secs,
+            MAX_WINDOW_SECS
+        );
     }
 
     #[test]

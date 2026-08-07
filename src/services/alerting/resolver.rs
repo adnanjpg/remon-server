@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use sqlx::SqlitePool;
 
-use super::expression::MetricRef;
+use super::expression::{MetricRef, Window};
 use crate::models::stats::{
     AllStats, CpuStats, DiskStats, MemoryStats, NetworkStats, PressureStats,
 };
@@ -358,6 +358,113 @@ pub async fn resolve_with_state(
     }
 
     resolve_inner(&state.db, Some(&state.service_manager), metric, since).await
+}
+
+/// Aggregate every raw sample in `window` into one value per natural key.
+///
+/// The instantaneous path reads whatever the gauge happens to say at the tick,
+/// so a spike shorter than `eval_interval_secs` is invisible to a rule that
+/// needs two consecutive violating ticks. This reads the samples between the
+/// ticks instead.
+///
+/// Restricted to the namespaces with a history descriptor — probe / heartbeat /
+/// service are not time series, and smart / components move far slower than any
+/// window worth writing. A key with no sample in the window yields no sample at
+/// all, which the evaluator's prune treats as "stale, hold state" rather than a
+/// recovery.
+pub async fn resolve_windowed(
+    state: &crate::state::AppState,
+    metric: &MetricRef,
+    window: &Window,
+) -> Result<Vec<ResolvedSample>, ResolveError> {
+    let (table, fields, computed, label_col) =
+        history_descriptor(&metric.namespace).ok_or_else(|| {
+            ResolveError::msg(format!(
+                "namespace '{}' has no sample history, so it cannot be aggregated over a window; \
+                 drop the {}(…) wrapper",
+                metric.namespace,
+                window.agg.as_str()
+            ))
+        })?;
+
+    let column = check_field(metric, fields)?;
+    let expr: &str = computed
+        .iter()
+        .find_map(|(name, e)| (*name == column).then_some(*e))
+        .unwrap_or(column);
+    let agg = window.agg.sql_fn();
+    let since = chrono::Utc::now().timestamp() - window.secs;
+
+    let Some(keycol) = label_col else {
+        if !metric.labels.is_empty() {
+            return Err(ResolveError::msg(format!(
+                "namespace '{}' has no label dimensions; remove the label set",
+                metric.namespace
+            )));
+        }
+        let sql = format!(
+            "SELECT CAST({agg}({expr}) AS REAL) FROM {table}
+              WHERE resolution = 'raw' AND ({expr}) IS NOT NULL AND timestamp >= ?"
+        );
+        let value: Option<f64> =
+            sqlx::query_scalar::<_, Option<f64>>(sqlx::AssertSqlSafe(sql.as_str()))
+                .bind(since)
+                .fetch_one(&state.db)
+                .await
+                .map_err(|e| ResolveError::msg(e.to_string()))?;
+        return Ok(value
+            .map(|v| ResolvedSample {
+                label_set: "{}".to_string(),
+                value: v,
+                meta: None,
+            })
+            .into_iter()
+            .collect());
+    };
+
+    let mut filter_value: Option<&str> = None;
+    for (k, v) in &metric.labels {
+        if k == keycol {
+            filter_value = Some(v.as_str());
+        } else {
+            return Err(ResolveError::msg(format!(
+                "namespace '{}' supports only the '{}' label, got '{}'",
+                metric.namespace, keycol, k
+            )));
+        }
+    }
+    let where_label = if filter_value.is_some() {
+        format!("AND {keycol} = ?")
+    } else {
+        String::new()
+    };
+    let sql = format!(
+        "SELECT {keycol}, CAST({agg}({expr}) AS REAL) FROM {table}
+          WHERE resolution = 'raw' AND ({expr}) IS NOT NULL
+            AND timestamp >= ? {where_label}
+          GROUP BY {keycol}"
+    );
+    let mut q = sqlx::query_as::<_, (String, f64)>(sqlx::AssertSqlSafe(sql.as_str())).bind(since);
+    if let Some(v) = filter_value {
+        q = q.bind(v);
+    }
+    let rows = q
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| ResolveError::msg(e.to_string()))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(key, value)| {
+            let mut labels = BTreeMap::new();
+            labels.insert(keycol.to_string(), key);
+            ResolvedSample {
+                label_set: canonical_labels(&labels),
+                value,
+                meta: None,
+            }
+        })
+        .collect())
 }
 
 async fn resolve_inner(

@@ -309,7 +309,10 @@ pub fn definitions(state: &AppState) -> Value {
                 "description": "Draft a new alert rule for the operator to confirm (it is NOT \
         created until they do). The expression is 'metric.field [labels] <op> number', e.g. \
         'cpu.usage_percent > 90' or 'disk.used_percent{mount_point=\"/\"} >= 95'; ops are > >= < <= == !=. \
-        Same namespaces/fields as query_metric.",
+        Same namespaces/fields as query_metric. A bare metric is read at the evaluation tick, so a \
+        signal that spikes between ticks (cpu, load, i/o rates) needs a window instead: \
+        'max(cpu.usage_percent, 30s) > 80', also min/avg, units s/m/h, max 1h, on \
+        cpu/memory/disk/network/pressure/docker/process only.",
                 "parameters": {
                     "type": "object",
                     "properties": {

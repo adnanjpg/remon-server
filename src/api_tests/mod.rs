@@ -10,6 +10,7 @@
 //! unit tests cover pure logic (parsing, expressions, filters) underneath.
 
 mod alert_resolver;
+mod alert_window;
 mod alerts_api;
 mod assistant_api;
 mod assistant_tools;

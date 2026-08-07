@@ -22,10 +22,10 @@ use serde::Deserialize;
 
 use crate::error::{AppError, AppResult};
 use crate::routes::dtos::alerts::{
-    AlertEventDto, AlertRuleDto, AlertStateDto, AlertsSchemaResponse, ComparatorSchemaDto,
-    CreateAlertRuleRequest, LabelSchemaDto, LabelSourceDto, ListAlertEventsResponse,
-    ListAlertRulesResponse, ListAlertStateResponse, MetricSchemaDto, NamespaceSchemaDto,
-    SilenceAlertRequest, UpdateAlertRuleRequest, state_dto_from,
+    AggregateSchemaDto, AlertEventDto, AlertRuleDto, AlertStateDto, AlertsSchemaResponse,
+    ComparatorSchemaDto, CreateAlertRuleRequest, LabelSchemaDto, LabelSourceDto,
+    ListAlertEventsResponse, ListAlertRulesResponse, ListAlertStateResponse, MetricSchemaDto,
+    NamespaceSchemaDto, SilenceAlertRequest, UpdateAlertRuleRequest, state_dto_from,
 };
 use crate::routes::extractors::Claims;
 use crate::services::alerting::{expression, resolver};
@@ -68,7 +68,14 @@ async fn validate(
 ) -> AppResult<()> {
     let expr = expression::parse(req_expression)
         .map_err(|e| AppError::BadRequest(format!("expression: {}", e)))?;
-    if let Err(e) = resolver::resolve_with_state(state, &expr.metric).await {
+    // Resolve down the same path the evaluator will, so a window over a
+    // namespace that has no sample history is a 400 here rather than a warning
+    // on every tick of a rule that can never fire.
+    let dry = match &expr.window {
+        Some(w) => resolver::resolve_windowed(state, &expr.metric, w).await,
+        None => resolver::resolve_with_state(state, &expr.metric).await,
+    };
+    if let Err(e) = dry {
         return Err(AppError::BadRequest(format!("expression: {}", e.message)));
     }
     if !(MIN_EVAL_INTERVAL..=MAX_EVAL_INTERVAL).contains(&eval_secs) {
@@ -951,6 +958,25 @@ fn build_alerts_schema() -> AlertsSchemaResponse {
                 }],
             },
         ],
+        aggregates: vec![
+            AggregateSchemaDto {
+                name: "max",
+                display: "highest sample in the window",
+            },
+            AggregateSchemaDto {
+                name: "min",
+                display: "lowest sample in the window",
+            },
+            AggregateSchemaDto {
+                name: "avg",
+                display: "mean over the window",
+            },
+        ],
+        // Mirrors `history_descriptor` in the resolver — keep both in sync.
+        window_namespaces: vec![
+            "cpu", "memory", "disk", "network", "pressure", "docker", "process",
+        ],
+        max_window_secs: expression::MAX_WINDOW_SECS,
         comparators: vec![
             ComparatorSchemaDto {
                 op: ">",

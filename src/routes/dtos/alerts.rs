@@ -168,6 +168,17 @@ pub struct ListAlertEventsResponse {
 pub struct AlertsSchemaResponse {
     pub namespaces: Vec<NamespaceSchemaDto>,
     pub comparators: Vec<ComparatorSchemaDto>,
+    /// Optional `agg(metric, window)` wrappers, e.g. `max(cpu.usage_percent,
+    /// 30s) > 80`. Only the namespaces in `window_namespaces` accept one.
+    pub aggregates: Vec<AggregateSchemaDto>,
+    pub window_namespaces: Vec<&'static str>,
+    pub max_window_secs: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AggregateSchemaDto {
+    pub name: &'static str,
+    pub display: &'static str,
 }
 
 #[derive(Debug, Serialize)]

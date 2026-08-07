@@ -399,9 +399,11 @@ async fn evaluate_rule(
     persist_all: bool,
     now: i64,
 ) -> Result<(), String> {
-    let samples = resolver::resolve_with_state(state, &expr.metric)
-        .await
-        .map_err(|e| e.message)?;
+    let samples = match &expr.window {
+        Some(w) => resolver::resolve_windowed(state, &expr.metric, w).await,
+        None => resolver::resolve_with_state(state, &expr.metric).await,
+    }
+    .map_err(|e| e.message)?;
 
     let mut seen: HashSet<String> = HashSet::new();
 
