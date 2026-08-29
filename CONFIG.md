@@ -16,12 +16,14 @@ Resolved once at startup, in this order:
 
 1. `--config-dir` / `--data-dir`, or `REMON_CONFIG_DIR` / `REMON_DATA_DIR`
 2. a working directory containing `config/default.toml` — a repo checkout, so
-   paths stay relative to it (`./config`, `./db`, `./probes`)
+   paths stay relative to it (`./config`, `./db`, `./probes`, `./actions`)
 3. otherwise `/etc/remon` and `/var/lib/remon` when running as root, the
    per-user XDG directories when not, `%ProgramData%\remon` on Windows
 
 Probes live in `<config-dir>/probes`, or `./probes` in a checkout;
-`REMON_PROBES_DIR` overrides it independently.
+`REMON_PROBES_DIR` overrides it independently. Alert-action scripts sit
+beside them in `<config-dir>/actions` (`./actions` in a checkout), with
+`REMON_ACTIONS_DIR` as the equivalent override.
 
 Paths inside the config are resolved against the data directory when relative
 and honoured as-is when absolute, so `database.path` can point at another
@@ -150,6 +152,24 @@ interval_secs = 60
 ```
 
 Set the grace period on the receiving end, not here — that grace decides how fast an outage is reported, and it should be a few multiples of `interval_secs` so one dropped packet doesn't page you. A non-empty `url` that is unparseable, non-HTTP(S), or paired with a timeout at or above the interval fails boot rather than leaving you uncovered.
+
+### `[actions]`
+Ceilings on the alert-action engine — what a firing rule is allowed to *do*, as distinct from who it tells. The bindings themselves are API objects (`POST /alerts/{id}/actions`); everything here is a host-level limit on them, and deliberately config-only so an operator with rule-CRUD permission cannot widen the blast radius the host was deployed with.
+
+- `enabled` — master switch (default `true`). `false` keeps recording proposals and history but executes nothing: the way to take every remediation on the box out of the loop at once, mid-incident, without editing bindings one by one
+- `auto` — whether `mode = "auto"` bindings may run unattended (default **`false`**). A binding can be `auto` on a host where this is off; it then records a skip saying so rather than quietly acting
+- `proposal_ttl_secs` — how long an unconfirmed proposal stays offered, 60..604800 (default 1800). Past it the run is marked `expired` and shows on the timeline as such
+- `max_concurrent` — concurrent executions across all bindings, 1..16 (default 2)
+
+The default posture is that nothing runs unattended. A `manual` binding — the default mode — clears every guardrail and then still only drafts a proposal and pages an operator; it runs when someone POSTs to `/actions/runs/{id}/confirm`. Turning `auto` on is a separate, deliberate decision, and it is still bounded per-binding by `cooldown_secs`, `max_runs_per_hour` and `failure_limit` (the circuit breaker that disarms a binding after enough consecutive failures).
+
+```toml
+[actions]
+enabled = true
+auto = false            # arm this only once dry runs have convinced you
+proposal_ttl_secs = 1800
+max_concurrent = 2
+```
 
 ## Runtime config (DB-backed, no restart)
 

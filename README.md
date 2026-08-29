@@ -13,6 +13,7 @@ Server component of Remon — a self-hosted system monitoring platform. Exposes 
 - **Docker / Podman** — container lifecycle, logs, stats, exec over WebSocket; optional at compile time (`--no-default-features`)
 - **Alert engine** — expression-based rules (`cpu.usage_percent > 80`), pending/firing/ok lifecycle, configurable for-duration and cooldown; optional windowed aggregates (`max(cpu.usage_percent, 30s) > 80`) for signals that spike between evaluation ticks
 - **Host-event timeline** — `GET /events` unions system events (boot/powercycle detection, OOM kills, SMART health transitions), alert fire/resolve, incident captures, and an operator audit trail (who restarted what, from which device) into one stream, ready for chart annotations
+- **Alert actions** — the other end of the fanout: a firing rule can run a script or a service/container lifecycle call, not just page someone. Manual-by-default (propose → operator confirms), with dry-run, per-binding cooldown and hourly ceilings, and a circuit breaker that disarms an action that keeps failing
 - **Notification channels** — FCM, Telegram, ntfy, webhook; managed via REST API
 - **Custom probes** — shell scripts with inline YAML header; drop into `probes/`, hot-reload via `POST /probes/reload`
 - **Heartbeat checks** — push-model dead-man's switches for cron jobs and external services: `curl` a capability URL on schedule, alert when it goes quiet (`heartbeat.up < 1`); pause windows for planned downtime, service-announced via the same URL
@@ -173,6 +174,67 @@ Operator pauses (`POST /heartbeats/{id}/pause`, indefinite allowed) always
 override service-announced ones. When a pause expires the check gets one
 fresh `period + grace` before it can go down — maintenance ending is not an
 instant page.
+
+## Alert Actions
+
+The other end of the alert fanout. A notification decides *who is told*; an
+action decides *what happens*. Both hang off the same transitions, so an
+action inherits the rule's `for_duration` debounce, its per-label_set
+lifecycle, and its silence window — nothing re-decides "is this really broken
+yet" in a second place.
+
+A binding names either a **script** from the actions directory, or one entry
+of the **built-in catalogue** (`service` / `container` × `start|stop|restart|reload`),
+routed to the same calls `/services/{name}/{verb}` and `/docker/*` make.
+
+```sh
+# Bind: restart nginx when the rule fires. Defaults to mode=manual.
+curl -X POST http://localhost:8080/alerts/7/actions \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"kind":"service","target":"nginx.service","verb":"restart"}'
+
+curl .../actions                      # what can be run, and the host's ceilings
+curl '.../actions/runs?status=pending'   # proposals awaiting an answer
+curl -X POST .../actions/runs/12/confirm # approve one — responds with the outcome
+curl -X POST .../actions/runs/12/dismiss # decline it
+curl -X POST .../actions/bindings/3/run  # "does this actually work"
+```
+
+**Nothing runs unattended by default.** `mode` is the dial:
+
+| mode | what a firing rule does |
+|---|---|
+| `manual` *(default)* | drafts a proposal, pages an operator, waits for a confirm; expires unanswered |
+| `dry_run` | records what it *would* have run, and stops |
+| `auto` | runs immediately — and only if `actions.auto = true` on the host |
+
+The intended path is `dry_run` → read a week of `/actions/runs` → `manual` →
+`auto`. Every unattended run must additionally clear: single-flight per
+(binding, target), the binding's `cooldown_secs`, its `max_runs_per_hour`,
+and a circuit breaker that disarms it after `failure_limit` consecutive
+failures and says so. An action may never stop or restart remon-server
+itself. Every decision — including every refusal, with its reason — lands in
+`action_runs` and on the `/events` timeline, so "why didn't it restart?"
+has an answer.
+
+Custom actions are probe-shaped: drop a script in the actions directory
+(`./actions` in a checkout, `/etc/remon/actions` when installed) with an
+inline header, then `POST /actions/reload`.
+
+```sh
+# @action name=reclaim-disk
+# @action timeout_ms=120000
+# @action platforms=linux
+
+# The alert arrives as environment: REMON_EVENT, REMON_RULE, REMON_SEVERITY,
+# REMON_VALUE, REMON_LABELS (JSON) and REMON_LABEL_<KEY> per label.
+[ "$REMON_LABEL_MOUNT_POINT" = "/" ] && journalctl --vacuum-time=7d
+```
+
+Exit 0 is success; anything else counts against the breaker. See
+`actions/examples/` for two worked ones. Scripts run through the same sandbox
+as probes — argv only (never a shell), a wall-clock timeout, an optional
+`run_as_user` privilege drop and `memory_limit_mb` cap.
 
 ## Build without Docker
 
