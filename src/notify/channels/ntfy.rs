@@ -53,10 +53,10 @@ impl NtfyChannel {
 }
 
 fn priority(n: &Notification) -> &'static str {
-    use NotificationEvent::{Fired, HostEvent};
+    use NotificationEvent::{ActionRequired, Fired, HostEvent};
     match (n.event, n.severity) {
-        (Fired | HostEvent, Severity::Crit) => "urgent",
-        (Fired | HostEvent, Severity::Warn) => "high",
+        (Fired | HostEvent | ActionRequired, Severity::Crit) => "urgent",
+        (Fired | HostEvent | ActionRequired, Severity::Warn) => "high",
         (NotificationEvent::Resolved, _) => "low",
     }
 }
@@ -65,6 +65,8 @@ fn tags(n: &Notification) -> &'static str {
     match n.event {
         NotificationEvent::Fired => "rotating_light",
         NotificationEvent::HostEvent => "warning",
+        // A question, not a report — the icon says "you have a decision".
+        NotificationEvent::ActionRequired => "question",
         NotificationEvent::Resolved => "white_check_mark",
     }
 }

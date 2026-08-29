@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE action_runs\n                SET status = 'running', origin = 'confirmed', requested_by = ?,\n                    started_at = ?, expires_at = NULL\n              WHERE id = ? AND status = 'pending'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "bb0328abd26df1ac4deb92dd556eeec74fc8302fd06012ddf479ea2ea1bd67c7"
+}

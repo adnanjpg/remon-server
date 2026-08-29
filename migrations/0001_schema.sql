@@ -144,7 +144,10 @@ INSERT INTO retention_policy (resource, resolution, keep_seconds) VALUES
     ('probe',        'raw', 86400),
     ('smart',        'raw', 31536000),
     ('alert_events', 'raw', 7776000),
-    ('host_events',  'raw', 7776000);
+    ('host_events',  'raw', 7776000),
+    -- Same window as the alert events they answer: an action run read without
+    -- the fire that drafted it says nothing about why it happened.
+    ('action_runs',  'raw', 7776000);
 
 -- ─── ROLLUP STATE ───────────────────────────────────────────────────────────
 CREATE TABLE rollup_state (
@@ -557,6 +560,112 @@ CREATE TABLE alert_events (
 );
 CREATE INDEX idx_alert_events_rule ON alert_events(rule_id, occurred_at DESC);
 CREATE INDEX idx_alert_events_ts   ON alert_events(occurred_at DESC);
+
+-- ─── ALERT ACTIONS ──────────────────────────────────────────────────────────
+-- The other end of the alert fanout: a notification tells a human, an action
+-- does something about it. Bindings hang off a rule, not off a probe — the
+-- lifecycle (for_duration debounce, cooldown, silence, per-label_set state)
+-- already lives in `alert_rules` + `alert_state`, and re-deriving "is this
+-- really broken yet" in a second place would be the same logic, worse.
+--
+-- Two kinds of thing can be run:
+--   * `script`    — an operator-authored file in the actions directory, run
+--                   by the probe runner (argv only, no shell, timeout,
+--                   optional privilege drop). `action_target` = manifest name.
+--   * `service` / `container` — the built-in catalog, routed to the same
+--                   ServiceManager / docker calls the REST API uses, so the
+--                   permission and audit story is identical to an operator
+--                   pressing the button. `action_target` = unit / container,
+--                   `action_verb` = which button.
+--
+-- Nothing here executes on its own authority. `mode` decides:
+--   * `manual` (default) — the transition drafts an `action_runs` row in
+--                   `pending` and pages an operator; it runs only when
+--                   someone confirms it, and expires unconfirmed.
+--   * `auto`    — runs immediately, under every guardrail below.
+--   * `dry_run` — records what would have run and stops. For building trust
+--                   in a binding before arming it.
+CREATE TABLE alert_actions (
+    id            INTEGER PRIMARY KEY,
+    rule_id       INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+    action_kind   TEXT    NOT NULL CHECK (action_kind IN ('script','service','container')),
+    action_target TEXT    NOT NULL,
+    -- NULL for scripts (the script *is* the verb); required for the catalog.
+    action_verb   TEXT,
+    on_event      TEXT    NOT NULL DEFAULT 'fired'
+                    CHECK (on_event IN ('fired','resolved','both')),
+    mode          TEXT    NOT NULL DEFAULT 'manual'
+                    CHECK (mode IN ('manual','auto','dry_run')),
+    enabled       INTEGER NOT NULL DEFAULT 1,
+
+    -- Guardrails. Deliberately per-binding rather than global: "restart the
+    -- worker" and "page the on-call script" do not deserve the same leash.
+    -- Minimum spacing between runs of this binding for the same label_set.
+    -- Independent of the rule's notification cooldown — how often you want to
+    -- hear about something and how often you want to act on it are different
+    -- questions.
+    cooldown_secs     INTEGER NOT NULL DEFAULT 300 CHECK (cooldown_secs >= 0),
+    -- Ceiling across all label_sets, counted over a trailing hour. The stop
+    -- against a flapping rule turning into a restart loop.
+    max_runs_per_hour INTEGER NOT NULL DEFAULT 3 CHECK (max_runs_per_hour >= 1),
+    -- Circuit breaker: after this many consecutive failed runs the binding
+    -- disables itself and says so. An automation that cannot fix the problem
+    -- and will not stop trying is a second incident on top of the first.
+    failure_limit     INTEGER NOT NULL DEFAULT 3 CHECK (failure_limit >= 1),
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    -- Set when the breaker (or any other automatic path) flipped `enabled`
+    -- off, so the UI can distinguish "operator turned this off" from "this
+    -- turned itself off, here's why". Cleared on re-enable.
+    disabled_reason   TEXT,
+
+    created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at    INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX idx_alert_actions_rule ON alert_actions(rule_id, enabled);
+
+-- Append-only ledger of every action the engine drafted, ran, refused or
+-- skipped. Also the pending queue: a `manual` binding's proposal lives here
+-- in `pending` until an operator confirms it, dismisses it, or it expires.
+-- Denormalized like `alert_events` — a row still says what it was about
+-- after its binding or rule is deleted.
+CREATE TABLE action_runs (
+    id            INTEGER PRIMARY KEY,
+    action_id     INTEGER REFERENCES alert_actions(id) ON DELETE SET NULL,
+    rule_id       INTEGER REFERENCES alert_rules(id) ON DELETE SET NULL,
+    rule_name     TEXT    NOT NULL,
+    label_set     TEXT    NOT NULL DEFAULT '{}',
+    action_kind   TEXT    NOT NULL,
+    action_target TEXT    NOT NULL,
+    action_verb   TEXT,
+    -- Which transition drafted this. `manual` = an operator ran the binding
+    -- from the API with no transition behind it (the "test this" path).
+    trigger_event TEXT    NOT NULL CHECK (trigger_event IN ('fired','resolved','manual')),
+    -- How it came to run, once it did: unattended, or a confirmed proposal.
+    origin        TEXT    NOT NULL CHECK (origin IN ('auto','confirmed','dry_run')),
+    -- Device that confirmed (or directly requested) the run; NULL for auto.
+    requested_by  TEXT,
+    status        TEXT    NOT NULL
+                    CHECK (status IN ('pending','running','succeeded','failed',
+                                      'skipped','expired','dismissed')),
+    -- Only set on `pending` rows: past this the proposal is no longer
+    -- offered. A remediation confirmed an hour after the fact is acting on
+    -- a host that has moved on.
+    expires_at    INTEGER,
+    started_at    INTEGER,
+    finished_at   INTEGER,
+    duration_ms   INTEGER,
+    exit_code     INTEGER,
+    -- One-line outcome for the timeline; `output_tail` is the bounded tail of
+    -- stdout/stderr, same treatment probe output gets.
+    message       TEXT,
+    output_tail   TEXT,
+    created_at    INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX idx_action_runs_created ON action_runs(created_at DESC);
+CREATE INDEX idx_action_runs_status  ON action_runs(status, created_at DESC);
+-- Serves both the cooldown probe and the single-flight check, which are the
+-- only queries on the transition hot path.
+CREATE INDEX idx_action_runs_binding ON action_runs(action_id, label_set, created_at DESC);
 
 -- ─── INCIDENT SNAPSHOTS ─────────────────────────────────────────────────────
 -- Flight-recorder captures: when an alert first crosses its threshold (or an

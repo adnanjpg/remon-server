@@ -9,6 +9,7 @@
 //! This is the integration tier of the test pyramid; the per-module `#[cfg]`
 //! unit tests cover pure logic (parsing, expressions, filters) underneath.
 
+mod actions_api;
 mod alert_resolver;
 mod alert_window;
 mod alerts_api;
@@ -46,7 +47,7 @@ use axum::{
 use serde_json::Value;
 use tower::ServiceExt;
 
-use crate::config::{AuthConfig, NotificationsConfig};
+use crate::config::{ActionsConfig, AuthConfig, NotificationsConfig};
 use crate::notify::NotificationManager;
 use crate::state::{AppState, EffectiveConfig};
 
@@ -86,7 +87,26 @@ impl TestApp {
     /// a real provider key from the environment; every other test takes the
     /// default (no key → the endpoint is inert).
     pub async fn spawn_with_assistant(assistant_config: crate::config::AssistantConfig) -> TestApp {
-        Self::build("sqlite::memory:", 1, assistant_config).await
+        Self::build(
+            "sqlite::memory:",
+            1,
+            assistant_config,
+            ActionsConfig::default(),
+        )
+        .await
+    }
+
+    /// Same as [`spawn`], but with the action engine configured. Action tests
+    /// use this to arm `auto` (off by default, as in production) or to shorten
+    /// the proposal TTL.
+    pub async fn spawn_with_actions(actions_config: ActionsConfig) -> TestApp {
+        Self::build(
+            "sqlite::memory:",
+            1,
+            crate::config::AssistantConfig::default(),
+            actions_config,
+        )
+        .await
     }
 
     /// Same wiring over a caller-supplied database URL. The measurement suite
@@ -99,6 +119,7 @@ impl TestApp {
             db_url,
             max_connections,
             crate::config::AssistantConfig::default(),
+            ActionsConfig::default(),
         )
         .await
     }
@@ -107,6 +128,7 @@ impl TestApp {
         db_url: &str,
         max_connections: u32,
         assistant_config: crate::config::AssistantConfig,
+        actions_config: ActionsConfig,
     ) -> TestApp {
         let db = crate::storage::Database::connect(db_url, max_connections)
             .await
@@ -130,6 +152,7 @@ impl TestApp {
         let service_manager =
             crate::platform::services::factory::create(&crate::platform::init::detect()).await;
         let probe_registry = crate::probes::registry::new_registry();
+        let action_registry = crate::actions::registry::new_registry();
 
         let vapid = Arc::new(
             crate::services::webpush::load_or_generate(db.pool())
@@ -162,6 +185,8 @@ impl TestApp {
             hardware,
             service_manager,
             probe_registry,
+            action_registry,
+            actions_config,
             notify,
             notify_queue,
             ledger_queue,

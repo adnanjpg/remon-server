@@ -14,9 +14,15 @@
 //!
 //! Severity is never computed here. "Warn / crit" is the alert engine's
 //! job — see `services/alerts.rs` and `alert_rules.metric_type='probe'`.
+//!
+//! Underneath both sits `execute_capture(&ExecSpec)` — spawn, drain, wait,
+//! kill-on-timeout, with no opinion about what the output means. Remediation
+//! actions (`services/actions.rs`) run their scripts through it too, so the
+//! process sandbox has one implementation rather than two that drift.
 
+use std::collections::HashMap;
 use std::process::Stdio;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use log::warn;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
@@ -28,19 +34,102 @@ use crate::models::probe::{ProbeMetric, ProbeOutput, ProbeRun};
 
 use super::manifest::Manifest;
 
-/// Configure a `tokio::process::Command` for a probe — common to
-/// oneshot and stream paths. Sets piped stdio, env, kill-on-drop, and
-/// (on Unix) installs the pre_exec hook for setpgid/setrlimit/setuid.
-fn configure_command(probe: &Manifest, kill_on_drop: bool) -> Result<Command, String> {
-    let exe = probe
+/// How much of a child's stdout we keep. Probes shouldn't print megabytes,
+/// but the drain never stops early regardless — see `read_to_string_capped`.
+pub const STDOUT_CAP: usize = 64 * 1024;
+/// Same for stderr, which we only ever quote a tail of.
+pub const STDERR_CAP: usize = 8 * 1024;
+
+/// The subset of a manifest the process layer actually needs: what to run and
+/// under what limits. Probes and remediation actions both hand one of these
+/// down, so the sandbox (new process group, address-space cap, privilege
+/// drop, kill-on-timeout) is written once and both inherit every fix to it.
+pub struct ExecSpec<'a> {
+    /// Only used in log lines — the manifest's name.
+    pub name: &'a str,
+    pub command: &'a [String],
+    pub env: &'a HashMap<String, String>,
+    pub timeout: Duration,
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub run_as_user: Option<&'a str>,
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub memory_limit_mb: Option<u64>,
+}
+
+/// Raw outcome of running one child to completion — no interpretation.
+/// The probe path turns this into a `ProbeRun` + metrics; the action path
+/// turns it into an `ExecutionResult`.
+pub struct Capture {
+    pub duration_ms: i64,
+    /// `None` when the child was killed (timeout) or never started.
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub stdout: String,
+    pub stderr: String,
+    /// Set when the child never started at all — empty argv, a `run_as_user`
+    /// that isn't on this host, or a failed `spawn()`. Distinct from "ran and
+    /// failed": there is no exit code to report and nothing was executed.
+    pub spawn_error: Option<String>,
+}
+
+impl Capture {
+    fn not_started(duration_ms: i64, message: String) -> Self {
+        Self {
+            duration_ms,
+            exit_code: None,
+            timed_out: false,
+            stdout: String::new(),
+            stderr: String::new(),
+            spawn_error: Some(message),
+        }
+    }
+
+    /// Best one-line explanation of a non-success, for a run row's `message`.
+    /// Prefers the spawn error, then the timeout, then the stderr tail.
+    pub fn failure_message(&self) -> String {
+        if let Some(e) = &self.spawn_error {
+            return e.clone();
+        }
+        if self.timed_out {
+            return format!("timed out after {}ms", self.duration_ms);
+        }
+        let code = self
+            .exit_code
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "?".into());
+        let tail = self.stderr.trim();
+        if tail.is_empty() {
+            format!("exit {}", code)
+        } else {
+            format!("exit {}: {}", code, truncate(tail, 200))
+        }
+    }
+
+    /// Bounded tail of whatever the child said, stderr preferred — that is
+    /// where a failing script explains itself.
+    pub fn output_tail(&self, max: usize) -> Option<String> {
+        let text = if self.stderr.trim().is_empty() {
+            self.stdout.trim()
+        } else {
+            self.stderr.trim()
+        };
+        (!text.is_empty()).then(|| truncate(text, max))
+    }
+}
+
+/// Configure a `tokio::process::Command` — common to oneshot, stream and
+/// action paths. Sets piped stdio, env, kill-on-drop, and (on Unix) installs
+/// the pre_exec hook for setpgid/setrlimit/setuid.
+fn configure_command(spec: &ExecSpec<'_>, kill_on_drop: bool) -> Result<Command, String> {
+    let exe = spec
         .command
         .first()
         .ok_or_else(|| "command argv is empty".to_string())?;
-    let args = &probe.command[1..];
+    let args = &spec.command[1..];
 
     let mut cmd = Command::new(exe);
     cmd.args(args);
-    cmd.envs(&probe.env);
+    cmd.envs(spec.env);
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -57,7 +146,7 @@ fn configure_command(probe: &Manifest, kill_on_drop: bool) -> Result<Command, St
     //      in the parent) because getpwnam(3) is not async-signal-safe.
     #[cfg(unix)]
     {
-        let closure = unix_pre_exec_closure(probe).map_err(|m| format!("pre_exec setup: {}", m))?;
+        let closure = unix_pre_exec_closure(spec).map_err(|m| format!("pre_exec setup: {}", m))?;
         use std::os::unix::process::CommandExt;
         // SAFETY: every libc call in the closure is documented as
         // async-signal-safe (setpgid, setrlimit, setuid). No allocator,
@@ -71,36 +160,24 @@ fn configure_command(probe: &Manifest, kill_on_drop: bool) -> Result<Command, St
     Ok(cmd)
 }
 
-/// Run one probe to completion (or timeout). Never panics; failure
-/// modes land as `ProbeRun { parse_ok: false, exit_code: ... }` plus
-/// an empty metric vector.
-pub async fn execute(probe: &Manifest) -> (ProbeRun, Vec<ProbeMetric>) {
-    let now_ts = chrono::Utc::now().timestamp();
+/// Run one child to completion (or timeout) and hand back everything it
+/// produced, uninterpreted. Never panics: a child that could not start comes
+/// back as a `Capture` with `spawn_error` set rather than an `Err`, so every
+/// caller has exactly one shape to handle.
+pub async fn execute_capture(spec: &ExecSpec<'_>) -> Capture {
     let start = Instant::now();
 
-    let mut cmd = match configure_command(probe, false) {
+    let mut cmd = match configure_command(spec, false) {
         Ok(c) => c,
-        Err(msg) => {
-            return (
-                synth_run(probe, now_ts, 0, None, Some(&msg), false),
-                Vec::new(),
-            );
-        }
+        Err(msg) => return Capture::not_started(0, msg),
     };
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            return (
-                synth_run(
-                    probe,
-                    now_ts,
-                    start.elapsed().as_millis() as i64,
-                    None,
-                    Some(&format!("spawn failed: {}", e)),
-                    false,
-                ),
-                Vec::new(),
+            return Capture::not_started(
+                start.elapsed().as_millis() as i64,
+                format!("spawn failed: {}", e),
             );
         }
     };
@@ -117,37 +194,27 @@ pub async fn execute(probe: &Manifest) -> (ProbeRun, Vec<ProbeMetric>) {
     // EOF — when the child exits normally or we kill it on timeout below.
     let out_task = tokio::spawn(async move {
         match stdout {
-            Some(s) => read_to_string_capped(s, 64 * 1024).await,
+            Some(s) => read_to_string_capped(s, STDOUT_CAP).await,
             None => String::new(),
         }
     });
     let err_task = tokio::spawn(async move {
         match stderr {
-            Some(s) => read_to_string_capped(s, 8 * 1024).await,
+            Some(s) => read_to_string_capped(s, STDERR_CAP).await,
             None => String::new(),
         }
     });
 
-    let wait_result = timeout(probe.timeout, child.wait()).await;
+    let wait_result = timeout(spec.timeout, child.wait()).await;
     let dur_ms = start.elapsed().as_millis() as i64;
 
     let (exit_status, timed_out) = match wait_result {
         Ok(Ok(s)) => (Some(s), false),
         Ok(Err(e)) => {
-            warn!("probe '{}' wait failed: {}", probe.name, e);
+            warn!("'{}' wait failed: {}", spec.name, e);
             // Reap so the drain tasks see EOF and don't linger detached.
             let _ = child.kill().await;
-            return (
-                synth_run(
-                    probe,
-                    now_ts,
-                    dur_ms,
-                    None,
-                    Some(&format!("wait error: {}", e)),
-                    false,
-                ),
-                Vec::new(),
-            );
+            return Capture::not_started(dur_ms, format!("wait error: {}", e));
         }
         Err(_) => {
             // SIGKILL the child (and group on Unix) so it can't hang
@@ -167,20 +234,41 @@ pub async fn execute(probe: &Manifest) -> (ProbeRun, Vec<ProbeMetric>) {
     };
 
     // Child is gone (exited or killed) → pipes hit EOF → drains complete.
-    let stdout_text = out_task.await.unwrap_or_default();
-    let stderr_text = err_task.await.unwrap_or_default();
+    Capture {
+        duration_ms: dur_ms,
+        exit_code: exit_status.as_ref().and_then(|s| s.code()),
+        timed_out,
+        stdout: out_task.await.unwrap_or_default(),
+        stderr: err_task.await.unwrap_or_default(),
+        spawn_error: None,
+    }
+}
 
-    if timed_out {
+/// Run one probe to completion (or timeout) and interpret its stdout as the
+/// probe contract. Failure modes land as `ProbeRun { parse_ok: false,
+/// exit_code: ... }` plus an empty metric vector.
+pub async fn execute(probe: &Manifest) -> (ProbeRun, Vec<ProbeMetric>) {
+    let now_ts = chrono::Utc::now().timestamp();
+    let cap = execute_capture(&probe.exec_spec()).await;
+
+    if let Some(msg) = &cap.spawn_error {
+        return (
+            synth_run(probe, now_ts, cap.duration_ms, None, Some(msg), false),
+            Vec::new(),
+        );
+    }
+
+    if cap.timed_out {
         return (
             synth_run(
                 probe,
                 now_ts,
-                dur_ms,
+                cap.duration_ms,
                 None,
                 Some(&format!(
                     "timed out after {}ms; stderr tail: {}",
                     probe.timeout.as_millis(),
-                    truncate(&stderr_text, 200)
+                    truncate(&cap.stderr, 200)
                 )),
                 false,
             ),
@@ -188,17 +276,14 @@ pub async fn execute(probe: &Manifest) -> (ProbeRun, Vec<ProbeMetric>) {
         );
     }
 
-    let exit_code = exit_status.as_ref().and_then(|s| s.code());
-    let parsed = parse_last_json_line(&stdout_text);
-
-    match parsed {
+    match parse_last_json_line(&cap.stdout) {
         Some(out) => {
             let ts = out.timestamp.filter(|t| *t > 0).unwrap_or(now_ts);
             let run = ProbeRun {
                 probe_name: probe.name.clone(),
                 timestamp: ts,
-                duration_ms: dur_ms,
-                exit_code,
+                duration_ms: cap.duration_ms,
+                exit_code: cap.exit_code,
                 message: out.message,
                 parse_ok: true,
             };
@@ -208,19 +293,26 @@ pub async fn execute(probe: &Manifest) -> (ProbeRun, Vec<ProbeMetric>) {
             // No JSON object on the last stdout line. Surface the failure
             // so operators can spot a misbehaving probe from `parse_ok=0`
             // or the message text alone.
-            let msg = if exit_code.unwrap_or(0) == 0 {
+            let msg = if cap.exit_code.unwrap_or(0) == 0 {
                 "exit 0 but no parseable JSON object on the last line".to_string()
             } else {
                 format!(
                     "exit {} with no parseable JSON; stderr tail: {}",
-                    exit_code
+                    cap.exit_code
                         .map(|c| c.to_string())
                         .unwrap_or_else(|| "?".into()),
-                    truncate(&stderr_text, 200)
+                    truncate(&cap.stderr, 200)
                 )
             };
             (
-                synth_run(probe, now_ts, dur_ms, exit_code, Some(&msg), false),
+                synth_run(
+                    probe,
+                    now_ts,
+                    cap.duration_ms,
+                    cap.exit_code,
+                    Some(&msg),
+                    false,
+                ),
                 Vec::new(),
             )
         }
@@ -316,7 +408,7 @@ pub async fn execute_stream(probe: &Manifest, tx: mpsc::Sender<(ProbeRun, Vec<Pr
     let now_ts = chrono::Utc::now().timestamp();
     let probe_name = probe.name.clone();
 
-    let mut cmd = match configure_command(probe, true) {
+    let mut cmd = match configure_command(&probe.exec_spec(), true) {
         Ok(c) => c,
         Err(msg) => {
             let _ = tx
@@ -486,11 +578,11 @@ pub async fn execute_stream(probe: &Manifest, tx: mpsc::Sender<(ProbeRun, Vec<Pr
 /// `parse_ok=false` run-meta with a helpful message.
 #[cfg(unix)]
 fn unix_pre_exec_closure(
-    probe: &Manifest,
+    spec: &ExecSpec<'_>,
 ) -> Result<impl FnMut() -> std::io::Result<()> + Send + Sync + 'static, String> {
     // Resolve the target uid + primary gid before fork — getpwnam allocates
     // and is documented as not async-signal-safe.
-    let creds: Option<(libc::uid_t, libc::gid_t)> = match probe.run_as_user.as_deref() {
+    let creds: Option<(libc::uid_t, libc::gid_t)> = match spec.run_as_user {
         Some(name) => {
             let cname = std::ffi::CString::new(name)
                 .map_err(|e| format!("run_as_user '{}' has nul byte: {}", name, e))?;
@@ -514,7 +606,7 @@ fn unix_pre_exec_closure(
     // parent so the post-fork closure stays minimal.
     let is_root = unsafe { libc::geteuid() } == 0;
 
-    let limit_bytes: Option<libc::rlim_t> = probe
+    let limit_bytes: Option<libc::rlim_t> = spec
         .memory_limit_mb
         .map(|mb| (mb as libc::rlim_t).saturating_mul(1024 * 1024));
 

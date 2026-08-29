@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod admin;
 pub mod alerts;
 pub mod assistant;
@@ -253,6 +254,27 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
             "/alerts/{id}/silence",
             post(alerts::silence_alert).delete(alerts::unsilence_alert),
         )
+        // Alert actions — the other end of the fanout. A notification tells
+        // someone; a binding does something. Bindings hang off a rule, so
+        // they are created there and managed under /actions.
+        .route(
+            "/alerts/{id}/actions",
+            get(actions::list_bindings_for_rule).post(actions::create_binding),
+        )
+        .route("/actions", get(actions::list_catalog))
+        .route("/actions/reload", post(actions::reload_actions))
+        .route("/actions/bindings", get(actions::list_bindings))
+        .route("/actions/runs", get(actions::list_runs))
+        .route(
+            "/actions/bindings/{id}",
+            get(actions::get_binding)
+                .put(actions::update_binding)
+                .delete(actions::delete_binding),
+        )
+        .route("/actions/bindings/{id}/run", post(actions::run_binding))
+        .route("/actions/runs/{id}", get(actions::get_run))
+        .route("/actions/runs/{id}/confirm", post(actions::confirm_run))
+        .route("/actions/runs/{id}/dismiss", post(actions::dismiss_run))
         // Incident flight recorder — manual/external capture trigger.
         // Alert transitions capture on their own (services::incidents).
         .route("/incidents/capture", post(incidents::capture))

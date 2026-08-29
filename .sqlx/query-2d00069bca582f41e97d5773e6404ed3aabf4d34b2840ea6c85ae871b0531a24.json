@@ -1,0 +1,254 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, action_id, rule_id, rule_name, label_set, action_kind, action_target,\n                      action_verb, trigger_event, origin, requested_by, status, expires_at,\n                      started_at, finished_at, duration_ms, exit_code as \"exit_code: i32\",\n                      message, output_tail, created_at\n                 FROM action_runs\n                WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "action_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "action_id"
+          }
+        }
+      },
+      {
+        "name": "rule_id",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "rule_id"
+          }
+        }
+      },
+      {
+        "name": "rule_name",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "rule_name"
+          }
+        }
+      },
+      {
+        "name": "label_set",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "label_set"
+          }
+        }
+      },
+      {
+        "name": "action_kind",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "action_kind"
+          }
+        }
+      },
+      {
+        "name": "action_target",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "action_target"
+          }
+        }
+      },
+      {
+        "name": "action_verb",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "action_verb"
+          }
+        }
+      },
+      {
+        "name": "trigger_event",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "trigger_event"
+          }
+        }
+      },
+      {
+        "name": "origin",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "origin"
+          }
+        }
+      },
+      {
+        "name": "requested_by",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "requested_by"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "expires_at",
+        "ordinal": 12,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "name": "started_at",
+        "ordinal": 13,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "name": "finished_at",
+        "ordinal": 14,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "finished_at"
+          }
+        }
+      },
+      {
+        "name": "duration_ms",
+        "ordinal": 15,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "duration_ms"
+          }
+        }
+      },
+      {
+        "name": "exit_code: i32",
+        "ordinal": 16,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "exit_code"
+          }
+        }
+      },
+      {
+        "name": "message",
+        "ordinal": 17,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "message"
+          }
+        }
+      },
+      {
+        "name": "output_tail",
+        "ordinal": 18,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "output_tail"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 19,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "action_runs",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "2d00069bca582f41e97d5773e6404ed3aabf4d34b2840ea6c85ae871b0531a24"
+}

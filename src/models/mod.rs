@@ -1,3 +1,4 @@
+pub mod action;
 pub mod alert;
 pub mod auth;
 pub mod heartbeat;

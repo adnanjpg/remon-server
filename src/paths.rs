@@ -10,8 +10,8 @@
 //! 1. **Explicit** — `--config-dir` / `--data-dir`, or `REMON_CONFIG_DIR` /
 //!    `REMON_DATA_DIR`. Always wins.
 //! 2. **Checkout** — the working directory contains `config/default.toml`.
-//!    Resolves to `./config`, `./db`, `./probes` exactly as before, so
-//!    `cargo run` in the repo is unchanged.
+//!    Resolves to `./config`, `./db`, `./probes`, `./actions` exactly as
+//!    before, so `cargo run` in the repo is unchanged.
 //! 3. **Installed** — `/etc/remon` + `/var/lib/remon` for a privileged
 //!    process, per-user XDG directories otherwise, `%ProgramData%\remon` on
 //!    Windows.
@@ -29,6 +29,9 @@ pub struct Paths {
     pub data_dir: PathBuf,
     /// Custom probe scripts.
     pub probes_dir: PathBuf,
+    /// Remediation action scripts. Sits beside `probes_dir` and follows the
+    /// config dir the same way: both are operator-authored code, not state.
+    pub actions_dir: PathBuf,
 }
 
 static PATHS: OnceLock<Paths> = OnceLock::new();
@@ -91,10 +94,21 @@ fn resolve(config_dir_override: Option<PathBuf>, data_dir_override: Option<PathB
         }
     });
 
+    // Actions are the probes' sibling in every respect that matters here:
+    // operator-authored scripts that belong with the configuration.
+    let actions_dir = env_dir("REMON_ACTIONS_DIR").unwrap_or_else(|| {
+        if checkout && explicit_config_dir.is_none() {
+            PathBuf::from("actions")
+        } else {
+            config_dir.join("actions")
+        }
+    });
+
     Paths {
         config_dir,
         data_dir,
         probes_dir,
+        actions_dir,
     }
 }
 
@@ -213,6 +227,7 @@ mod tests {
             config_dir: PathBuf::from("/etc/remon"),
             data_dir: PathBuf::from("/var/lib/remon"),
             probes_dir: PathBuf::from("/etc/remon/probes"),
+            actions_dir: PathBuf::from("/etc/remon/actions"),
         };
 
         #[cfg(unix)]
@@ -229,6 +244,7 @@ mod tests {
             config_dir: PathBuf::from("/etc/remon"),
             data_dir: PathBuf::from("/var/lib/remon"),
             probes_dir: PathBuf::from("/etc/remon/probes"),
+            actions_dir: PathBuf::from("/etc/remon/actions"),
         };
 
         assert_eq!(
@@ -243,6 +259,7 @@ mod tests {
             config_dir: PathBuf::from("config"),
             data_dir: PathBuf::from("."),
             probes_dir: PathBuf::from("probes"),
+            actions_dir: PathBuf::from("actions"),
         };
 
         assert_eq!(
@@ -265,6 +282,13 @@ mod tests {
         assert_eq!(
             redirected.probes_dir,
             PathBuf::from("/etc/remon").join("probes")
+        );
+        // Actions are operator-authored code in exactly the same sense, and
+        // an install that serves a redirected config dir its own `./actions`
+        // would run scripts nobody pointed it at.
+        assert_eq!(
+            redirected.actions_dir,
+            PathBuf::from("/etc/remon").join("actions")
         );
     }
 

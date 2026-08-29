@@ -331,6 +331,7 @@ fn format_payload(n: &Notification) -> String {
         NotificationEvent::Fired | NotificationEvent::HostEvent => {
             format!("{}{}", n.severity.label(), n.title)
         }
+        NotificationEvent::ActionRequired => format!("[Confirm] {}", n.title),
         NotificationEvent::Resolved => format!("[Resolved] {}", n.title),
     };
     let severity = match n.severity {
@@ -341,6 +342,7 @@ fn format_payload(n: &Notification) -> String {
         NotificationEvent::Fired => "fired",
         NotificationEvent::Resolved => "resolved",
         NotificationEvent::HostEvent => "host_event",
+        NotificationEvent::ActionRequired => "action_required",
     };
     serde_json::json!({
         "title": title,

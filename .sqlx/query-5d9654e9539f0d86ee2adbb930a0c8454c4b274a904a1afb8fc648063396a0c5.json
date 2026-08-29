@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS n\n               FROM action_runs\n              WHERE action_id = ? AND label_set = ? AND status IN ('pending','running')",
+  "describe": {
+    "columns": [
+      {
+        "name": "n",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5d9654e9539f0d86ee2adbb930a0c8454c4b274a904a1afb8fc648063396a0c5"
+}

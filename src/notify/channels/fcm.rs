@@ -377,6 +377,7 @@ fn format_fcm(n: &Notification) -> (String, String) {
         NotificationEvent::Fired | NotificationEvent::HostEvent => {
             format!("{}{}", n.severity.label(), n.title)
         }
+        NotificationEvent::ActionRequired => format!("[Confirm] {}", n.title),
         NotificationEvent::Resolved => format!("[Resolved] {}", n.title),
     };
     (title, n.body.clone())

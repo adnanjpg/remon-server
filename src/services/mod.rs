@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod alerting;
 pub mod alerts;
 pub mod docker;

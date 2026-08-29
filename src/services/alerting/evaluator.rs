@@ -44,6 +44,7 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use log::{debug, info, warn};
 
+use crate::models::action::ActionTrigger;
 use crate::models::alert::{
     AlertEventType, AlertLifecycle, AlertRule, AlertSeverity, AlertStateRow,
 };
@@ -435,12 +436,17 @@ async fn evaluate_rule(
             now,
         );
 
+        // Silence gates the action engine as well as the page. An operator
+        // silencing a rule for a maintenance window is saying "I know, leave
+        // it alone" — a remediation firing into that window is exactly what
+        // they were switching off.
+        let silenced = rule
+            .silenced_until
+            .map(|until| now < until)
+            .unwrap_or(false);
+
         let (event_type, notify_intent) = match (prior.state, step.state) {
             (AlertLifecycle::Pending, AlertLifecycle::Firing) => {
-                let silenced = rule
-                    .silenced_until
-                    .map(|until| now < until)
-                    .unwrap_or(false);
                 let cooled_in = prior
                     .last_notified_at
                     .map(|last| now - last < rule.cooldown_secs)
@@ -521,6 +527,31 @@ async fn evaluate_rule(
                 sample.label_set.clone(),
                 expr.metric.namespace.clone(),
                 sample.value,
+            );
+        }
+
+        // Actions hang off the same two transitions the event log records —
+        // never off `pending`, which exists precisely because it might be
+        // nothing. Spawned like the capture above so a slow `systemctl
+        // restart` can't stall the eval tick, and skipped entirely while the
+        // rule is silenced.
+        if !silenced
+            && let Some(trigger) = match (prior.state, step.state) {
+                (AlertLifecycle::Pending, AlertLifecycle::Firing) => Some(ActionTrigger::Fired),
+                (AlertLifecycle::Firing, AlertLifecycle::Ok) => Some(ActionTrigger::Resolved),
+                _ => None,
+            }
+        {
+            crate::services::actions::spawn_for_alert(
+                Arc::clone(state),
+                crate::services::actions::AlertContext {
+                    rule_id: rule.id,
+                    rule_name: rule.name.clone(),
+                    severity: rule.severity,
+                    label_set: sample.label_set.clone(),
+                    trigger,
+                    metric_value: Some(sample.value),
+                },
             );
         }
 

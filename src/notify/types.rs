@@ -34,6 +34,12 @@ pub enum NotificationEvent {
     /// part of an alert's fired→resolved lifecycle; it never resolves. Renders
     /// like `Fired` for urgency (severity-driven) but titled by the event.
     HostEvent,
+    /// An alert action is waiting for a human. Unlike every other event here,
+    /// this one is a *question*: something will happen on the host if the
+    /// operator says yes, and nothing will if they don't answer. Channels
+    /// render it at fire-level urgency for that reason — an unanswered
+    /// proposal is a remediation that silently didn't happen.
+    ActionRequired,
 }
 
 /// A notification ready to be dispatched to one or more channels.

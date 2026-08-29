@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE alert_actions\n                SET action_kind = ?, action_target = ?, action_verb = ?, on_event = ?,\n                    mode = ?, enabled = ?, cooldown_secs = ?, max_runs_per_hour = ?,\n                    failure_limit = ?,\n                    consecutive_failures = CASE WHEN ? = 1 THEN 0 ELSE consecutive_failures END,\n                    disabled_reason = CASE WHEN ? = 1 THEN NULL ELSE disabled_reason END,\n                    updated_at = ?\n              WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 13
+    },
+    "nullable": []
+  },
+  "hash": "504d0221a56a497ea8845b66260ea92baddb8f65ef52822d729914fdc028ebac"
+}

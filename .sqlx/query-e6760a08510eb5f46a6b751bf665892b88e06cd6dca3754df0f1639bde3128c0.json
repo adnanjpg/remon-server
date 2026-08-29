@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE alert_actions\n                SET consecutive_failures = consecutive_failures + 1,\n                    enabled = CASE WHEN consecutive_failures + 1 >= failure_limit\n                                   THEN 0 ELSE enabled END,\n                    disabled_reason = CASE WHEN consecutive_failures + 1 >= failure_limit\n                                           THEN ? ELSE disabled_reason END,\n                    updated_at = ?\n              WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "e6760a08510eb5f46a6b751bf665892b88e06cd6dca3754df0f1639bde3128c0"
+}

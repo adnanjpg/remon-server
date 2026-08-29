@@ -119,6 +119,8 @@ jobs:
           cp README.md CONFIG.md "$stage/"
           mkdir -p "$stage/probes"
           cp probes/examples/*.sh "$stage/probes/"
+          mkdir -p "$stage/actions"
+          cp actions/examples/*.sh "$stage/actions/"
 
           cd dist
           if [ "${{ matrix.archive }}" = "zip" ]; then

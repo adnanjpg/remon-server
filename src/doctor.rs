@@ -75,6 +75,7 @@ pub fn run() -> bool {
     check_dir(&mut report, "config dir", &paths.config_dir, false);
     check_dir(&mut report, "data dir", &paths.data_dir, true);
     check_dir(&mut report, "probes dir", &paths.probes_dir, false);
+    check_dir(&mut report, "actions dir", &paths.actions_dir, false);
 
     report.section("configuration");
     let config = match Config::load(&paths.config_dir) {

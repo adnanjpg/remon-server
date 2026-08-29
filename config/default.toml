@@ -160,3 +160,31 @@ interval_secs = 60
 # Per-ping timeout; must be less than interval_secs.
 # Env: REMON__LIVENESS__TIMEOUT_SECS
 timeout_secs = 10
+
+[actions]
+# Alert actions: what runs when a rule fires, as opposed to who gets told.
+# A binding (POST /alerts/{id}/actions) names a script from the actions
+# directory or one entry of the built-in catalog (service/container
+# start|stop|restart|reload). Everything here is a ceiling on those bindings,
+# never a grant.
+#
+# Master switch. `false` keeps recording proposals and history but executes
+# nothing — the way to take every remediation on the host out of the loop at
+# once, mid-incident, without editing bindings one by one.
+# Env: REMON__ACTIONS__ENABLED
+enabled = true
+# Whether bindings with mode = "auto" may run unattended. Off by default:
+# a `manual` binding pages an operator and waits for a confirm, which is the
+# safe shape to ship. Arming automation is a deliberate decision, not one
+# inherited from an upgrade.
+# Env: REMON__ACTIONS__AUTO
+auto = false
+# How long an unconfirmed proposal stays offered, in seconds. Past this it is
+# marked expired and shows on the timeline as such — a remediation confirmed
+# an hour late acts on a host that has moved on.
+# Env: REMON__ACTIONS__PROPOSAL_TTL_SECS
+proposal_ttl_secs = 1800
+# Concurrent executions across all bindings. Actions restart services and run
+# scripts; one rule firing on twenty targets must not spawn twenty at once.
+# Env: REMON__ACTIONS__MAX_CONCURRENT
+max_concurrent = 2

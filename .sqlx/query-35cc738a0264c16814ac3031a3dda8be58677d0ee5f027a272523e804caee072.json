@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT consecutive_failures, enabled as \"enabled: bool\" FROM alert_actions WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "consecutive_failures",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_actions",
+            "name": "consecutive_failures"
+          }
+        }
+      },
+      {
+        "name": "enabled: bool",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_actions",
+            "name": "enabled"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "35cc738a0264c16814ac3031a3dda8be58677d0ee5f027a272523e804caee072"
+}

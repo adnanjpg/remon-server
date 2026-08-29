@@ -4,8 +4,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use sqlx::SqlitePool;
 use tokio::sync::{Mutex, RwLock, broadcast, watch};
 
+use crate::actions::registry::ActionRegistry;
 use crate::auth::session_cache::SessionCache;
-use crate::config::{AssistantConfig, AuthConfig};
+use crate::config::{ActionsConfig, AssistantConfig, AuthConfig};
 use crate::models::process::ProcessList;
 use crate::models::stats::{AllStats, StatsEvent};
 use crate::models::system::HardwareInfo;
@@ -135,6 +136,22 @@ pub struct AppState {
     /// list/detail endpoints; history queries go through the DB.
     pub probe_registry: ProbeRegistry,
 
+    /// Loaded remediation action scripts, keyed by name. Populated at boot
+    /// and again on `POST /actions/reload`. The built-in catalog
+    /// (service/container lifecycle) is not in here — it has no manifest.
+    pub action_registry: ActionRegistry,
+
+    /// Ceilings on the action engine: master switch, whether unattended
+    /// `auto` bindings may run at all, proposal TTL, concurrency. Config
+    /// only — never editable through the API, so an operator with rule-CRUD
+    /// permission cannot widen the blast radius the host was deployed with.
+    pub actions_config: ActionsConfig,
+
+    /// Bounds concurrent action executions. Actions restart services and
+    /// run scripts, so a rule firing on twenty label sets at once must not
+    /// spawn twenty children.
+    pub action_gate: Arc<tokio::sync::Semaphore>,
+
     /// Pluggable notification fan-out. Channels are loaded from the
     /// `notification_channels` table and hot-reloaded on every CRUD
     /// operation via the REST API. Credentials stay in server config.
@@ -190,6 +207,8 @@ impl AppState {
         hardware_info: Arc<HardwareInfo>,
         service_manager: Arc<dyn ServiceManager>,
         probe_registry: ProbeRegistry,
+        action_registry: ActionRegistry,
+        actions_config: ActionsConfig,
         notify: Arc<NotificationManager>,
         notify_queue: crate::notify::NotifyQueue,
         ledger: crate::services::events::LedgerQueue,
@@ -226,6 +245,9 @@ impl AppState {
             hardware_info,
             service_manager,
             probe_registry,
+            action_gate: Arc::new(tokio::sync::Semaphore::new(actions_config.max_concurrent)),
+            action_registry,
+            actions_config,
             notify,
             notify_queue,
             ledger,

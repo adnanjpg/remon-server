@@ -785,6 +785,21 @@ impl MetricsRepository {
                     .execute(&self.pool)
                     .await?
             }
+            "action_runs" => {
+                if resolution != "raw" {
+                    return Ok(0);
+                }
+                // Never reap a row that is still the live queue — an
+                // unconfirmed proposal or an in-flight execution older than
+                // the window would take the single-flight latch with it.
+                sqlx::query!(
+                    "DELETE FROM action_runs
+                      WHERE created_at < ? AND status NOT IN ('pending','running')",
+                    cutoff_ts
+                )
+                .execute(&self.pool)
+                .await?
+            }
             "incident_snapshots" => {
                 if resolution != "raw" {
                     return Ok(0);

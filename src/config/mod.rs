@@ -35,6 +35,78 @@ pub struct Config {
     pub control: ControlConfig,
     #[serde(default)]
     pub liveness: LivenessConfig,
+    #[serde(default)]
+    pub actions: ActionsConfig,
+}
+
+/// Alert-action engine — see `[actions]` in `config/default.toml`.
+///
+/// The knobs here are all *ceilings*, never grants: a binding decides what it
+/// wants to do, and this decides the most it is ever allowed to. `auto` in
+/// particular is the one switch an operator can flip to take every unattended
+/// remediation on the host out of the loop at once, without editing bindings
+/// one at a time during an incident.
+#[derive(Debug, Deserialize, Clone)]
+pub struct ActionsConfig {
+    /// Master switch for the whole engine. `false` still records proposals
+    /// and history — it stops anything from executing.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Whether `mode = "auto"` bindings may run unattended. Off by default:
+    /// arming automation is a decision an operator makes deliberately, not
+    /// one they inherit from an upgrade.
+    #[serde(default)]
+    pub auto: bool,
+    /// How long an unconfirmed proposal stays offered. A remediation
+    /// confirmed long after the fact acts on a host that has moved on.
+    #[serde(default = "default_proposal_ttl_secs")]
+    pub proposal_ttl_secs: u64,
+    /// Concurrent executions across all bindings. Actions restart services
+    /// and run scripts; a rule firing on twenty targets at once must not
+    /// spawn twenty of those simultaneously.
+    #[serde(default = "default_max_concurrent_actions")]
+    pub max_concurrent: usize,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_proposal_ttl_secs() -> u64 {
+    1800
+}
+fn default_max_concurrent_actions() -> usize {
+    2
+}
+
+impl Default for ActionsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            auto: false,
+            proposal_ttl_secs: default_proposal_ttl_secs(),
+            max_concurrent: default_max_concurrent_actions(),
+        }
+    }
+}
+
+impl ActionsConfig {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        // A zero TTL would expire every proposal before it could be shown;
+        // a week-long one is a stale offer with a confirm button.
+        if !(60..=604_800).contains(&self.proposal_ttl_secs) {
+            return Err(ConfigError::Message(format!(
+                "actions.proposal_ttl_secs {} out of range [60..604800]",
+                self.proposal_ttl_secs
+            )));
+        }
+        if !(1..=16).contains(&self.max_concurrent) {
+            return Err(ConfigError::Message(format!(
+                "actions.max_concurrent {} out of range [1..16]",
+                self.max_concurrent
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Outbound dead-man's switch — see `[liveness]` in `config/default.toml`.
@@ -441,6 +513,7 @@ impl Config {
         let cfg: Self = config.try_deserialize()?;
         cfg.server.bind_addr()?;
         cfg.liveness.validate()?;
+        cfg.actions.validate()?;
         Ok(cfg)
     }
 }

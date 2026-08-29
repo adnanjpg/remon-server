@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO alert_actions\n                (rule_id, action_kind, action_target, action_verb, on_event, mode, enabled,\n                 cooldown_secs, max_runs_per_hour, failure_limit, created_at, updated_at)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 12
+    },
+    "nullable": []
+  },
+  "hash": "2f76b3764095241fabc0e4062441cdb9bd53d8a62e4502cd57f0bf22ed77c840"
+}

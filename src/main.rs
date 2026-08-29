@@ -18,6 +18,7 @@ mod auth;
 #[cfg(test)]
 mod api_tests;
 
+mod actions;
 mod cli;
 mod collectors;
 mod doctor;
@@ -152,6 +153,7 @@ fn config_check() -> std::process::ExitCode {
             println!("  config dir   {}", paths.config_dir.display());
             println!("  data dir     {}", paths.data_dir.display());
             println!("  probes dir   {}", paths.probes_dir.display());
+            println!("  actions dir  {}", paths.actions_dir.display());
             println!(
                 "  database     {}",
                 paths.resolve_data(&cfg.database.path).display()
@@ -239,10 +241,11 @@ async fn run(
 
     let paths = paths::get();
     info!(
-        "config dir: {} | data dir: {} | probes dir: {}",
+        "config dir: {} | data dir: {} | probes dir: {} | actions dir: {}",
         paths.config_dir.display(),
         paths.data_dir.display(),
-        paths.probes_dir.display()
+        paths.probes_dir.display(),
+        paths.actions_dir.display()
     );
 
     let db_folder = paths.resolve_data(&config.database.folder_path);
@@ -292,6 +295,7 @@ async fn run(
     let service_manager = platform::services::factory::create(&init_system).await;
 
     let probe_registry = probes::registry::new_registry();
+    let action_registry = actions::registry::new_registry();
 
     // Push delivery cannot work without a VAPID keypair.
     let vapid_keys = Arc::new(
@@ -328,6 +332,8 @@ async fn run(
         local_hardware,
         service_manager,
         probe_registry,
+        action_registry,
+        config.actions.clone(),
         notify,
         notify_queue,
         ledger_queue,
@@ -375,6 +381,13 @@ async fn run(
         app_state.db.clone(),
     )
     .await;
+
+    // Actions have no scheduler — the alert engine drives them — so boot is
+    // just: load the scripts, release the latch on anything that was running
+    // when the last process died, and start the proposal sweeper.
+    let _ = actions::registry::load(&paths.actions_dir, &app_state.action_registry).await;
+    services::actions::recover_orphaned_runs(&app_state.db).await;
+    services::actions::spawn_proposal_sweeper(app_state.clone());
 
     let app = routes::build_app(app_state.clone(), &config)?;
 

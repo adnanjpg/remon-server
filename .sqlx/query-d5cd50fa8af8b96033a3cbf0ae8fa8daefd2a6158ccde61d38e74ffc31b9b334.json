@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE action_runs\n                SET status = 'expired', finished_at = ?,\n                    message = COALESCE(message, 'no confirmation before the proposal expired')\n              WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at <= ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "d5cd50fa8af8b96033a3cbf0ae8fa8daefd2a6158ccde61d38e74ffc31b9b334"
+}

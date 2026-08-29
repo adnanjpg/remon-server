@@ -54,6 +54,7 @@ impl NotificationChannel for WebhookChannel {
                 NotificationEvent::Fired      => "fired",
                 NotificationEvent::Resolved   => "resolved",
                 NotificationEvent::HostEvent  => "host_event",
+                NotificationEvent::ActionRequired => "action_required",
             },
             "severity": notification.severity.as_str(),
             "title":    notification.title,

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE alert_actions SET consecutive_failures = 0 WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "12ea7f64cfe0ee13b9898e37cc9c6810d86c1e43ba837845631190735c598564"
+}

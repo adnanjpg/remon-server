@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO action_runs\n                (action_id, rule_id, rule_name, label_set, action_kind, action_target,\n                 action_verb, trigger_event, origin, requested_by, status, expires_at,\n                 started_at, message, created_at)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 15
+    },
+    "nullable": []
+  },
+  "hash": "9a073d6479c7691bc881ec41cf80c0e952860a30e03b7da8521396ce97141fc1"
+}

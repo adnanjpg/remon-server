@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE action_runs\n                SET status = 'dismissed', requested_by = ?, finished_at = ?, expires_at = NULL,\n                    message = COALESCE(message, 'dismissed by operator')\n              WHERE id = ? AND status = 'pending'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "fbd21dd76fe54b988fcef9a4ec86fcc0ca4f866a18a1e9a1524f0a2a00c66a37"
+}

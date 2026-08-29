@@ -19,13 +19,13 @@ use tokio::fs;
 /// that is almost certainly a misconfig and a busy-loop trap), 10 min
 /// the ceiling (anything longer than this is daemon territory and
 /// should use a different mechanism).
-const MIN_TIMEOUT_MS: u64 = 100;
-const MAX_TIMEOUT_MS: u64 = 600_000;
-const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+pub(crate) const MIN_TIMEOUT_MS: u64 = 100;
+pub(crate) const MAX_TIMEOUT_MS: u64 = 600_000;
+pub(crate) const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 
 /// Maximum probe name length. 64 is enough for `category-subject` style
 /// names ("ssl-cert-example-com") without inviting essay-length identifiers.
-const MAX_NAME_LEN: usize = 64;
+pub(crate) const MAX_NAME_LEN: usize = 64;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {
@@ -325,6 +325,20 @@ impl Manifest {
         })
     }
 
+    /// The process-layer view of this manifest: what to run, under what
+    /// limits. Everything the runner's sandbox needs and nothing about
+    /// scheduling, which is the caller's problem.
+    pub fn exec_spec(&self) -> super::runner::ExecSpec<'_> {
+        super::runner::ExecSpec {
+            name: &self.name,
+            command: &self.command,
+            env: &self.env,
+            timeout: self.timeout,
+            run_as_user: self.run_as_user.as_deref(),
+            memory_limit_mb: self.memory_limit_mb,
+        }
+    }
+
     /// Returns true if this manifest's `platforms` filter allows the
     /// current host. An empty filter means "all platforms".
     pub fn matches_current_platform(&self) -> bool {
@@ -340,7 +354,7 @@ impl Manifest {
 /// inline-header script before deciding it isn't a probe. Comfortably
 /// fits the manifest header even with verbose comments, but small
 /// enough not to slurp huge files we then throw away.
-const INLINE_HEADER_PROBE_BYTES: u64 = 4096;
+pub(crate) const INLINE_HEADER_PROBE_BYTES: u64 = 4096;
 
 /// Cheap "does this look like an inline-header probe?" check used by
 /// the directory walker to skip helper libraries, README files, etc.
@@ -484,10 +498,18 @@ fn parse_inline_header(bytes: &[u8], path: &Path) -> Result<RawManifest, Manifes
 /// `None` for lines that don't begin with the marker, so the caller can
 /// freely pass arbitrary script lines through this filter.
 fn extract_header_kv(line: &str) -> Option<(String, String)> {
+    extract_tagged_kv(line, "@probe")
+}
+
+/// The same extraction, parameterised by marker — actions declare themselves
+/// with `# @action` and are otherwise identical in shape. Kept here rather
+/// than copied so the two headers can never disagree about what counts as a
+/// comment, where whitespace is allowed, or how `=` is split.
+pub(crate) fn extract_tagged_kv(line: &str, tag: &str) -> Option<(String, String)> {
     let s = line.trim_start();
     let rest = s.strip_prefix('#')?;
     let rest = rest.trim_start();
-    let payload = rest.strip_prefix("@probe")?;
+    let payload = rest.strip_prefix(tag)?;
     let payload = payload.trim_start();
     let (k, v) = payload.split_once('=')?;
     let key = k.trim().to_string();
@@ -501,7 +523,7 @@ fn extract_header_kv(line: &str) -> Option<(String, String)> {
 /// `[a-z][a-z0-9_-]{0..MAX_NAME_LEN-1}`. First char must be a lowercase
 /// letter so probe names sort cleanly and never collide with reserved
 /// identifiers (`-` or numeric leading would).
-fn is_valid_name(s: &str) -> bool {
+pub(crate) fn is_valid_name(s: &str) -> bool {
     if s.is_empty() || s.len() > MAX_NAME_LEN {
         return false;
     }
@@ -572,7 +594,7 @@ fn parse_cron(s: &str) -> Result<Schedule, ManifestError> {
         })
 }
 
-fn current_platform() -> &'static str {
+pub(crate) fn current_platform() -> &'static str {
     if cfg!(target_os = "linux") {
         "linux"
     } else if cfg!(target_os = "macos") {

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM action_runs\n                      WHERE created_at < ? AND status NOT IN ('pending','running')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "ba546a2f78f6171a5edd6c77c873df869b121db21d5b9d636f9e16068b7a8e08"
+}

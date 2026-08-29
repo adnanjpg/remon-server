@@ -1,0 +1,194 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, rule_id, action_kind, action_target, action_verb, on_event, mode,\n                      enabled as \"enabled: bool\", cooldown_secs, max_runs_per_hour,\n                      failure_limit, consecutive_failures, disabled_reason,\n                      created_at, updated_at\n                 FROM alert_actions\n                WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_actions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "rule_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_actions",
+            "name": "rule_id"
+          }
+        }
+      },
+      {
+        "name": "action_kind",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_actions",
+            "name": "action_kind"
+          }
+        }
+      },
+      {
+        "name": "action_target",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_actions",
+            "name": "action_target"
+          }
+        }
+      },
+      {
+        "name": "action_verb",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_actions",
+            "name": "action_verb"
+          }
+        }
+      },
+      {
+        "name": "on_event",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_actions",
+            "name": "on_event"
+          }
+        }
+      },
+      {
+        "name": "mode",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_actions",
+            "name": "mode"
+          }
+        }
+      },
+      {
+        "name": "enabled: bool",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_actions",
+            "name": "enabled"
+          }
+        }
+      },
+      {
+        "name": "cooldown_secs",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_actions",
+            "name": "cooldown_secs"
+          }
+        }
+      },
+      {
+        "name": "max_runs_per_hour",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_actions",
+            "name": "max_runs_per_hour"
+          }
+        }
+      },
+      {
+        "name": "failure_limit",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_actions",
+            "name": "failure_limit"
+          }
+        }
+      },
+      {
+        "name": "consecutive_failures",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_actions",
+            "name": "consecutive_failures"
+          }
+        }
+      },
+      {
+        "name": "disabled_reason",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "alert_actions",
+            "name": "disabled_reason"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 13,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_actions",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 14,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "alert_actions",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "857063bbae043f15db635168f025844993b38c5fcf0c281e9611414fe660f09a"
+}

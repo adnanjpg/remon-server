@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE action_runs\n                SET status = 'failed', finished_at = ?,\n                    message = 'server restarted while this action was running; outcome unknown'\n              WHERE status = 'running'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "0d8faaed6a24e3b1c25438088cf0b507c344ad7b85fbf919f407bd351b2a73d2"
+}

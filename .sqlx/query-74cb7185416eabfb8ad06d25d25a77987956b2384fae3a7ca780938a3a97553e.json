@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT MAX(COALESCE(finished_at, started_at, created_at)) AS ts\n               FROM action_runs\n              WHERE action_id = ? AND label_set = ?\n                AND status IN ('succeeded','failed','running')",
+  "describe": {
+    "columns": [
+      {
+        "name": "ts",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "74cb7185416eabfb8ad06d25d25a77987956b2384fae3a7ca780938a3a97553e"
+}

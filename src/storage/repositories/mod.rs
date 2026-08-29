@@ -1,3 +1,4 @@
+mod actions;
 mod alerts;
 mod config;
 mod devices;
@@ -17,6 +18,7 @@ mod rollup_state;
 mod runtime_state;
 mod smart;
 
+pub use actions::{ActionRepository, NewActionRun, RunQuery, UpsertActionBinding};
 pub use alerts::{AlertEventWithRule, AlertRepository, UpsertAlertRule};
 pub use config::{ConfigRepository, RuntimeOverrides};
 pub use devices::DeviceRepository;
