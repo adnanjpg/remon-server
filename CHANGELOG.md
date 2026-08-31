@@ -3,6 +3,22 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Alert actions: a rule can run something, not only notify.** `alert_actions` binds a rule to a **script** from the new actions directory, or to the **built-in catalogue** (`service` / `container` × `start|stop|restart|reload`, routed to the calls `/services/{name}/{verb}` and `/docker/*` already make). Bindings hang off the rule rather than the probe, so `for_duration_secs`, the per-label_set lifecycle and the silence window carry over unchanged, and every namespace is covered rather than `probe` alone.
+
+  `mode = "manual"` is the default: the transition drafts a proposal, pages an operator, and runs only on `POST /actions/runs/{id}/confirm`, expiring unanswered after `actions.proposal_ttl_secs`. `dry_run` records what it would have run. `auto` runs unattended and additionally requires `actions.auto = true`, which is config-only — an operator with rule-CRUD permission cannot widen what the host was deployed to allow.
+
+  Every run also clears single-flight per (binding, label_set), a per-binding `cooldown_secs` and `max_runs_per_hour`, and a circuit breaker that disarms the binding after `failure_limit` consecutive failures. An action may not stop or restart the unit supervising this process. Each decision, refusals and their reason included, lands in `action_runs` and on the `/events` timeline.
+
+  Scripts run through the probe runner — the oneshot path was split into `execute_capture(&ExecSpec)`, so argv-only execution, the timeout, `run_as_user` and `memory_limit_mb` are one implementation rather than two. The firing alert arrives as `REMON_*` environment. New `[actions]` config section; two examples in `actions/examples/`.
+
+### Changed
+
+- Two new tables (`alert_actions`, `action_runs`) folded into the initial migration (pre-1.0 policy — no migration chaining). Existing databases fail the migration checksum at boot: delete the database folder and re-pair devices after upgrading. `action_runs` is retained for 90 days, matching the alert events it answers, and rows still in the live queue (`pending` / `running`) are never reaped.
+
 ## [0.20.2] - 2026-08-07
 
 ### Added
