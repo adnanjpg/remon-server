@@ -278,6 +278,10 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         // Incident flight recorder — manual/external capture trigger.
         // Alert transitions capture on their own (services::incidents).
         .route("/incidents/capture", post(incidents::capture))
+        // Reading them back. The timeline points at these ids, and by the time
+        // anyone follows one the rollup has already thinned the series.
+        .route("/incidents", get(incidents::list))
+        .route("/incidents/{id}", get(incidents::get))
         // Unified event timeline — host_events ∪ alert_events ∪ incidents,
         // one normalized stream for chart annotations and feeds.
         .route("/events", get(events::list_events))
