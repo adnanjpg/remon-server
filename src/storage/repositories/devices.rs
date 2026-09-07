@@ -1,5 +1,6 @@
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 
+use crate::auth::service::CreatedTokens;
 use crate::error::{AppError, AppResult};
 use crate::models::auth::StoredDevice;
 
@@ -100,20 +101,74 @@ impl DeviceRepository {
     }
 
     // Session management
-    pub async fn create_session(
+    pub async fn create_session_pair(
         &self,
-        session_id: &str,
         device_id: &str,
-        expires_at: i64,
+        tokens: &CreatedTokens,
     ) -> AppResult<()> {
-        sqlx::query!(
-            "INSERT INTO sessions (id, device_id, expires_at) VALUES (?, ?, ?)",
-            session_id,
-            device_id,
-            expires_at,
+        let mut tx = self.pool.begin().await?;
+        Self::insert_session_pair(&mut tx, device_id, tokens).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Consume the old refresh token and replace all of this device's
+    /// sessions atomically. A failed insert restores the entire old set.
+    pub async fn rotate_session_pair(
+        &self,
+        refresh_jti: &str,
+        device_id: &str,
+        tokens: &CreatedTokens,
+    ) -> AppResult<()> {
+        let mut tx = self.pool.begin().await?;
+        // Write first: acquire SQLite's writer lock before reading device
+        // state, avoiding a deferred read-to-write snapshot upgrade race.
+        let consumed = sqlx::query(
+            "DELETE FROM sessions WHERE id = ? AND device_id = ? AND expires_at > unixepoch()",
         )
-        .execute(&self.pool)
+        .bind(refresh_jti)
+        .bind(device_id)
+        .execute(&mut *tx)
         .await?;
+        if consumed.rows_affected() == 0 {
+            return Err(AppError::InvalidToken);
+        }
+
+        let active: Option<bool> = sqlx::query_scalar("SELECT is_active FROM devices WHERE id = ?")
+            .bind(device_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        match active {
+            None => return Err(AppError::DeviceNotFound),
+            Some(false) => return Err(AppError::DeviceInactive),
+            Some(true) => {}
+        }
+
+        sqlx::query("DELETE FROM sessions WHERE device_id = ?")
+            .bind(device_id)
+            .execute(&mut *tx)
+            .await?;
+        Self::insert_session_pair(&mut tx, device_id, tokens).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn insert_session_pair(
+        connection: &mut SqliteConnection,
+        device_id: &str,
+        tokens: &CreatedTokens,
+    ) -> AppResult<()> {
+        for (jti, expires_at) in [
+            (&tokens.access_jti, tokens.access_expires_at),
+            (&tokens.refresh_jti, tokens.refresh_expires_at),
+        ] {
+            sqlx::query("INSERT INTO sessions (id, device_id, expires_at) VALUES (?, ?, ?)")
+                .bind(jti)
+                .bind(device_id)
+                .bind(expires_at)
+                .execute(&mut *connection)
+                .await?;
+        }
         Ok(())
     }
 
@@ -129,31 +184,8 @@ impl DeviceRepository {
         Ok(row.is_some())
     }
 
-    /// Atomically consume (delete) a single non-expired session by jti.
-    /// Returns true if a row was actually removed; false means the jti was
-    /// already consumed, revoked, or expired. The refresh path uses this as a
-    /// single-use gate: two requests presenting the same refresh token both
-    /// attempt the delete, but SQLite serialises writes so only one removes a
-    /// row — the loser sees `false` and is rejected as a replay.
-    pub async fn consume_session(&self, jti: &str) -> AppResult<bool> {
-        let result = sqlx::query!(
-            "DELETE FROM sessions WHERE id = ? AND expires_at > unixepoch()",
-            jti
-        )
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected() > 0)
-    }
-
     pub async fn delete_session(&self, session_id: &str) -> AppResult<()> {
         sqlx::query!("DELETE FROM sessions WHERE id = ?", session_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn delete_device_sessions(&self, device_id: &str) -> AppResult<()> {
-        sqlx::query!("DELETE FROM sessions WHERE device_id = ?", device_id)
             .execute(&self.pool)
             .await?;
         Ok(())

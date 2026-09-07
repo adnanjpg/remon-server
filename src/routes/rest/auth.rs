@@ -45,7 +45,9 @@ pub async fn login(
     let auth_service = AuthService::new(state.auth_config.clone());
     let tokens = auth_service.create_tokens(&req.device_id)?;
 
-    persist_session_pair(&device_repo, &req.device_id, &tokens).await?;
+    device_repo
+        .create_session_pair(&req.device_id, &tokens)
+        .await?;
 
     info!("device {} logged in from {}", req.device_id, client_ip);
 
@@ -71,32 +73,13 @@ pub async fn refresh(
 
     let device_repo = DeviceRepository::new(state.db.clone());
 
-    // Single-use consume of the refresh jti, atomic by virtue of SQLite's
-    // serialised writes. This both enforces revocation and closes the
-    // rotation race: if the same refresh token is presented twice in
-    // parallel, exactly one delete removes a row — the other gets `false`
-    // here and is rejected, instead of both minting fresh pairs.
-    if !device_repo.consume_session(&claims.jti).await? {
-        return Err(AppError::InvalidToken);
-    }
-
-    let device = device_repo
-        .get_by_id(&claims.sub)
-        .await?
-        .ok_or(AppError::DeviceNotFound)?;
-    if !device.is_active {
-        return Err(AppError::DeviceInactive);
-    }
-
-    // Rotation: wipe any remaining sessions for this device (the refresh jti
-    // itself is already gone), then issue and persist a fresh pair. Aggressive
-    // by design — a parallel use of a stolen token logs both sides out.
-    device_repo.delete_device_sessions(&claims.sub).await?;
-    // The wiped access jtis may still sit in the auth cache — drop them too.
-    state.session_cache.clear();
-
+    // Generate first: signing failure must not consume the existing session.
     let tokens = auth_service.create_tokens(&claims.sub)?;
-    persist_session_pair(&device_repo, &claims.sub, &tokens).await?;
+    device_repo
+        .rotate_session_pair(&claims.jti, &claims.sub, &tokens)
+        .await?;
+    // Only committed rotation invalidates cached access-token lookups.
+    state.session_cache.clear();
 
     Ok(Json(TokenResponse {
         access_token: tokens.access_token,
@@ -109,7 +92,7 @@ pub async fn refresh(
 ///
 /// Only this access token's jti is invalidated; the refresh token (if still
 /// in the client's possession) keeps working until used or expired. Use
-/// `delete_device_sessions` here if a "log out everywhere" flow is added.
+/// device-wide revocation here if a "log out everywhere" flow is added.
 pub async fn logout(State(state): State<Arc<AppState>>, claims: Claims) -> AppResult<StatusCode> {
     let device_repo = DeviceRepository::new(state.db.clone());
     device_repo.delete_session(&claims.jti).await?;
@@ -143,25 +126,4 @@ pub(crate) fn extract_client_ip(
         return v.to_string();
     }
     addr.ip().to_string()
-}
-
-/// Persist both jti's from a freshly issued token pair into the `sessions`
-/// table. If either insert fails, the partial state is rolled back so no
-/// half-issued credentials linger.
-async fn persist_session_pair(
-    repo: &DeviceRepository,
-    device_id: &str,
-    tokens: &crate::auth::service::CreatedTokens,
-) -> AppResult<()> {
-    repo.create_session(&tokens.access_jti, device_id, tokens.access_expires_at)
-        .await?;
-    if let Err(e) = repo
-        .create_session(&tokens.refresh_jti, device_id, tokens.refresh_expires_at)
-        .await
-    {
-        // Roll back the access-jti row so we don't leave it dangling.
-        let _ = repo.delete_session(&tokens.access_jti).await;
-        return Err(e);
-    }
-    Ok(())
 }

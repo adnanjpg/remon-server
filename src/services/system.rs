@@ -379,6 +379,37 @@ fn is_virtual_interface(name: &str) -> bool {
     false
 }
 
+/// An interface that encapsulates traffic which then leaves over a real NIC.
+///
+/// These are deliberately *not* filtered out of collection: a VPN's throughput
+/// is worth its own line on a chart, and `is_virtual_interface` letting them
+/// through is the reason `wg0` shows up at all. Summing bytes is where they
+/// turn into a double count, because every byte on `wg0` is also a byte on
+/// `eth0`. So this marks them for the usage endpoint rather than dropping them.
+pub fn is_tunnel_interface(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+
+    // Mesh / overlay VPNs, named rather than numbered.
+    for prefix in ["tailscale", "nordlynx", "ipsec", "utun", "wg", "zt"] {
+        if lower.starts_with(prefix) {
+            return true;
+        }
+    }
+
+    // Point-to-point and tunnel drivers: prefix + pure digits, so a real NIC
+    // that merely starts with the same letters is not swept up with them.
+    for prefix in ["tun", "ppp", "sit", "gre", "ip6tnl", "vti"] {
+        if let Some(rest) = lower.strip_prefix(prefix)
+            && !rest.is_empty()
+            && rest.chars().all(|c| c.is_ascii_digit())
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Collect all stats at once. Currently unused — collector code samples a
 /// single tick timestamp and calls the per-resource fns directly so the
 /// Linux enrichment block can patch them in-place.

@@ -145,6 +145,35 @@ pub struct NetworkHistoryResponse {
     pub points: Vec<NetworkPoint>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct NetworkUsageInterface {
+    pub name: String,
+    pub rx_bytes: i64,
+    pub tx_bytes: i64,
+    /// An encapsulating tunnel: the same payload crosses a physical NIC on its
+    /// way out, so counting both reports roughly double the traffic the host
+    /// actually moved. Listed, but left out of the totals.
+    pub is_tunnel: bool,
+}
+
+/// Bytes moved over a window, integrated from the stored rates.
+#[derive(Debug, Serialize)]
+pub struct NetworkUsageResponse {
+    pub start: i64,
+    pub end: i64,
+    /// Bucket size the sum was taken at; a longer window integrates coarser rows.
+    pub resolution: String,
+    /// Non-tunnel interfaces only — see `NetworkUsageInterface::is_tunnel`.
+    pub total_rx_bytes: i64,
+    pub total_tx_bytes: i64,
+    /// Share of the window that actually holds samples, 0.0..=1.0. Below 1.0 the
+    /// daemon was down or the rows aged out, and the totals are a floor rather
+    /// than the whole truth — a distinction anyone reading this against a
+    /// bandwidth quota needs to see.
+    pub coverage: f64,
+    pub interfaces: Vec<NetworkUsageInterface>,
+}
+
 // ===== Docker containers =====
 
 #[derive(Debug, Serialize)]

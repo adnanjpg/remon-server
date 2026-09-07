@@ -24,6 +24,7 @@ mod history_row_budget;
 mod incidents_api;
 mod lifecycle_api;
 mod logs_api;
+mod network_usage_api;
 mod probes_api;
 mod process_api;
 mod public;

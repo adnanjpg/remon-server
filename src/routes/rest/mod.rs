@@ -291,6 +291,7 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/metrics/memory", get(metrics::memory_history))
         .route("/metrics/disk", get(metrics::disk_history))
         .route("/metrics/network", get(metrics::network_history))
+        .route("/metrics/network/usage", get(metrics::network_usage))
         .route("/metrics/docker/{container}", get(metrics::docker_history))
         .route(
             "/metrics/pressure/{resource}",

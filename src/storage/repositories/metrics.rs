@@ -688,6 +688,71 @@ impl MetricsRepository {
         Ok(rows)
     }
 
+    /// Bytes moved per interface across a window, by integrating the stored
+    /// rates: every row of one resolution stands for `bucket_secs` of wall
+    /// clock, so `SUM(rate) * bucket_secs` is the traffic under the curve.
+    ///
+    /// This is the only way to answer "how much this month" at all — the
+    /// cumulative kernel counters are live-only (`NetworkStats::rx_bytes_total`
+    /// is never persisted), and they reset on reboot anyway. The trade is that
+    /// a window the daemon slept through contributes nothing rather than being
+    /// estimated across, which is why the caller also gets `count_buckets`:
+    /// silence and zero traffic are not the same answer, and only the row count
+    /// can tell them apart.
+    pub async fn read_network_usage(
+        &self,
+        resolution: &str,
+        start: i64,
+        end: i64,
+        bucket_secs: i64,
+    ) -> AppResult<Vec<(String, i64, i64)>> {
+        // SUM before the multiply: one multiplication of an already-summed
+        // rate, rather than one per row.
+        let rows = sqlx::query_as::<_, (String, i64, i64)>(
+            r#"
+            SELECT interface_name,
+                   COALESCE(SUM(rx_bytes_per_sec), 0) * ?,
+                   COALESCE(SUM(tx_bytes_per_sec), 0) * ?
+              FROM metrics_network
+             WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
+             GROUP BY interface_name
+             ORDER BY interface_name ASC
+            "#,
+        )
+        .bind(bucket_secs)
+        .bind(bucket_secs)
+        .bind(resolution)
+        .bind(start)
+        .bind(end)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Distinct timestamps network actually stored in the window. Against the
+    /// buckets the window should hold, this is how much of a usage total was
+    /// measured rather than missed.
+    pub async fn count_network_buckets(
+        &self,
+        resolution: &str,
+        start: i64,
+        end: i64,
+    ) -> AppResult<i64> {
+        let (n,) = sqlx::query_as::<_, (i64,)>(
+            r#"
+            SELECT COUNT(DISTINCT timestamp)
+              FROM metrics_network
+             WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
+            "#,
+        )
+        .bind(resolution)
+        .bind(start)
+        .bind(end)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n)
+    }
+
     pub async fn read_components(
         &self,
         resolution: &str,

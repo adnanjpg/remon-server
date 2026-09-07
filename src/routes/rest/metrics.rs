@@ -11,12 +11,12 @@ use crate::routes::dtos::metrics::{
     BatchMetricsQuery, BatchMetricsResponse, BatchSeries, ComponentPoint,
     ComponentsHistoryResponse, CpuCorePoint, CpuCoresHistoryResponse, CpuHistoryResponse, CpuPoint,
     DiskHistoryResponse, DiskPoint, DockerHistoryResponse, DockerPoint, MemoryHistoryResponse,
-    MemoryPoint, MetricsRangeQuery, NetworkHistoryResponse, NetworkPoint, PressureHistoryResponse,
-    PressurePoint,
+    MemoryPoint, MetricsRangeQuery, NetworkHistoryResponse, NetworkPoint, NetworkUsageInterface,
+    NetworkUsageResponse, PressureHistoryResponse, PressurePoint,
 };
 use crate::routes::extractors::{Claims, ValidatedQuery};
 use crate::state::AppState;
-use crate::storage::repositories::MetricsRepository;
+use crate::storage::repositories::{MetricsRepository, ResolutionRepository};
 
 /// Default span when client omits start/end: last hour.
 const DEFAULT_SPAN_SECS: i64 = 3600;
@@ -229,6 +229,75 @@ pub async fn network_history(
         .collect();
 
     Ok(Json(NetworkHistoryResponse { resolution, points }))
+}
+
+/// GET /metrics/network/usage — bytes moved over a window, not bytes per second.
+///
+/// The question this answers ("how much traffic has this host used this month")
+/// has no other source. `NetworkStats::rx_bytes_total` carries the kernel's
+/// cumulative counters, but those are live-only, and they restart at every
+/// reboot — on a box up for 200 days they overstate a month, and on one that
+/// rebooted last night they are near useless. The stored rates, integrated,
+/// are bounded by whatever window the caller asks for.
+pub async fn network_usage(
+    _claims: Claims,
+    State(state): State<Arc<AppState>>,
+    ValidatedQuery(q): ValidatedQuery<MetricsRangeQuery>,
+) -> AppResult<Json<NetworkUsageResponse>> {
+    let (start, end, resolution, _) = resolve_range(&q)?;
+
+    // Bucket width comes from the table rather than a constant: an operator who
+    // retunes a resolution would otherwise silently scale every total they read.
+    let bucket_secs = ResolutionRepository::new(state.db.clone())
+        .list_all()
+        .await?
+        .into_iter()
+        .find(|r| r.name == resolution)
+        .map(|r| r.interval_seconds)
+        .filter(|s| *s > 0)
+        .ok_or_else(|| {
+            AppError::Internal(format!("resolution '{}' has no interval", resolution))
+        })?;
+
+    let repo = MetricsRepository::new(state.db.clone());
+    let rows = repo
+        .read_network_usage(&resolution, start, end, bucket_secs)
+        .await?;
+
+    let interfaces: Vec<NetworkUsageInterface> = rows
+        .into_iter()
+        .map(|(name, rx, tx)| NetworkUsageInterface {
+            is_tunnel: crate::services::system::is_tunnel_interface(&name),
+            name,
+            rx_bytes: rx,
+            tx_bytes: tx,
+        })
+        .collect();
+
+    let (total_rx_bytes, total_tx_bytes) = interfaces
+        .iter()
+        .filter(|i| !i.is_tunnel)
+        .fold((0i64, 0i64), |(rx, tx), i| {
+            (rx.saturating_add(i.rx_bytes), tx.saturating_add(i.tx_bytes))
+        });
+
+    // A zero-length window is one instant, which either has a bucket or does
+    // not; expressing that as a ratio would divide by zero.
+    let expected = ((end - start) / bucket_secs).max(1);
+    let observed = repo
+        .count_network_buckets(&resolution, start, end)
+        .await?;
+    let coverage = (observed as f64 / expected as f64).clamp(0.0, 1.0);
+
+    Ok(Json(NetworkUsageResponse {
+        start,
+        end,
+        resolution,
+        total_rx_bytes,
+        total_tx_bytes,
+        coverage,
+        interfaces,
+    }))
 }
 
 /// GET /metrics/docker/{container} — per-tick resource history for one
