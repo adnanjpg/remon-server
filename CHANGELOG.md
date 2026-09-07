@@ -3,9 +3,15 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.22.0] - 2026-09-07
 
 ### Added
+
+- **Traffic moved, not traffic rate — the number a bandwidth quota is written in.** Every network figure the daemon reported was a rate: `rx_bytes_per_sec` in the history tables, and `rx_bytes_total` in the live snapshot, which is the kernel's own sysfs counter and therefore restarts at every boot. Neither answers "how much has this host used this month" — on a box up for 200 days the counter overstates a month, on one that rebooted last night it is close to useless, and it is never persisted anyway. `GET /metrics/network/usage?start=&end=` integrates the stored rates instead: each row of a resolution stands for that resolution's bucket, so `SUM(rate) × bucket_secs` is the traffic under the curve, bounded by whatever window the caller asks for. Because `metrics_network` already retains hourly rows for a year, twelve months of history are answerable the day this ships, with no new table and no migration.
+
+  Two things the naive sum gets wrong are handled rather than left to the caller. Encapsulating tunnels are marked `is_tunnel` and left out of the totals — every byte on `wg0` is also a byte on `eth0`, so counting both reports a host that moved roughly twice the traffic it did — while still being listed, because a VPN's own throughput is worth seeing. And `coverage` reports the share of the window that actually holds samples: a window the daemon slept through contributes nothing rather than being estimated across, which makes silence and zero traffic produce the same total, and only the row count can tell them apart. Anyone reading a total against a quota needs to know it is a floor.
+
+- **The flight recorder is readable from outside the daemon.** The capture path has existed since the evaluator learned to freeze host context, but the only way to read a bundle back was the assistant's own tools — an operator with a browser could see that a snapshot had been taken and nothing more. `GET /incidents` lists them newest-first with the bundles omitted, `GET /incidents/{id}` carries the frozen context and its ~60 s follow-up, and `POST /incidents/capture` lets an operator, a script or an external detector (a fail2ban action, an IDS hook) anchor one by hand. The split matters because rollup thins the metric series behind an incident within hours, and `top_processes`, `failed_services` and `system_errors` are never written to the metrics tables at all — the bundle is the only place that detail survives, so being unable to read it back was losing the entire point of taking it.
 
 - **Alert actions: a rule can run something, not only notify.** `alert_actions` binds a rule to a **script** from the new actions directory, or to the **built-in catalogue** (`service` / `container` × `start|stop|restart|reload`, routed to the calls `/services/{name}/{verb}` and `/docker/*` already make). Bindings hang off the rule rather than the probe, so `for_duration_secs`, the per-label_set lifecycle and the silence window carry over unchanged, and every namespace is covered rather than `probe` alone.
 
