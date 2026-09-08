@@ -193,7 +193,14 @@ fn tunnel_detection_does_not_swallow_real_nics() {
     for name in ["wg0", "tun0", "ppp0", "tailscale0", "utun3", "gre1"] {
         assert!(is_tunnel_interface(name), "{name} should read as a tunnel");
     }
-    for name in ["eth0", "enp3s0", "wlan0", "tunnelbroker", "grebond", "bond0"] {
+    for name in [
+        "eth0",
+        "enp3s0",
+        "wlan0",
+        "tunnelbroker",
+        "grebond",
+        "bond0",
+    ] {
         assert!(!is_tunnel_interface(name), "{name} is not a tunnel");
     }
 }

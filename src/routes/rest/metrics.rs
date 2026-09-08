@@ -284,9 +284,7 @@ pub async fn network_usage(
     // A zero-length window is one instant, which either has a bucket or does
     // not; expressing that as a ratio would divide by zero.
     let expected = ((end - start) / bucket_secs).max(1);
-    let observed = repo
-        .count_network_buckets(&resolution, start, end)
-        .await?;
+    let observed = repo.count_network_buckets(&resolution, start, end).await?;
     let coverage = (observed as f64 / expected as f64).clamp(0.0, 1.0);
 
     Ok(Json(NetworkUsageResponse {
