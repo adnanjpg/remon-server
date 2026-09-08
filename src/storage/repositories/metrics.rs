@@ -729,6 +729,34 @@ impl MetricsRepository {
         Ok(rows)
     }
 
+    /// Just the two columns a capacity trend is fitted through, every row in
+    /// the window, oldest first.
+    ///
+    /// Deliberately not `read_disk`: that one bounds distinct timestamps to
+    /// protect a chart's live tail, and a fit wants the opposite — an evenly
+    /// covered window, thinned by the estimator itself if it is too long.
+    pub async fn read_disk_capacity_series(
+        &self,
+        resolution: &str,
+        start: i64,
+        end: i64,
+    ) -> AppResult<Vec<(i64, String, i64, i64)>> {
+        let rows = sqlx::query_as::<_, (i64, String, i64, i64)>(
+            r#"
+            SELECT timestamp, mount_point, used_bytes, total_bytes
+              FROM metrics_disk
+             WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
+             ORDER BY mount_point ASC, timestamp ASC
+            "#,
+        )
+        .bind(resolution)
+        .bind(start)
+        .bind(end)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Distinct timestamps network actually stored in the window. Against the
     /// buckets the window should hold, this is how much of a usage total was
     /// measured rather than missed.

@@ -10,11 +10,13 @@ use crate::error::{AppError, AppResult};
 use crate::routes::dtos::metrics::{
     BatchMetricsQuery, BatchMetricsResponse, BatchSeries, ComponentPoint,
     ComponentsHistoryResponse, CpuCorePoint, CpuCoresHistoryResponse, CpuHistoryResponse, CpuPoint,
-    DiskHistoryResponse, DiskPoint, DockerHistoryResponse, DockerPoint, MemoryHistoryResponse,
-    MemoryPoint, MetricsRangeQuery, NetworkHistoryResponse, NetworkPoint, NetworkUsageInterface,
-    NetworkUsageResponse, PressureHistoryResponse, PressurePoint,
+    DiskForecastMount, DiskForecastResponse, DiskHistoryResponse, DiskPoint, DockerHistoryResponse,
+    DockerPoint, MemoryHistoryResponse, MemoryPoint, MetricsRangeQuery, NetworkHistoryResponse,
+    NetworkPoint, NetworkUsageInterface, NetworkUsageResponse, PressureHistoryResponse,
+    PressurePoint,
 };
 use crate::routes::extractors::{Claims, ValidatedQuery};
+use crate::services::forecast;
 use crate::state::AppState;
 use crate::storage::repositories::{MetricsRepository, ResolutionRepository};
 
@@ -295,6 +297,125 @@ pub async fn network_usage(
         total_tx_bytes,
         coverage,
         interfaces,
+    }))
+}
+
+/// Fit window when the caller names none. Two weeks of hourly rows averages
+/// out the daily backup-and-delete cycle that dominates a shorter window,
+/// without reaching so far back that last month's cleanup still counts.
+const FORECAST_WINDOW_DEFAULT_DAYS: f64 = 14.0;
+const FORECAST_WINDOW_MAX_DAYS: f64 = 90.0;
+/// Past this, a date implies a precision two weeks of samples cannot support.
+const FORECAST_HORIZON_DEFAULT_DAYS: f64 = 60.0;
+const FORECAST_HORIZON_MAX_DAYS: f64 = 365.0;
+
+#[derive(Debug, serde::Deserialize)]
+pub struct DiskForecastQuery {
+    /// Days of history to fit through. Default 14, max 90.
+    pub window_days: Option<f64>,
+    /// Report a date only when it falls inside this many days. Default 60.
+    pub horizon_days: Option<f64>,
+}
+
+/// GET /metrics/disk/forecast — when each volume runs out of room.
+///
+/// "78% full" is a fact about now; "fills in eleven days" is the one an
+/// operator can act on, and the stored history is the only place it exists.
+/// The fit is Theil-Sen rather than least squares because a filesystem's
+/// outliers are not noise around a line — a log rotation, or a backup that
+/// writes and then deletes, is a real excursion that OLS would let drag the
+/// date by weeks. See `services::forecast` for the estimator and, more to the
+/// point, for the rule that decides when there is no honest answer.
+pub async fn disk_forecast(
+    _claims: Claims,
+    State(state): State<Arc<AppState>>,
+    ValidatedQuery(q): ValidatedQuery<DiskForecastQuery>,
+) -> AppResult<Json<DiskForecastResponse>> {
+    let window_days = q
+        .window_days
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .unwrap_or(FORECAST_WINDOW_DEFAULT_DAYS)
+        .min(FORECAST_WINDOW_MAX_DAYS);
+    let horizon_days = q
+        .horizon_days
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .unwrap_or(FORECAST_HORIZON_DEFAULT_DAYS)
+        .min(FORECAST_HORIZON_MAX_DAYS);
+
+    let end = chrono::Utc::now().timestamp();
+    let window_secs = (window_days * 86_400.0) as i64;
+    let start = end - window_secs;
+    // Same banding as the charts: a fortnight lands on hourly rows, which is
+    // also the tier retained long enough for the widest window on offer.
+    let resolution = pick_resolution(window_secs).to_string();
+
+    let rows = MetricsRepository::new(state.db.clone())
+        .read_disk_capacity_series(&resolution, start, end)
+        .await?;
+
+    // Rows arrive grouped and ordered by (mount_point, timestamp), so one pass
+    // splits them without sorting again.
+    let mut mounts: Vec<DiskForecastMount> = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < rows.len() {
+        let mount = rows[cursor].1.clone();
+        let mut series: Vec<(f64, f64)> = Vec::new();
+        let (mut used, mut total) = (0i64, 0i64);
+        while cursor < rows.len() && rows[cursor].1 == mount {
+            let (ts, _, u, t) = &rows[cursor];
+            series.push((*ts as f64, *u as f64));
+            // Ordered by timestamp, so the last write wins and capacity is read
+            // as of now — a volume grown mid-window forecasts against the size
+            // it has, not the size it had.
+            used = *u;
+            total = *t;
+            cursor += 1;
+        }
+
+        let Some(trend) = forecast::theil_sen(&series) else {
+            mounts.push(DiskForecastMount {
+                mount_point: mount,
+                used_bytes: used,
+                total_bytes: total,
+                verdict: forecast::Verdict::Unclear.as_str().to_string(),
+                bytes_per_day: 0,
+                days_until_full: None,
+                days_until_full_low: None,
+                days_until_full_high: None,
+                points: series.len(),
+            });
+            continue;
+        };
+
+        // The span actually covered, not the span requested: a daemon that was
+        // down for half the window must not have its trend judged against time
+        // it never observed.
+        let covered = series
+            .last()
+            .zip(series.first())
+            .map(|(b, f)| b.0 - f.0)
+            .unwrap_or(0.0);
+        let f = forecast::forecast_full(&trend, used as f64, total as f64, covered, horizon_days);
+
+        mounts.push(DiskForecastMount {
+            mount_point: mount,
+            used_bytes: used,
+            total_bytes: total,
+            verdict: f.verdict.as_str().to_string(),
+            bytes_per_day: f.bytes_per_day as i64,
+            days_until_full: f.days_until_full,
+            days_until_full_low: f.days_until_full_low,
+            days_until_full_high: f.days_until_full_high,
+            points: trend.points,
+        });
+    }
+
+    Ok(Json(DiskForecastResponse {
+        start,
+        end,
+        resolution,
+        horizon_days,
+        mounts,
     }))
 }
 

@@ -3,6 +3,7 @@ pub mod alerting;
 pub mod alerts;
 pub mod docker;
 pub mod events;
+pub mod forecast;
 pub mod incidents;
 pub mod liveness;
 pub mod logging;

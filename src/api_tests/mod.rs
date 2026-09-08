@@ -18,6 +18,7 @@ mod assistant_tools;
 mod auth_flow;
 mod config_api;
 mod dbbench;
+mod disk_forecast_api;
 mod events_api;
 mod heartbeats_api;
 mod history_row_budget;

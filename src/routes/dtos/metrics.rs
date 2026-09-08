@@ -174,6 +174,44 @@ pub struct NetworkUsageResponse {
     pub interfaces: Vec<NetworkUsageInterface>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct DiskForecastMount {
+    pub mount_point: String,
+    pub used_bytes: i64,
+    pub total_bytes: i64,
+    /// `filling` | `draining` | `stable` | `unclear`. `unclear` is the honest
+    /// answer for a volume whose drift is smaller than its own churn, and it is
+    /// a normal outcome rather than an error — a date drawn through that noise
+    /// would be wrong often enough to make every other date untrustworthy.
+    pub verdict: String,
+    /// Signed: negative while space is being freed.
+    pub bytes_per_day: i64,
+    /// Only present on `filling`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub days_until_full: Option<f64>,
+    /// Interquartile spread of the same estimate, not a confidence interval:
+    /// `low` is the steeper quartile and so the nearer day. `high` is absent
+    /// when the slower quartile is not filling at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub days_until_full_low: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub days_until_full_high: Option<f64>,
+    /// Samples the fit actually ran on, after thinning.
+    pub points: usize,
+}
+
+/// When each volume runs out, for the volumes where that can be said.
+#[derive(Debug, Serialize)]
+pub struct DiskForecastResponse {
+    /// Span the trends were fitted over.
+    pub start: i64,
+    pub end: i64,
+    pub resolution: String,
+    /// Fills further out than this are reported as `stable` rather than dated.
+    pub horizon_days: f64,
+    pub mounts: Vec<DiskForecastMount>,
+}
+
 // ===== Docker containers =====
 
 #[derive(Debug, Serialize)]
