@@ -28,7 +28,10 @@ pub use heartbeats::{HeartbeatRepository, UpsertHeartbeatCheck};
 pub use host_events::{HostEventRepository, HostEventRow, NewHostEvent};
 pub use incidents::{IncidentRepository, IncidentSummaryRow, NewIncident};
 pub use logs::LogRepository;
-pub use metrics::MetricsRepository;
+pub use metrics::{
+    CpuHistoryRow, DiskHistoryRow, GaugeStatistics, MemoryHistoryRow, MetricsRepository,
+    NetworkHistoryRow,
+};
 pub use notifications::{NotificationChannelRepository, NotificationChannelRow};
 pub use probes::{ProbeDefinitionRow, ProbeRepository};
 pub use process::{ProcessGroupRow, ProcessMetricsRepository};

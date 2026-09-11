@@ -146,7 +146,7 @@ pub fn definitions(state: &AppState) -> Value {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "namespace": { "type": "string", "description": "e.g. cpu, memory, disk, network, pressure, components, smart, docker, process, service, heartbeat, probe." },
+                        "namespace": { "type": "string", "description": "e.g. cpu, memory, disk, network, network_total (simultaneous non-tunnel host traffic), pressure, components, smart, docker, process, service, heartbeat, probe." },
                         "field": { "type": "string", "description": "Metric field within the namespace, e.g. used_percent." },
                         "labels": { "type": "object", "description": "Optional label filter, e.g. {\"mount_point\": \"/\"}." }
                     },
@@ -189,7 +189,7 @@ pub fn definitions(state: &AppState) -> Value {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "namespace": { "type": "string", "description": "cpu, memory, disk, network, pressure, docker or process." },
+                        "namespace": { "type": "string", "description": "cpu, memory, disk, network, network_total (simultaneous non-tunnel host traffic), pressure, docker or process." },
                         "field": { "type": "string", "description": "Metric field, e.g. usage_percent, used_percent." },
                         "labels": { "type": "object", "description": "Optional label filter, e.g. {\"mount_point\": \"/\"}." },
                         "window_secs": { "type": "integer", "description": "Look-back window in seconds. Default 3600 (1h)." },
@@ -312,7 +312,7 @@ pub fn definitions(state: &AppState) -> Value {
         Same namespaces/fields as query_metric. A bare metric is read at the evaluation tick, so a \
         signal that spikes between ticks (cpu, load, i/o rates) needs a window instead: \
         'max(cpu.usage_percent, 30s) > 80', also min/avg, units s/m/h, max 1h, on \
-        cpu/memory/disk/network/pressure/docker/process only.",
+        cpu/memory/disk/network/network_total/pressure/docker/process only. network is per interface; network_total matches the host traffic chart and excludes tunnels.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1240,6 +1240,12 @@ async fn metric_history(state: &Arc<AppState>, args: &Value) -> Result<Value, St
         field,
         labels,
     };
+    let bucket_seconds: i64 =
+        sqlx::query_scalar("SELECT interval_seconds FROM resolutions WHERE name=?")
+            .bind(&resolution)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| e.to_string())?;
     let summaries = history_summary(state, &metric, &resolution, now - window_secs, now)
         .await
         .map_err(|e| e.message)?;
@@ -1249,6 +1255,8 @@ async fn metric_history(state: &Arc<AppState>, args: &Value) -> Result<Value, St
         .map(|s| {
             let (last, trend) = if s.last.is_nan() {
                 (Value::Null, "unknown")
+            } else if !s.avg.is_finite() {
+                (json!(s.last), "unknown")
             } else if s.last > s.avg * 1.05 {
                 (json!(s.last), "rising")
             } else if s.last < s.avg * 0.95 {
@@ -1259,6 +1267,8 @@ async fn metric_history(state: &Arc<AppState>, args: &Value) -> Result<Value, St
             json!({
                 "labels": s.label_set,
                 "count": s.count,
+                "observed_statistics": s.observed_statistics,
+                "count_unit": if s.observed_statistics { "observations" } else { "buckets" },
                 "min": s.min,
                 "max": s.max,
                 "avg": s.avg,
@@ -1272,6 +1282,10 @@ async fn metric_history(state: &Arc<AppState>, args: &Value) -> Result<Value, St
         "metric": metric.to_string(),
         "resolution": resolution,
         "window_secs": window_secs,
+        "bucket_seconds": if resolution=="raw" { 0 } else { bucket_seconds },
+        "window_start": now-window_secs,
+        "window_end": now,
+        "scope": "Coarse summaries cover whole intersecting buckets; extrema are observed samples, not percentile bounds or peak durations. Unavailable observed statistics are null; bucket-based statistics are explicitly marked.",
         "series": series,
     }))
 }

@@ -21,6 +21,11 @@ pub struct MetricsRangeQuery {
 
 #[derive(Debug, Serialize)]
 pub struct CpuPoint {
+    /// Zero for raw instants; otherwise [timestamp, timestamp + bucket_seconds).
+    pub bucket_seconds: i64,
+    /// NULL for legacy or mixed-version buckets; never inferred from old means.
+    pub statistics:
+        Option<std::collections::BTreeMap<String, crate::storage::repositories::GaugeStatistics>>,
     pub timestamp: i64,
     pub usage_percent: f64,
     pub load_1m: f64,
@@ -43,6 +48,27 @@ pub struct CpuPoint {
     pub context_switches_per_sec: Option<i64>,
     /// Linux-only: process forks per second (clone() syscall rate).
     pub process_forks_per_sec: Option<i64>,
+}
+
+impl From<crate::storage::repositories::CpuHistoryRow> for CpuPoint {
+    fn from(row: crate::storage::repositories::CpuHistoryRow) -> Self {
+        Self {
+            timestamp: row.timestamp,
+            usage_percent: row.usage_percent,
+            load_1m: row.load_1m,
+            load_5m: row.load_5m,
+            load_15m: row.load_15m,
+            steal_percent: row.steal_percent,
+            iowait_percent: row.iowait_percent,
+            guest_percent: row.guest_percent,
+            user_percent: row.user_percent,
+            system_percent: row.system_percent,
+            context_switches_per_sec: row.context_switches_per_sec,
+            process_forks_per_sec: row.process_forks_per_sec,
+            bucket_seconds: row.bucket_seconds,
+            statistics: row.statistics,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -71,6 +97,11 @@ pub struct CpuCoresHistoryResponse {
 
 #[derive(Debug, Serialize)]
 pub struct MemoryPoint {
+    pub bucket_seconds: i64,
+    pub statistics:
+        Option<std::collections::BTreeMap<String, crate::storage::repositories::GaugeStatistics>>,
+    pub used_percent: Option<f64>,
+
     pub timestamp: i64,
     pub total_bytes: i64,
     pub used_bytes: i64,
@@ -89,6 +120,26 @@ pub struct MemoryPoint {
     pub swap_out_pages_per_sec: Option<i64>,
 }
 
+impl From<crate::storage::repositories::MemoryHistoryRow> for MemoryPoint {
+    fn from(row: crate::storage::repositories::MemoryHistoryRow) -> Self {
+        Self {
+            timestamp: row.timestamp,
+            total_bytes: row.total_bytes,
+            used_bytes: row.used_bytes,
+            available_bytes: row.available_bytes,
+            cached_bytes: row.cached_bytes,
+            swap_used_bytes: row.swap_used_bytes,
+            page_faults_minor_per_sec: row.page_faults_minor_per_sec,
+            page_faults_major_per_sec: row.page_faults_major_per_sec,
+            swap_in_pages_per_sec: row.swap_in_pages_per_sec,
+            swap_out_pages_per_sec: row.swap_out_pages_per_sec,
+            used_percent: row.used_percent,
+            bucket_seconds: row.bucket_seconds,
+            statistics: row.statistics,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct MemoryHistoryResponse {
     pub resolution: String,
@@ -99,6 +150,11 @@ pub struct MemoryHistoryResponse {
 
 #[derive(Debug, Serialize)]
 pub struct DiskPoint {
+    pub bucket_seconds: i64,
+    pub statistics:
+        Option<std::collections::BTreeMap<String, crate::storage::repositories::GaugeStatistics>>,
+    pub used_percent: Option<f64>,
+
     pub timestamp: i64,
     pub mount_point: String,
     pub total_bytes: i64,
@@ -117,6 +173,27 @@ pub struct DiskPoint {
     pub io_util_percent: Option<f64>,
 }
 
+impl From<crate::storage::repositories::DiskHistoryRow> for DiskPoint {
+    fn from(row: crate::storage::repositories::DiskHistoryRow) -> Self {
+        Self {
+            timestamp: row.timestamp,
+            mount_point: row.mount_point,
+            total_bytes: row.total_bytes,
+            used_bytes: row.used_bytes,
+            available_bytes: row.available_bytes,
+            read_bytes_per_sec: row.read_bytes_per_sec,
+            write_bytes_per_sec: row.write_bytes_per_sec,
+            inode_used_percent: row.inode_used_percent,
+            read_iops: row.read_iops,
+            write_iops: row.write_iops,
+            io_util_percent: row.io_util_percent,
+            used_percent: row.used_percent,
+            bucket_seconds: row.bucket_seconds,
+            statistics: row.statistics,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct DiskHistoryResponse {
     pub resolution: String,
@@ -127,6 +204,10 @@ pub struct DiskHistoryResponse {
 
 #[derive(Debug, Serialize)]
 pub struct NetworkPoint {
+    pub bucket_seconds: i64,
+    pub statistics:
+        Option<std::collections::BTreeMap<String, crate::storage::repositories::GaugeStatistics>>,
+
     pub timestamp: i64,
     pub interface_name: String,
     pub rx_bytes_per_sec: i64,
@@ -139,8 +220,27 @@ pub struct NetworkPoint {
     pub errors_out_per_sec: i64,
 }
 
+impl From<crate::storage::repositories::NetworkHistoryRow> for NetworkPoint {
+    fn from(row: crate::storage::repositories::NetworkHistoryRow) -> Self {
+        Self {
+            timestamp: row.timestamp,
+            interface_name: row.interface_name,
+            rx_bytes_per_sec: row.rx_bytes_per_sec,
+            tx_bytes_per_sec: row.tx_bytes_per_sec,
+            rx_packets_per_sec: row.rx_packets_per_sec,
+            tx_packets_per_sec: row.tx_packets_per_sec,
+            errors_in_per_sec: row.errors_in_per_sec,
+            errors_out_per_sec: row.errors_out_per_sec,
+            bucket_seconds: row.bucket_seconds,
+            statistics: row.statistics,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct NetworkHistoryResponse {
+    /// Simultaneous non-tunnel interface totals, with their own rollup state.
+    pub totals: Vec<NetworkPoint>,
     pub resolution: String,
     pub points: Vec<NetworkPoint>,
 }
@@ -294,12 +394,25 @@ pub struct BatchMetricsQuery {
 #[derive(Debug, Serialize)]
 #[serde(tag = "resource", rename_all = "snake_case")]
 pub enum BatchSeries {
-    Cpu { points: Vec<CpuPoint> },
-    CpuCores { points: Vec<CpuCorePoint> },
-    Memory { points: Vec<MemoryPoint> },
-    Disk { points: Vec<DiskPoint> },
-    Network { points: Vec<NetworkPoint> },
-    Components { points: Vec<ComponentPoint> },
+    Cpu {
+        points: Vec<CpuPoint>,
+    },
+    CpuCores {
+        points: Vec<CpuCorePoint>,
+    },
+    Memory {
+        points: Vec<MemoryPoint>,
+    },
+    Disk {
+        points: Vec<DiskPoint>,
+    },
+    Network {
+        points: Vec<NetworkPoint>,
+        totals: Vec<NetworkPoint>,
+    },
+    Components {
+        points: Vec<ComponentPoint>,
+    },
 }
 
 #[derive(Debug, Serialize)]

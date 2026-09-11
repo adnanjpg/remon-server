@@ -1,10 +1,82 @@
 use log::warn;
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
+use std::collections::BTreeMap;
 
 use crate::error::AppResult;
 use crate::models::stats::{
     ComponentsSnapshot, CpuStats, DiskStats, MemoryStats, NetworkStats, PressureSnapshot,
 };
+
+#[derive(Debug, serde::Serialize)]
+pub struct GaugeStatistics {
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub sum: f64,
+    pub valid_count: i64,
+}
+
+pub struct CpuHistoryRow {
+    pub timestamp: i64,
+    pub usage_percent: f64,
+    pub load_1m: f64,
+    pub load_5m: f64,
+    pub load_15m: f64,
+    pub steal_percent: Option<f64>,
+    pub iowait_percent: Option<f64>,
+    pub guest_percent: Option<f64>,
+    pub user_percent: Option<f64>,
+    pub system_percent: Option<f64>,
+    pub context_switches_per_sec: Option<i64>,
+    pub process_forks_per_sec: Option<i64>,
+    pub bucket_seconds: i64,
+    pub statistics: Option<BTreeMap<String, GaugeStatistics>>,
+}
+
+pub struct MemoryHistoryRow {
+    pub timestamp: i64,
+    pub total_bytes: i64,
+    pub used_bytes: i64,
+    pub available_bytes: i64,
+    pub cached_bytes: i64,
+    pub swap_used_bytes: i64,
+    pub page_faults_minor_per_sec: Option<i64>,
+    pub page_faults_major_per_sec: Option<i64>,
+    pub swap_in_pages_per_sec: Option<i64>,
+    pub swap_out_pages_per_sec: Option<i64>,
+    pub used_percent: Option<f64>,
+    pub bucket_seconds: i64,
+    pub statistics: Option<BTreeMap<String, GaugeStatistics>>,
+}
+
+pub struct DiskHistoryRow {
+    pub timestamp: i64,
+    pub mount_point: String,
+    pub total_bytes: i64,
+    pub used_bytes: i64,
+    pub available_bytes: i64,
+    pub read_bytes_per_sec: i64,
+    pub write_bytes_per_sec: i64,
+    pub inode_used_percent: Option<f64>,
+    pub read_iops: Option<i64>,
+    pub write_iops: Option<i64>,
+    pub io_util_percent: Option<f64>,
+    pub used_percent: Option<f64>,
+    pub bucket_seconds: i64,
+    pub statistics: Option<BTreeMap<String, GaugeStatistics>>,
+}
+
+pub struct NetworkHistoryRow {
+    pub timestamp: i64,
+    pub interface_name: String,
+    pub rx_bytes_per_sec: i64,
+    pub tx_bytes_per_sec: i64,
+    pub rx_packets_per_sec: i64,
+    pub tx_packets_per_sec: i64,
+    pub errors_in_per_sec: i64,
+    pub errors_out_per_sec: i64,
+    pub bucket_seconds: i64,
+    pub statistics: Option<BTreeMap<String, GaugeStatistics>>,
+}
 
 pub struct MetricsRepository {
     pool: SqlitePool,
@@ -263,6 +335,29 @@ impl MetricsRepository {
             );
         }
 
+        // Aggregate only simultaneous non-tunnel observations; never sum per-interface maxima.
+        let mut totals: BTreeMap<i64, [u64; 6]> = BTreeMap::new();
+        for n in networks
+            .iter()
+            .filter(|n| !crate::services::system::is_tunnel_interface(&n.interface))
+        {
+            let values = totals.entry(n.timestamp).or_default();
+            for (slot, value) in values.iter_mut().zip([
+                n.rx_bytes_per_sec,
+                n.tx_bytes_per_sec,
+                n.rx_packets_per_sec,
+                n.tx_packets_per_sec,
+                n.errors_in_per_sec,
+                n.errors_out_per_sec,
+            ]) {
+                *slot = slot.saturating_add(value);
+            }
+        }
+        for (timestamp, values) in totals {
+            sqlx::query("INSERT INTO metrics_network_total (resolution,timestamp,rx_bytes_per_sec,tx_bytes_per_sec,rx_packets_per_sec,tx_packets_per_sec,errors_in_per_sec,errors_out_per_sec) VALUES ('raw',?,?,?,?,?,?,?) ON CONFLICT(resolution,timestamp) DO NOTHING")
+                .bind(timestamp).bind(values[0].min(i64::MAX as u64) as i64).bind(values[1].min(i64::MAX as u64) as i64).bind(values[2].min(i64::MAX as u64) as i64).bind(values[3].min(i64::MAX as u64) as i64).bind(values[4].min(i64::MAX as u64) as i64).bind(values[5].min(i64::MAX as u64) as i64).execute(&mut *tx).await?;
+        }
+
         if let Some(c) = components
             && !c.components.is_empty()
         {
@@ -341,53 +436,12 @@ impl MetricsRepository {
         start: i64,
         end: i64,
         limit: u32,
-    ) -> AppResult<
-        Vec<(
-            i64,
-            f64,
-            f64,
-            f64,
-            f64,
-            Option<f64>,
-            Option<f64>,
-            Option<f64>,
-            Option<f64>,
-            Option<f64>,
-            Option<i64>,
-            Option<i64>,
-        )>,
-    > {
-        // ORDER BY timestamp DESC + LIMIT N gives the most-recent N rows;
-        // we reverse client-side so the response is still in ascending
-        // order. ORDER BY ASC + LIMIT would silently drop the live tail
-        // when the window contains more samples than the limit allows.
-        let mut rows = sqlx::query_as::<
-            _,
-            (
-                i64,
-                f64,
-                f64,
-                f64,
-                f64,
-                Option<f64>,
-                Option<f64>,
-                Option<f64>,
-                Option<f64>,
-                Option<f64>,
-                Option<i64>,
-                Option<i64>,
-            ),
-        >(
-            r#"
-            SELECT timestamp, usage_percent, load_1m, load_5m, load_15m,
-                   steal_percent, iowait_percent, guest_percent,
-                   user_percent, system_percent,
-                   context_switches_per_sec, process_forks_per_sec
-              FROM metrics_cpu
-             WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
-             ORDER BY timestamp DESC
-             LIMIT ?
-            "#,
+    ) -> AppResult<Vec<CpuHistoryRow>> {
+        let rows = sqlx::query(
+            "SELECT c.*, r.interval_seconds AS bucket_seconds FROM metrics_cpu c
+             JOIN resolutions r ON r.name = c.resolution
+             WHERE c.resolution = ? AND c.timestamp >= ? AND c.timestamp <= ?
+             ORDER BY c.timestamp DESC LIMIT ?",
         )
         .bind(resolution)
         .bind(start)
@@ -395,8 +449,74 @@ impl MetricsRepository {
         .bind(limit as i64)
         .fetch_all(&self.pool)
         .await?;
-        rows.reverse();
-        Ok(rows)
+        let mut result = Vec::with_capacity(rows.len());
+        for row in rows.into_iter().rev() {
+            let version: Option<i64> = row.try_get("summary_version")?;
+            let statistics = if resolution == "raw" || version == Some(1) {
+                let mut stats = BTreeMap::new();
+                for field in [
+                    "usage_percent",
+                    "load_1m",
+                    "load_5m",
+                    "load_15m",
+                    "steal_percent",
+                    "iowait_percent",
+                    "guest_percent",
+                    "user_percent",
+                    "system_percent",
+                    "context_switches_per_sec",
+                    "process_forks_per_sec",
+                ] {
+                    let stat = if resolution == "raw" {
+                        let value: Option<f64> = if field == "context_switches_per_sec"
+                            || field == "process_forks_per_sec"
+                        {
+                            row.try_get::<Option<i64>, _>(field)?.map(|v| v as f64)
+                        } else {
+                            row.try_get(field)?
+                        };
+                        GaugeStatistics {
+                            min: value,
+                            max: value,
+                            sum: value.unwrap_or(0.0),
+                            valid_count: i64::from(value.is_some()),
+                        }
+                    } else {
+                        GaugeStatistics {
+                            min: row.try_get(format!("{field}_min").as_str())?,
+                            max: row.try_get(format!("{field}_max").as_str())?,
+                            sum: row.try_get(format!("{field}_sum").as_str())?,
+                            valid_count: row.try_get(format!("{field}_valid_count").as_str())?,
+                        }
+                    };
+                    stats.insert(field.to_string(), stat);
+                }
+                Some(stats)
+            } else {
+                None
+            };
+            result.push(CpuHistoryRow {
+                timestamp: row.try_get("timestamp")?,
+                usage_percent: row.try_get("usage_percent")?,
+                load_1m: row.try_get("load_1m")?,
+                load_5m: row.try_get("load_5m")?,
+                load_15m: row.try_get("load_15m")?,
+                steal_percent: row.try_get("steal_percent")?,
+                iowait_percent: row.try_get("iowait_percent")?,
+                guest_percent: row.try_get("guest_percent")?,
+                user_percent: row.try_get("user_percent")?,
+                system_percent: row.try_get("system_percent")?,
+                context_switches_per_sec: row.try_get("context_switches_per_sec")?,
+                process_forks_per_sec: row.try_get("process_forks_per_sec")?,
+                bucket_seconds: if resolution == "raw" {
+                    0
+                } else {
+                    row.try_get("bucket_seconds")?
+                },
+                statistics,
+            });
+        }
+        Ok(result)
     }
 
     pub async fn read_cpu_cores(
@@ -442,56 +562,107 @@ impl MetricsRepository {
         start: i64,
         end: i64,
         limit: u32,
-    ) -> AppResult<
-        Vec<(
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-        )>,
-    > {
-        // ORDER BY DESC + reverse keeps the live tail when the limit is
-        // smaller than the window's sample count (see read_cpu).
-        let mut rows = sqlx::query_as::<
-            _,
-            (
-                i64,
-                i64,
-                i64,
-                i64,
-                i64,
-                i64,
-                Option<i64>,
-                Option<i64>,
-                Option<i64>,
-                Option<i64>,
-            ),
-        >(
-            r#"
-            SELECT timestamp, used_bytes, available_bytes, cached_bytes, swap_used_bytes,
-                   total_bytes,
-                   page_faults_minor_per_sec, page_faults_major_per_sec,
-                   swap_in_pages_per_sec, swap_out_pages_per_sec
-              FROM metrics_memory
-             WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
-             ORDER BY timestamp DESC
-             LIMIT ?
-            "#,
-        )
-        .bind(resolution)
-        .bind(start)
-        .bind(end)
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await?;
-        rows.reverse();
-        Ok(rows)
+    ) -> AppResult<Vec<MemoryHistoryRow>> {
+        self.read_memory_table("metrics_memory", resolution, start, end, limit)
+            .await
+    }
+
+    async fn read_memory_table(
+        &self,
+        table: &str,
+        resolution: &str,
+        start: i64,
+        end: i64,
+        limit: u32,
+    ) -> AppResult<Vec<MemoryHistoryRow>> {
+        let limit = limit as i64;
+        let derived = "CASE WHEN c.resolution = 'raw' THEN 100.0 * MAX(c.total_bytes - c.available_bytes, 0) / NULLIF(c.total_bytes,0) ELSE c.used_percent END AS effective_used_percent,";
+        let sql = format!("SELECT c.*, {derived} r.interval_seconds AS bucket_seconds FROM {table} c JOIN resolutions r ON r.name=c.resolution
+            WHERE c.resolution=? AND c.timestamp>=? AND c.timestamp<=?
+            AND c.timestamp IN (SELECT DISTINCT timestamp FROM {table} WHERE resolution=? AND timestamp>=? AND timestamp<=? ORDER BY timestamp DESC LIMIT ?)
+            ORDER BY c.timestamp ASC");
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(resolution)
+            .bind(start)
+            .bind(end)
+            .bind(resolution)
+            .bind(start)
+            .bind(end)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let version: Option<i64> = row.try_get("summary_version")?;
+            let statistics = if resolution == "raw" || version == Some(1) {
+                let mut stats = BTreeMap::new();
+                for (field, integer) in [
+                    ("total_bytes", true),
+                    ("used_bytes", true),
+                    ("available_bytes", true),
+                    ("cached_bytes", true),
+                    ("swap_used_bytes", true),
+                    ("page_faults_minor_per_sec", true),
+                    ("page_faults_major_per_sec", true),
+                    ("swap_in_pages_per_sec", true),
+                    ("swap_out_pages_per_sec", true),
+                    ("used_percent", false),
+                ] {
+                    let value = if resolution == "raw" {
+                        if integer {
+                            row.try_get::<Option<i64>, _>(field)?.map(|v| v as f64)
+                        } else {
+                            row.try_get::<Option<f64>, _>(if field == "used_percent" {
+                                "effective_used_percent"
+                            } else {
+                                field
+                            })?
+                        }
+                    } else {
+                        None
+                    };
+                    let stat = if resolution == "raw" {
+                        GaugeStatistics {
+                            min: value,
+                            max: value,
+                            sum: value.unwrap_or(0.0),
+                            valid_count: i64::from(value.is_some()),
+                        }
+                    } else {
+                        GaugeStatistics {
+                            min: row.try_get(format!("{field}_min").as_str())?,
+                            max: row.try_get(format!("{field}_max").as_str())?,
+                            sum: row.try_get(format!("{field}_sum").as_str())?,
+                            valid_count: row.try_get(format!("{field}_valid_count").as_str())?,
+                        }
+                    };
+                    stats.insert(field.to_string(), stat);
+                }
+                Some(stats)
+            } else {
+                None
+            };
+            out.push(MemoryHistoryRow {
+                timestamp: row.try_get("timestamp")?,
+                total_bytes: row.try_get("total_bytes")?,
+                used_bytes: row.try_get("used_bytes")?,
+                available_bytes: row.try_get("available_bytes")?,
+                cached_bytes: row.try_get("cached_bytes")?,
+                swap_used_bytes: row.try_get("swap_used_bytes")?,
+                page_faults_minor_per_sec: row.try_get("page_faults_minor_per_sec")?,
+                page_faults_major_per_sec: row.try_get("page_faults_major_per_sec")?,
+                swap_in_pages_per_sec: row.try_get("swap_in_pages_per_sec")?,
+                swap_out_pages_per_sec: row.try_get("swap_out_pages_per_sec")?,
+                used_percent: row.try_get("effective_used_percent")?,
+                bucket_seconds: if resolution == "raw" {
+                    0
+                } else {
+                    row.try_get("bucket_seconds")?
+                },
+                statistics,
+            });
+        }
+        Ok(out)
     }
 
     pub async fn read_disk(
@@ -500,74 +671,116 @@ impl MetricsRepository {
         start: i64,
         end: i64,
         limit: u32,
-    ) -> AppResult<
-        Vec<(
-            i64,
-            String,
-            i64,
-            i64,
-            i64,
-            i64,
-            i64,
-            Option<f64>,
-            Option<i64>,
-            Option<i64>,
-            Option<f64>,
-        )>,
-    > {
-        // Disk has N rows per timestamp (one per mount). A flat
-        // `LIMIT N` would chop off the most recent timestamps once
-        // N × mount_count exceeds the limit, leaving the client with
-        // an incomplete tail and a visible gap in the sparkline.
-        // Pick the most recent `limit` distinct timestamps first, then
-        // join all mount rows for them.
-        let keys = self
-            .keys_per_ts("metrics_disk", "mount_point", Some(resolution), start, end)
+    ) -> AppResult<Vec<DiskHistoryRow>> {
+        self.read_disk_table("metrics_disk", resolution, start, end, limit)
+            .await
+    }
+
+    async fn read_disk_table(
+        &self,
+        table: &str,
+        resolution: &str,
+        start: i64,
+        end: i64,
+        limit: u32,
+    ) -> AppResult<Vec<DiskHistoryRow>> {
+        let limit = if table == "metrics_network_total" {
+            limit as i64
+        } else {
+            ts_limit(
+                limit,
+                self.keys_per_ts(table, "mount_point", Some(resolution), start, end)
+                    .await?,
+            )
+        };
+        let derived = "CASE WHEN c.resolution = 'raw' THEN 100.0 * c.used_bytes / NULLIF(c.total_bytes,0) ELSE c.used_percent END AS effective_used_percent,";
+        let sql = format!("SELECT c.*, {derived} r.interval_seconds AS bucket_seconds FROM {table} c JOIN resolutions r ON r.name=c.resolution
+            WHERE c.resolution=? AND c.timestamp>=? AND c.timestamp<=?
+            AND c.timestamp IN (SELECT DISTINCT timestamp FROM {table} WHERE resolution=? AND timestamp>=? AND timestamp<=? ORDER BY timestamp DESC LIMIT ?)
+            ORDER BY c.timestamp ASC, c.mount_point ASC");
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(resolution)
+            .bind(start)
+            .bind(end)
+            .bind(resolution)
+            .bind(start)
+            .bind(end)
+            .bind(limit)
+            .fetch_all(&self.pool)
             .await?;
-        let limit = ts_limit(limit, keys);
-        let rows = sqlx::query_as::<
-            _,
-            (
-                i64,
-                String,
-                i64,
-                i64,
-                i64,
-                i64,
-                i64,
-                Option<f64>,
-                Option<i64>,
-                Option<i64>,
-                Option<f64>,
-            ),
-        >(
-            r#"
-            SELECT timestamp, mount_point,
-                   total_bytes,
-                   used_bytes, available_bytes,
-                   read_bytes_per_sec, write_bytes_per_sec, inode_used_percent,
-                   read_iops, write_iops, io_util_percent
-              FROM metrics_disk
-             WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
-               AND timestamp IN (
-                   SELECT DISTINCT timestamp FROM metrics_disk
-                    WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
-                    ORDER BY timestamp DESC
-                    LIMIT ?
-               )
-             ORDER BY timestamp ASC, mount_point ASC
-            "#,
-        )
-        .bind(resolution)
-        .bind(start)
-        .bind(end)
-        .bind(resolution)
-        .bind(start)
-        .bind(end)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows)
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let version: Option<i64> = row.try_get("summary_version")?;
+            let statistics = if resolution == "raw" || version == Some(1) {
+                let mut stats = BTreeMap::new();
+                for (field, integer) in [
+                    ("total_bytes", true),
+                    ("used_bytes", true),
+                    ("available_bytes", true),
+                    ("read_bytes_per_sec", true),
+                    ("write_bytes_per_sec", true),
+                    ("inode_used_percent", false),
+                    ("read_iops", true),
+                    ("write_iops", true),
+                    ("io_util_percent", false),
+                    ("used_percent", false),
+                ] {
+                    let value = if resolution == "raw" {
+                        if integer {
+                            row.try_get::<Option<i64>, _>(field)?.map(|v| v as f64)
+                        } else {
+                            row.try_get::<Option<f64>, _>(if field == "used_percent" {
+                                "effective_used_percent"
+                            } else {
+                                field
+                            })?
+                        }
+                    } else {
+                        None
+                    };
+                    let stat = if resolution == "raw" {
+                        GaugeStatistics {
+                            min: value,
+                            max: value,
+                            sum: value.unwrap_or(0.0),
+                            valid_count: i64::from(value.is_some()),
+                        }
+                    } else {
+                        GaugeStatistics {
+                            min: row.try_get(format!("{field}_min").as_str())?,
+                            max: row.try_get(format!("{field}_max").as_str())?,
+                            sum: row.try_get(format!("{field}_sum").as_str())?,
+                            valid_count: row.try_get(format!("{field}_valid_count").as_str())?,
+                        }
+                    };
+                    stats.insert(field.to_string(), stat);
+                }
+                Some(stats)
+            } else {
+                None
+            };
+            out.push(DiskHistoryRow {
+                timestamp: row.try_get("timestamp")?,
+                mount_point: row.try_get("mount_point")?,
+                total_bytes: row.try_get("total_bytes")?,
+                used_bytes: row.try_get("used_bytes")?,
+                available_bytes: row.try_get("available_bytes")?,
+                read_bytes_per_sec: row.try_get("read_bytes_per_sec")?,
+                write_bytes_per_sec: row.try_get("write_bytes_per_sec")?,
+                inode_used_percent: row.try_get("inode_used_percent")?,
+                read_iops: row.try_get("read_iops")?,
+                write_iops: row.try_get("write_iops")?,
+                io_util_percent: row.try_get("io_util_percent")?,
+                used_percent: row.try_get("effective_used_percent")?,
+                bucket_seconds: if resolution == "raw" {
+                    0
+                } else {
+                    row.try_get("bucket_seconds")?
+                },
+                statistics,
+            });
+        }
+        Ok(out)
     }
 
     pub async fn read_docker(
@@ -642,50 +855,123 @@ impl MetricsRepository {
         start: i64,
         end: i64,
         limit: u32,
-    ) -> AppResult<Vec<(i64, String, i64, i64, i64, i64, i64, i64)>> {
-        // Network has N rows per timestamp (one per interface). On a host
-        // with docker / k8s plumbing N can easily exceed 20, and a flat
-        // `LIMIT 1000` then truncates the response to roughly the oldest 40
-        // timestamps — the live tail goes missing and the sparkline gets a
-        // visible gap between the prefetched history and the first SSE
-        // sample. Pick the most recent `limit` distinct timestamps in a
-        // subquery and join all interface rows for them.
-        let keys = self
-            .keys_per_ts(
-                "metrics_network",
-                "interface_name",
-                Some(resolution),
-                start,
-                end,
+    ) -> AppResult<Vec<NetworkHistoryRow>> {
+        self.read_network_table("metrics_network", resolution, start, end, limit)
+            .await
+    }
+
+    async fn read_network_table(
+        &self,
+        table: &str,
+        resolution: &str,
+        start: i64,
+        end: i64,
+        limit: u32,
+    ) -> AppResult<Vec<NetworkHistoryRow>> {
+        let limit = if table == "metrics_network_total" {
+            limit as i64
+        } else {
+            ts_limit(
+                limit,
+                self.keys_per_ts(table, "interface_name", Some(resolution), start, end)
+                    .await?,
             )
+        };
+        let derived = if table == "metrics_network_total" {
+            "'' AS interface_name,"
+        } else {
+            ""
+        };
+        let sql = format!("SELECT c.*, {derived} r.interval_seconds AS bucket_seconds FROM {table} c JOIN resolutions r ON r.name=c.resolution
+            WHERE c.resolution=? AND c.timestamp>=? AND c.timestamp<=?
+            AND c.timestamp IN (SELECT DISTINCT timestamp FROM {table} WHERE resolution=? AND timestamp>=? AND timestamp<=? ORDER BY timestamp DESC LIMIT ?)
+            ORDER BY c.timestamp ASC");
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(resolution)
+            .bind(start)
+            .bind(end)
+            .bind(resolution)
+            .bind(start)
+            .bind(end)
+            .bind(limit)
+            .fetch_all(&self.pool)
             .await?;
-        let limit = ts_limit(limit, keys);
-        let rows = sqlx::query_as::<_, (i64, String, i64, i64, i64, i64, i64, i64)>(
-            r#"
-            SELECT timestamp, interface_name, rx_bytes_per_sec, tx_bytes_per_sec,
-                   rx_packets_per_sec, tx_packets_per_sec,
-                   errors_in_per_sec, errors_out_per_sec
-              FROM metrics_network
-             WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
-               AND timestamp IN (
-                   SELECT DISTINCT timestamp FROM metrics_network
-                    WHERE resolution = ? AND timestamp >= ? AND timestamp <= ?
-                    ORDER BY timestamp DESC
-                    LIMIT ?
-               )
-             ORDER BY timestamp ASC, interface_name ASC
-            "#,
-        )
-        .bind(resolution)
-        .bind(start)
-        .bind(end)
-        .bind(resolution)
-        .bind(start)
-        .bind(end)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows)
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let version: Option<i64> = row.try_get("summary_version")?;
+            let statistics = if resolution == "raw" || version == Some(1) {
+                let mut stats = BTreeMap::new();
+                for (field, integer) in [
+                    ("rx_bytes_per_sec", true),
+                    ("tx_bytes_per_sec", true),
+                    ("rx_packets_per_sec", true),
+                    ("tx_packets_per_sec", true),
+                    ("errors_in_per_sec", true),
+                    ("errors_out_per_sec", true),
+                ] {
+                    let value = if resolution == "raw" {
+                        if integer {
+                            row.try_get::<Option<i64>, _>(field)?.map(|v| v as f64)
+                        } else {
+                            row.try_get::<Option<f64>, _>(if field == "used_percent" {
+                                "effective_used_percent"
+                            } else {
+                                field
+                            })?
+                        }
+                    } else {
+                        None
+                    };
+                    let stat = if resolution == "raw" {
+                        GaugeStatistics {
+                            min: value,
+                            max: value,
+                            sum: value.unwrap_or(0.0),
+                            valid_count: i64::from(value.is_some()),
+                        }
+                    } else {
+                        GaugeStatistics {
+                            min: row.try_get(format!("{field}_min").as_str())?,
+                            max: row.try_get(format!("{field}_max").as_str())?,
+                            sum: row.try_get(format!("{field}_sum").as_str())?,
+                            valid_count: row.try_get(format!("{field}_valid_count").as_str())?,
+                        }
+                    };
+                    stats.insert(field.to_string(), stat);
+                }
+                Some(stats)
+            } else {
+                None
+            };
+            out.push(NetworkHistoryRow {
+                timestamp: row.try_get("timestamp")?,
+                interface_name: row.try_get("interface_name")?,
+                rx_bytes_per_sec: row.try_get("rx_bytes_per_sec")?,
+                tx_bytes_per_sec: row.try_get("tx_bytes_per_sec")?,
+                rx_packets_per_sec: row.try_get("rx_packets_per_sec")?,
+                tx_packets_per_sec: row.try_get("tx_packets_per_sec")?,
+                errors_in_per_sec: row.try_get("errors_in_per_sec")?,
+                errors_out_per_sec: row.try_get("errors_out_per_sec")?,
+                bucket_seconds: if resolution == "raw" {
+                    0
+                } else {
+                    row.try_get("bucket_seconds")?
+                },
+                statistics,
+            });
+        }
+        Ok(out)
+    }
+
+    pub async fn read_network_totals(
+        &self,
+        resolution: &str,
+        start: i64,
+        end: i64,
+        limit: u32,
+    ) -> AppResult<Vec<NetworkHistoryRow>> {
+        self.read_network_table("metrics_network_total", resolution, start, end, limit)
+            .await
     }
 
     /// Bytes moved per interface across a window, by integrating the stored
@@ -929,6 +1215,16 @@ impl MetricsRepository {
             }
         };
 
-        Ok(result.rows_affected())
+        let extra = if resource == "network" {
+            sqlx::query("DELETE FROM metrics_network_total WHERE resolution=? AND timestamp<?")
+                .bind(resolution)
+                .bind(cutoff_ts)
+                .execute(&self.pool)
+                .await?
+                .rows_affected()
+        } else {
+            0
+        };
+        Ok(result.rows_affected() + extra)
     }
 }

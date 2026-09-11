@@ -92,25 +92,7 @@ pub async fn cpu_history(
     let repo = MetricsRepository::new(state.db.clone());
     let rows = repo.read_cpu(&resolution, start, end, limit).await?;
 
-    let points: Vec<CpuPoint> = rows
-        .into_iter()
-        .map(
-            |(ts, usage, l1, l5, l15, steal, iowait, guest, user, system, ctxt, forks)| CpuPoint {
-                timestamp: ts,
-                usage_percent: usage,
-                load_1m: l1,
-                load_5m: l5,
-                load_15m: l15,
-                steal_percent: steal,
-                iowait_percent: iowait,
-                guest_percent: guest,
-                user_percent: user,
-                system_percent: system,
-                context_switches_per_sec: ctxt,
-                process_forks_per_sec: forks,
-            },
-        )
-        .collect();
+    let points = rows.into_iter().map(CpuPoint::from).collect();
 
     Ok(Json(CpuHistoryResponse { resolution, points }))
 }
@@ -152,23 +134,7 @@ pub async fn memory_history(
     let repo = MetricsRepository::new(state.db.clone());
     let rows = repo.read_memory(&resolution, start, end, limit).await?;
 
-    let points: Vec<MemoryPoint> = rows
-        .into_iter()
-        .map(
-            |(ts, used, avail, cached, swap, total, pf_min, pf_maj, sw_in, sw_out)| MemoryPoint {
-                timestamp: ts,
-                total_bytes: total,
-                used_bytes: used,
-                available_bytes: avail,
-                cached_bytes: cached,
-                swap_used_bytes: swap,
-                page_faults_minor_per_sec: pf_min,
-                page_faults_major_per_sec: pf_maj,
-                swap_in_pages_per_sec: sw_in,
-                swap_out_pages_per_sec: sw_out,
-            },
-        )
-        .collect();
+    let points = rows.into_iter().map(MemoryPoint::from).collect();
 
     Ok(Json(MemoryHistoryResponse { resolution, points }))
 }
@@ -184,24 +150,7 @@ pub async fn disk_history(
     let repo = MetricsRepository::new(state.db.clone());
     let rows = repo.read_disk(&resolution, start, end, limit).await?;
 
-    let points: Vec<DiskPoint> = rows
-        .into_iter()
-        .map(
-            |(ts, mp, total, used, avail, rbps, wbps, inode, riops, wiops, util)| DiskPoint {
-                timestamp: ts,
-                mount_point: mp,
-                total_bytes: total,
-                used_bytes: used,
-                available_bytes: avail,
-                read_bytes_per_sec: rbps,
-                write_bytes_per_sec: wbps,
-                inode_used_percent: inode,
-                read_iops: riops,
-                write_iops: wiops,
-                io_util_percent: util,
-            },
-        )
-        .collect();
+    let points = rows.into_iter().map(DiskPoint::from).collect();
 
     Ok(Json(DiskHistoryResponse { resolution, points }))
 }
@@ -216,21 +165,19 @@ pub async fn network_history(
     let repo = MetricsRepository::new(state.db.clone());
     let rows = repo.read_network(&resolution, start, end, limit).await?;
 
-    let points: Vec<NetworkPoint> = rows
+    let points = rows.into_iter().map(NetworkPoint::from).collect();
+    let totals = repo
+        .read_network_totals(&resolution, start, end, limit)
+        .await?
         .into_iter()
-        .map(|(ts, iface, rx, tx, rxp, txp, ein, eout)| NetworkPoint {
-            timestamp: ts,
-            interface_name: iface,
-            rx_bytes_per_sec: rx,
-            tx_bytes_per_sec: tx,
-            rx_packets_per_sec: rxp,
-            tx_packets_per_sec: txp,
-            errors_in_per_sec: ein,
-            errors_out_per_sec: eout,
-        })
+        .map(NetworkPoint::from)
         .collect();
 
-    Ok(Json(NetworkHistoryResponse { resolution, points }))
+    Ok(Json(NetworkHistoryResponse {
+        resolution,
+        points,
+        totals,
+    }))
 }
 
 /// GET /metrics/network/usage — bytes moved over a window, not bytes per second.
@@ -645,40 +592,7 @@ pub async fn batch_history(
             "cpu" => Box::pin(async move {
                 let rows = repo.read_cpu(&res, start, end, limit).await?;
                 Ok(BatchSeries::Cpu {
-                    points: rows
-                        .into_iter()
-                        .map(
-                            |(
-                                ts,
-                                usage,
-                                l1,
-                                l5,
-                                l15,
-                                steal,
-                                iowait,
-                                guest,
-                                user,
-                                system,
-                                ctxt,
-                                forks,
-                            )| {
-                                CpuPoint {
-                                    timestamp: ts,
-                                    usage_percent: usage,
-                                    load_1m: l1,
-                                    load_5m: l5,
-                                    load_15m: l15,
-                                    steal_percent: steal,
-                                    iowait_percent: iowait,
-                                    guest_percent: guest,
-                                    user_percent: user,
-                                    system_percent: system,
-                                    context_switches_per_sec: ctxt,
-                                    process_forks_per_sec: forks,
-                                }
-                            },
-                        )
-                        .collect(),
+                    points: rows.into_iter().map(CpuPoint::from).collect(),
                 })
             }),
             "cpu_cores" => Box::pin(async move {
@@ -698,90 +612,24 @@ pub async fn batch_history(
             "memory" => Box::pin(async move {
                 let rows = repo.read_memory(&res, start, end, limit).await?;
                 Ok(BatchSeries::Memory {
-                    points: rows
-                        .into_iter()
-                        .map(
-                            |(
-                                ts,
-                                used,
-                                avail,
-                                cached,
-                                swap,
-                                total,
-                                pf_min,
-                                pf_maj,
-                                sw_in,
-                                sw_out,
-                            )| {
-                                MemoryPoint {
-                                    timestamp: ts,
-                                    total_bytes: total,
-                                    used_bytes: used,
-                                    available_bytes: avail,
-                                    cached_bytes: cached,
-                                    swap_used_bytes: swap,
-                                    page_faults_minor_per_sec: pf_min,
-                                    page_faults_major_per_sec: pf_maj,
-                                    swap_in_pages_per_sec: sw_in,
-                                    swap_out_pages_per_sec: sw_out,
-                                }
-                            },
-                        )
-                        .collect(),
+                    points: rows.into_iter().map(MemoryPoint::from).collect(),
                 })
             }),
             "disk" => Box::pin(async move {
                 let rows = repo.read_disk(&res, start, end, limit).await?;
                 Ok(BatchSeries::Disk {
-                    points: rows
-                        .into_iter()
-                        .map(
-                            |(
-                                ts,
-                                mp,
-                                total,
-                                used,
-                                avail,
-                                rbps,
-                                wbps,
-                                inode,
-                                riops,
-                                wiops,
-                                util,
-                            )| {
-                                DiskPoint {
-                                    timestamp: ts,
-                                    mount_point: mp,
-                                    total_bytes: total,
-                                    used_bytes: used,
-                                    available_bytes: avail,
-                                    read_bytes_per_sec: rbps,
-                                    write_bytes_per_sec: wbps,
-                                    inode_used_percent: inode,
-                                    read_iops: riops,
-                                    write_iops: wiops,
-                                    io_util_percent: util,
-                                }
-                            },
-                        )
-                        .collect(),
+                    points: rows.into_iter().map(DiskPoint::from).collect(),
                 })
             }),
             "network" => Box::pin(async move {
                 let rows = repo.read_network(&res, start, end, limit).await?;
                 Ok(BatchSeries::Network {
-                    points: rows
+                    points: rows.into_iter().map(NetworkPoint::from).collect(),
+                    totals: repo
+                        .read_network_totals(&res, start, end, limit)
+                        .await?
                         .into_iter()
-                        .map(|(ts, iface, rx, tx, rxp, txp, ein, eout)| NetworkPoint {
-                            timestamp: ts,
-                            interface_name: iface,
-                            rx_bytes_per_sec: rx,
-                            tx_bytes_per_sec: tx,
-                            rx_packets_per_sec: rxp,
-                            tx_packets_per_sec: txp,
-                            errors_in_per_sec: ein,
-                            errors_out_per_sec: eout,
-                        })
+                        .map(NetworkPoint::from)
                         .collect(),
                 })
             }),

@@ -101,6 +101,16 @@ fn fold(col: &str, agg: Agg) -> String {
 /// Unkeyed tables need `HAVING COUNT(*) > 0` so an empty bucket does not insert
 /// a row of NULLs; a keyed table's `GROUP BY` already yields nothing.
 fn fold_sql(table: &str, key: Option<&str>, fields: &[Field]) -> String {
+    if matches!(
+        table,
+        "metrics_cpu"
+            | "metrics_memory"
+            | "metrics_disk"
+            | "metrics_network"
+            | "metrics_network_total"
+    ) {
+        return fold_gauge_sql(table, key, fields);
+    }
     let cols: Vec<&str> = fields.iter().map(|(c, _)| *c).collect();
     let aggs: Vec<String> = fields.iter().map(|(c, a)| fold(c, *a)).collect();
     let (key_col, tail) = match key {
@@ -118,6 +128,63 @@ fn fold_sql(table: &str, key: Option<&str>, fields: &[Field]) -> String {
         key_sel = key_col,
         aggs = aggs.join(", "),
     )
+}
+
+/// Preserve the aggregate state, not rounded child means. Legacy/mixed buckets
+/// retain the previous mean semantics but cannot claim observed extrema.
+fn fold_gauge_sql(table: &str, key: Option<&str>, fields: &[Field]) -> String {
+    let complete = "MIN(CASE WHEN resolution = 'raw' OR summary_version = 1 THEN 1 ELSE 0 END) = 1";
+    let mut cols = Vec::new();
+    let mut values = Vec::new();
+    let (key_col, tail) = match key {
+        Some(k) => (format!("{k}, "), format!("GROUP BY {k}")),
+        None => (String::new(), "HAVING COUNT(*) > 0".to_string()),
+    };
+    for &(col, agg) in fields {
+        let raw = match (table, col) {
+            ("metrics_memory", "used_percent") => {
+                "100.0 * MAX(total_bytes - available_bytes, 0) / NULLIF(total_bytes, 0)"
+            }
+            ("metrics_disk", "used_percent") => "100.0 * used_bytes / NULLIF(total_bytes, 0)",
+            _ => col,
+        };
+        let sum = format!(
+            "SUM(CASE WHEN resolution = 'raw' THEN COALESCE(1.0 * ({raw}), 0.0) ELSE {col}_sum END)"
+        );
+        let count = format!(
+            "SUM(CASE WHEN resolution = 'raw' THEN CASE WHEN ({raw}) IS NULL THEN 0 ELSE 1 END ELSE {col}_valid_count END)"
+        );
+        let mean = format!("1.0 * {sum} / NULLIF({count}, 0)");
+        let visible = if agg == Agg::MeanInt {
+            format!("CAST({mean} AS INTEGER)")
+        } else {
+            mean
+        };
+        cols.push(col.to_string());
+        values.push(format!(
+            "CASE WHEN {complete} THEN {visible} ELSE {} END",
+            fold(col, agg)
+        ));
+        for (suffix, expr) in [
+            (
+                "min",
+                format!("MIN(CASE WHEN resolution = 'raw' THEN ({raw}) ELSE {col}_min END)"),
+            ),
+            (
+                "max",
+                format!("MAX(CASE WHEN resolution = 'raw' THEN ({raw}) ELSE {col}_max END)"),
+            ),
+            ("sum", sum),
+            ("valid_count", count),
+        ] {
+            cols.push(format!("{col}_{suffix}"));
+            values.push(format!("CASE WHEN {complete} THEN {expr} END"));
+        }
+    }
+    format!("INSERT OR REPLACE INTO {table} (resolution, timestamp, {key_col}{}, sample_count, summary_version)
+        SELECT ?, ?, {key_col}{}, SUM({SAMPLES}), CASE WHEN {complete} THEN 1 END
+        FROM {table} WHERE resolution = ? AND timestamp >= ? AND timestamp < ? {tail}",
+        cols.join(", "), values.join(", "))
 }
 
 pub fn spawn(state: Arc<AppState>) {
@@ -353,6 +420,7 @@ async fn aggregate_one_bucket(
                 ("page_faults_major_per_sec", MeanInt),
                 ("swap_in_pages_per_sec", MeanInt),
                 ("swap_out_pages_per_sec", MeanInt),
+                ("used_percent", Mean),
             ],
         ),
         "disk" => fold_sql(
@@ -368,6 +436,7 @@ async fn aggregate_one_bucket(
                 ("read_iops", MeanInt),
                 ("write_iops", MeanInt),
                 ("io_util_percent", Mean),
+                ("used_percent", Mean),
             ],
         ),
         "network" => fold_sql(
@@ -449,5 +518,27 @@ async fn aggregate_one_bucket(
         .execute(&state.db)
         .await?;
 
+    if resource == "network" {
+        let totals = fold_sql(
+            "metrics_network_total",
+            None,
+            &[
+                ("rx_bytes_per_sec", MeanInt),
+                ("tx_bytes_per_sec", MeanInt),
+                ("rx_packets_per_sec", MeanInt),
+                ("tx_packets_per_sec", MeanInt),
+                ("errors_in_per_sec", MeanInt),
+                ("errors_out_per_sec", MeanInt),
+            ],
+        );
+        sqlx::query(sqlx::AssertSqlSafe(totals))
+            .bind(target)
+            .bind(bucket_start)
+            .bind(parent)
+            .bind(bucket_start)
+            .bind(bucket_end)
+            .execute(&state.db)
+            .await?;
+    }
     Ok(result.rows_affected() > 0)
 }

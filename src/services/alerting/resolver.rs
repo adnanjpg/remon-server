@@ -79,6 +79,8 @@ const CPU_FIELDS: &[&str] = &[
 const CPU_I64: &[&str] = &["context_switches_per_sec", "process_forks_per_sec"];
 
 const MEMORY_FIELDS: &[&str] = &[
+    "used_percent",
+    "total_bytes",
     "used_bytes",
     "available_bytes",
     "cached_bytes",
@@ -88,9 +90,26 @@ const MEMORY_FIELDS: &[&str] = &[
     "swap_in_pages_per_sec",
     "swap_out_pages_per_sec",
 ];
-const MEMORY_I64: &[&str] = MEMORY_FIELDS; // every memory field is INTEGER
+const MEMORY_I64: &[&str] = &[
+    "total_bytes",
+    "used_bytes",
+    "available_bytes",
+    "cached_bytes",
+    "swap_used_bytes",
+    "page_faults_minor_per_sec",
+    "page_faults_major_per_sec",
+    "swap_in_pages_per_sec",
+    "swap_out_pages_per_sec",
+];
+const MEMORY_COMPUTED: &[(&str, &str)] = &[(
+    "used_percent",
+    "100.0 * MAX(total_bytes - available_bytes, 0) / NULLIF(total_bytes, 0)",
+)];
 
 const DISK_FIELDS: &[&str] = &[
+    "read_iops",
+    "write_iops",
+    "io_util_percent",
     "total_bytes",
     "used_bytes",
     "available_bytes",
@@ -100,6 +119,8 @@ const DISK_FIELDS: &[&str] = &[
     "inode_used_percent",
 ];
 const DISK_I64: &[&str] = &[
+    "read_iops",
+    "write_iops",
     "total_bytes",
     "used_bytes",
     "available_bytes",
@@ -244,7 +265,7 @@ fn write_interval_secs(
     smart_ms: u64,
 ) -> Option<i64> {
     let ms = match namespace {
-        "cpu" | "memory" | "disk" | "network" | "pressure" => stats_ms,
+        "cpu" | "memory" | "disk" | "network" | "network_total" | "pressure" => stats_ms,
         // Sensors are re-read every Nth tick and a row is written only then,
         // so the tick rate is not this series' cadence. Read as one, the newest
         // sample sits at the edge of its own window from the moment it lands,
@@ -271,6 +292,7 @@ fn series_of(namespace: &str) -> Option<(&'static str, Option<&'static str>)> {
         "memory" => ("metrics_memory", None),
         "disk" => ("metrics_disk", Some("mount_point")),
         "network" => ("metrics_network", Some("interface_name")),
+        "network_total" => ("metrics_network_total", None),
         "pressure" => ("metrics_pressure", Some("resource")),
         "components" => ("metrics_components", Some("label")),
         "smart" => ("metrics_smart", Some("device")),
@@ -475,6 +497,17 @@ async fn resolve_inner(
 ) -> Result<Vec<ResolvedSample>, ResolveError> {
     match metric.namespace.as_str() {
         "cpu" => resolve_unkeyed(pool, metric, "metrics_cpu", CPU_FIELDS, CPU_I64, since).await,
+        "network_total" => {
+            resolve_unkeyed(
+                pool,
+                metric,
+                "metrics_network_total",
+                NETWORK_FIELDS,
+                NETWORK_I64,
+                since,
+            )
+            .await
+        }
         "memory" => {
             resolve_unkeyed(
                 pool,
@@ -619,7 +652,12 @@ async fn resolve_unkeyed(
             metric.namespace
         )));
     }
-    let sql = unkeyed_latest_sql(table, column);
+    let expression = if table == "metrics_memory" && column == "used_percent" {
+        MEMORY_COMPUTED[0].1
+    } else {
+        column
+    };
+    let sql = unkeyed_latest_sql(table, expression);
 
     let value_opt: Option<f64> = if i64_fields.contains(&column) {
         sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql.as_str()))
@@ -834,6 +872,19 @@ fn resolve_from_snapshot(
                 .iter()
                 .map(|d| (d.mount_point.clone(), disk_snap_value(d, field))),
         )),
+        "network_total" if NETWORK_FIELDS.contains(&field) => {
+            let values: Vec<f64> = snap
+                .network
+                .iter()
+                .filter(|n| !crate::services::system::is_tunnel_interface(&n.interface))
+                .map(|n| network_snap_value(n, field))
+                .collect();
+            if values.is_empty() {
+                None
+            } else {
+                Some(unkeyed_snap(metric, values.into_iter().sum()))
+            }
+        }
         "network" if NETWORK_FIELDS.contains(&field) => Some(keyed_snap(
             metric,
             "interface_name",
@@ -916,6 +967,15 @@ fn cpu_snap_value(c: &CpuStats, field: &str) -> f64 {
 
 fn memory_snap_value(m: &MemoryStats, field: &str) -> f64 {
     match field {
+        "total_bytes" => m.total_bytes as f64,
+        "used_percent" => {
+            if m.total_bytes > 0 {
+                100.0 * m.total_bytes.saturating_sub(m.available_bytes) as f64
+                    / m.total_bytes as f64
+            } else {
+                f64::NAN
+            }
+        }
         "used_bytes" => m.used_bytes as f64,
         "available_bytes" => m.available_bytes as f64,
         "cached_bytes" => m.cached_bytes as f64,
@@ -1230,6 +1290,8 @@ pub const HISTORY_RESOLUTIONS: &[&str] = &["raw", "1m", "5m", "1h"];
 /// has no current sample.
 #[derive(Debug, Clone)]
 pub struct FieldSummary {
+    /// True only when min/max/avg/count describe observations rather than bucket means.
+    pub observed_statistics: bool,
     pub label_set: String,
     pub count: i64,
     pub min: f64,
@@ -1254,7 +1316,8 @@ fn history_descriptor(
 )> {
     match namespace {
         "cpu" => Some(("metrics_cpu", CPU_FIELDS, NO_COMPUTED, None)),
-        "memory" => Some(("metrics_memory", MEMORY_FIELDS, NO_COMPUTED, None)),
+        "network_total" => Some(("metrics_network_total", NETWORK_FIELDS, NO_COMPUTED, None)),
+        "memory" => Some(("metrics_memory", MEMORY_FIELDS, MEMORY_COMPUTED, None)),
         "disk" => Some((
             "metrics_disk",
             DISK_FIELDS,
@@ -1325,6 +1388,39 @@ pub async fn history_summary(
         .collect();
 
     let pool = &state.db;
+    let supports = matches!(
+        metric.namespace.as_str(),
+        "cpu" | "memory" | "disk" | "network" | "network_total"
+    );
+    let (count_expr, min_expr, max_expr, avg_expr) = if resolution != "raw" && supports {
+        let complete = "MIN(CASE WHEN summary_version=1 THEN 1 ELSE 0 END)=1";
+        (
+            format!("CASE WHEN {complete} THEN SUM({column}_valid_count) ELSE COUNT(*) END"),
+            format!("CASE WHEN {complete} THEN MIN({column}_min) END"),
+            format!("CASE WHEN {complete} THEN MAX({column}_max) END"),
+            format!(
+                "CASE WHEN {complete} THEN 1.0 * SUM({column}_sum)/NULLIF(SUM({column}_valid_count),0) END"
+            ),
+        )
+    } else {
+        (
+            format!("COUNT({expr})"),
+            format!("CAST(MIN({expr}) AS REAL)"),
+            format!("CAST(MAX({expr}) AS REAL)"),
+            format!("AVG({expr})"),
+        )
+    };
+    // A coarse bucket describes its complete interval, including a partially selected edge.
+    let width: i64 = sqlx::query_scalar("SELECT interval_seconds FROM resolutions WHERE name=?")
+        .bind(resolution)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| ResolveError::msg(e.to_string()))?;
+    let start = if resolution == "raw" {
+        start
+    } else {
+        start.div_euclid(width.max(1)) * width.max(1)
+    };
     let mut out = Vec::new();
 
     if let Some(keycol) = label_col {
@@ -1346,10 +1442,10 @@ pub async fn history_summary(
         };
         let sql = format!(
             "SELECT {keycol},
-                    COUNT({expr}),
-                    CAST(MIN({expr}) AS REAL),
-                    CAST(MAX({expr}) AS REAL),
-                    AVG({expr})
+                    {count_expr},
+                    {min_expr},
+                    {max_expr},
+                    {avg_expr}
                FROM {table}
               WHERE resolution = ? AND {expr} IS NOT NULL
                 AND timestamp >= ? AND timestamp <= ? {where_label}
@@ -1377,6 +1473,8 @@ pub async fn history_summary(
             let label_set = canonical_labels(&labels);
             let last = last_by_label.get(&label_set).copied().unwrap_or(f64::NAN);
             out.push(FieldSummary {
+                observed_statistics: resolution == "raw"
+                    || (supports && min.is_some() && max.is_some() && avg.is_some()),
                 label_set,
                 count,
                 min: min.unwrap_or(f64::NAN),
@@ -1393,10 +1491,10 @@ pub async fn history_summary(
             )));
         }
         let sql = format!(
-            "SELECT COUNT({expr}),
-                    CAST(MIN({expr}) AS REAL),
-                    CAST(MAX({expr}) AS REAL),
-                    AVG({expr})
+            "SELECT {count_expr},
+                    {min_expr},
+                    {max_expr},
+                    {avg_expr}
                FROM {table}
               WHERE resolution = ? AND {expr} IS NOT NULL
                 AND timestamp >= ? AND timestamp <= ?"
@@ -1415,6 +1513,8 @@ pub async fn history_summary(
         if count > 0 {
             let last = last_by_label.get("{}").copied().unwrap_or(f64::NAN);
             out.push(FieldSummary {
+                observed_statistics: resolution == "raw"
+                    || (supports && min.is_some() && max.is_some() && avg.is_some()),
                 label_set: "{}".to_string(),
                 count,
                 min: min.unwrap_or(f64::NAN),
