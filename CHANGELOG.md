@@ -3,6 +3,24 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.24.0] - 2026-09-12
+
+### Added
+
+- **Rollups keep the extremes they used to average away.** Every gauge was folded to a weighted mean and nothing else, which is correct for the average and silently destructive for everything an operator actually looks for. A 30-second spike to 100% CPU inside an otherwise quiet hour survives as roughly 55% at `1m`, 19% at `5m` and **10.75%** at `1h` — so on the year-long hourly tier, the very excursions worth keeping history for are the ones history cannot show. The chart got smoother as the window widened, and read as calmer rather than as coarser.
+
+  Each rolled-up gauge now carries `_min` and `_max` beside its mean, folded recursively (`MIN` of the children's minima, `MAX` of their maxima) so an hourly row still reports the worst second underneath it. Per-field `_valid_count` columns replace the single `sample_count` weight, because a column that was NULL for part of a bucket was previously averaged as though it had been measured throughout. `GET /metrics/*` returns the extrema alongside the means, the alert resolver can read them, and the assistant's tools see them too.
+
+- **A date for when each volume runs out of room.** "78% full" is a fact about the present; the question an operator can act on is how long that lasts, and the stored history is the only place the answer exists. `GET /metrics/disk/forecast` fits each mount's `used_bytes` over a window (14 days by default) and reports the day it reaches capacity.
+
+  The fit is Theil–Sen rather than least squares, because a filesystem's outliers are not noise scattered around a line: a log rotation, or a backup that writes 400 GB and deletes it an hour later, is a real excursion that ordinary least squares lets drag a predicted date by weeks. Taking the median of the pairwise slopes shrugs off roughly 29% of the samples being outliers, which is about what a busy volume throws at it.
+
+  The refusal to answer is the load-bearing half. A trend must move the series further across the window than the residuals scatter it — three robust sigmas — before any day is named; below that the mount comes back `unclear` and the UI omits it entirely. A volume that churns without going anywhere therefore produces no date at all, which matters because an operator only has to be burned by a wrong one once before they stop reading the number. `stable` (measured, not moving) and `unclear` (cannot tell) are kept apart rather than collapsed, and a mount grown mid-window is forecast against the capacity it has now, not the one it had a fortnight ago.
+
+### Changed
+
+- Every metrics table gained `_min` / `_max` / `_valid_count` columns and a `summary_version` marker, folded into the initial migration (pre-1.0 policy — no migration chaining). `summary_version IS NULL` marks a row written before this release: those keep being read as means-only rather than being discarded, so existing history stays queryable and only new buckets carry extrema.
+
 ## [0.22.0] - 2026-09-07
 
 ### Added
