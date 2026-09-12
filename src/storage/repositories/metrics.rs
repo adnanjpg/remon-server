@@ -1179,12 +1179,17 @@ impl MetricsRepository {
                 .execute(&self.pool)
                 .await?
             }
-            "incident_snapshots" => {
+            "incidents" => {
                 if resolution != "raw" {
                     return Ok(0);
                 }
+                // Never reap an episode that is still open — the same rule
+                // `action_runs` follows for its live queue. An open row is a
+                // recording in progress, and its frames arrive after this
+                // cutoff would have judged it. `incident_frames` follows by
+                // ON DELETE CASCADE.
                 sqlx::query!(
-                    "DELETE FROM incident_snapshots WHERE created_at < ?",
+                    "DELETE FROM incidents WHERE opened_at < ? AND closed_at IS NOT NULL",
                     cutoff_ts
                 )
                 .execute(&self.pool)

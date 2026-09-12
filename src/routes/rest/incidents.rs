@@ -70,23 +70,32 @@ pub struct ListQuery {
     pub limit: Option<u32>,
 }
 
-/// Everything but the bundles — enough to pick one out of a list.
+/// The episode envelope — enough to pick one out of a list, no frame payloads.
 #[derive(Debug, Serialize)]
 pub struct IncidentSummaryDto {
     pub id: i64,
-    pub created_at: i64,
+    pub opened_at: i64,
+    /// Absent while the episode is still live.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closed_at: Option<i64>,
+    /// `resolved` | `expired` | `daemon_restart`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub close_reason: Option<String>,
     pub trigger_kind: String,
     pub category: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label_set: Option<String>,
+    /// The value that opened the episode, and the worst it reached.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metric_value: Option<f64>,
+    pub trigger_value: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_value: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// The follow-up landed, so `GET /incidents/{id}` carries `after_bundle`.
-    pub has_after: bool,
+    /// Frames captured so far — one means only the opening moment is on record.
+    pub frame_count: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -95,10 +104,26 @@ pub struct ListIncidentsResponse {
     pub incidents: Vec<IncidentSummaryDto>,
 }
 
+/// One captured moment. The envelope is modelled here; `payload` is not — its
+/// shape is owned by `services::incidents` and forwarded verbatim so the two
+/// cannot drift apart.
+#[derive(Debug, Serialize)]
+pub struct IncidentFrameDto {
+    pub seq: i64,
+    /// `onset` | `escalation` | `peak` | `resolution` | `followup`.
+    pub kind: String,
+    pub captured_at: i64,
+    pub payload: serde_json::Value,
+}
+
 #[derive(Debug, Serialize)]
 pub struct IncidentDto {
     pub id: i64,
-    pub created_at: i64,
+    pub opened_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closed_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub close_reason: Option<String>,
     pub trigger_kind: String,
     pub category: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -106,16 +131,13 @@ pub struct IncidentDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label_set: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metric_value: Option<f64>,
+    pub trigger_value: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_value: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// Context frozen at trigger time. Shape is owned by `services::incidents`,
-    /// forwarded here rather than re-modelled so the two cannot drift.
-    pub bundle: serde_json::Value,
-    /// The same shape ~60 s later. Absent when the follow-up never landed —
-    /// the daemon restarted, or the capture is younger than a minute.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub after_bundle: Option<serde_json::Value>,
+    /// Oldest first, so reading top to bottom replays the episode.
+    pub frames: Vec<IncidentFrameDto>,
 }
 
 /// The daemon writes these blobs itself, so unparseable means the row is
@@ -138,14 +160,17 @@ pub async fn list(
         .into_iter()
         .map(|r| IncidentSummaryDto {
             id: r.id,
-            created_at: r.created_at,
+            opened_at: r.opened_at,
+            closed_at: r.closed_at,
+            close_reason: r.close_reason,
             trigger_kind: r.trigger_kind,
             category: r.category,
             rule_name: r.rule_name,
             label_set: r.label_set,
-            metric_value: r.metric_value,
+            trigger_value: r.trigger_value,
+            peak_value: r.peak_value,
             reason: r.reason,
-            has_after: r.has_after,
+            frame_count: r.frame_count,
         })
         .collect();
 
@@ -155,7 +180,7 @@ pub async fn list(
     }))
 }
 
-/// GET /incidents/{id} — the frozen bundle, and the follow-up if it landed.
+/// GET /incidents/{id} — the whole reel, oldest frame first.
 pub async fn get(
     _claims: Claims,
     State(state): State<Arc<AppState>>,
@@ -166,22 +191,31 @@ pub async fn get(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Incident {}", id)))?;
 
-    let after_bundle = row
-        .after_bundle
-        .as_deref()
-        .map(|raw| parse_bundle(raw, id, "after_bundle"))
-        .transpose()?;
+    let frames = row
+        .frames
+        .into_iter()
+        .map(|f| {
+            Ok(IncidentFrameDto {
+                payload: parse_bundle(&f.payload, id, &format!("frame {}", f.seq))?,
+                seq: f.seq,
+                kind: f.kind,
+                captured_at: f.captured_at,
+            })
+        })
+        .collect::<AppResult<Vec<_>>>()?;
 
     Ok(Json(IncidentDto {
         id: row.id,
-        created_at: row.created_at,
+        opened_at: row.opened_at,
+        closed_at: row.closed_at,
+        close_reason: row.close_reason,
         trigger_kind: row.trigger_kind,
         category: row.category,
         rule_name: row.rule_name,
         label_set: row.label_set,
-        metric_value: row.metric_value,
+        trigger_value: row.trigger_value,
+        peak_value: row.peak_value,
         reason: row.reason,
-        bundle: parse_bundle(&row.bundle, id, "bundle")?,
-        after_bundle,
+        frames,
     }))
 }

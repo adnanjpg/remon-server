@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM incidents WHERE opened_at < ? AND closed_at IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "d0ffd974a6b4ba6804a0c103c6033bfdbe4bb43d17ca013d730575e5e6dff0c5"
+}

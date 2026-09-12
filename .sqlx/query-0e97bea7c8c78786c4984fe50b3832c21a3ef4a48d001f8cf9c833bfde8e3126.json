@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE incidents SET closed_at = ?1, close_reason = ?2 WHERE closed_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "0e97bea7c8c78786c4984fe50b3832c21a3ef4a48d001f8cf9c833bfde8e3126"
+}

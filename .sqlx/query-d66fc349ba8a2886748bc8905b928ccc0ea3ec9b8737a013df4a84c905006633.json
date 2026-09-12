@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO incidents\n               (trigger_kind, category, rule_id, rule_name, label_set,\n                trigger_value, peak_value, reason)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "d66fc349ba8a2886748bc8905b928ccc0ea3ec9b8737a013df4a84c905006633"
+}

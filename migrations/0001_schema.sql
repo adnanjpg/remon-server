@@ -98,22 +98,32 @@ CREATE TABLE retention_policy (
 ) WITHOUT ROWID;
 
 INSERT INTO retention_policy (resource, resolution, keep_seconds) VALUES
+    -- The host gauges keep their `5m` tier for as long as `incidents` keeps an
+    -- episode (90 days), so reading an old incident's window is still possible
+    -- at five-minute resolution rather than collapsing to a single hourly
+    -- bucket whose extrema describe the whole hour. This is what lets a frame
+    -- carry only the instant it was taken instead of a frozen copy of the
+    -- gauges — measured at roughly 50 MB for an ordinary host, against the
+    -- duplication and the plumbing that copy cost. Deliberately not extended to
+    -- the keyed-and-unbounded resources (`docker`, `process`): their row count
+    -- scales with containers and process names, so the same change there is
+    -- open-ended rather than a fixed 50 MB.
     ('cpu',          'raw', 86400),
     ('cpu',          '1m',  604800),
-    ('cpu',          '5m',  2592000),
+    ('cpu',          '5m',  7776000),
     ('cpu',          '1h',  31536000),
     ('cpu_cores',    'raw', 86400),
     ('memory',       'raw', 86400),
     ('memory',       '1m',  604800),
-    ('memory',       '5m',  2592000),
+    ('memory',       '5m',  7776000),
     ('memory',       '1h',  31536000),
     ('disk',         'raw', 86400),
     ('disk',         '1m',  604800),
-    ('disk',         '5m',  2592000),
+    ('disk',         '5m',  7776000),
     ('disk',         '1h',  31536000),
     ('network',      'raw', 86400),
     ('network',      '1m',  604800),
-    ('network',      '5m',  2592000),
+    ('network',      '5m',  7776000),
     ('network',      '1h',  31536000),
     ('docker',       'raw', 86400),
     ('docker',       '1m',  604800),
@@ -125,11 +135,11 @@ INSERT INTO retention_policy (resource, resolution, keep_seconds) VALUES
     ('process',      '1h',  31536000),
     ('pressure',     'raw', 86400),
     ('pressure',     '1m',  604800),
-    ('pressure',     '5m',  2592000),
+    ('pressure',     '5m',  7776000),
     ('pressure',     '1h',  31536000),
     ('components',   'raw', 86400),
     ('components',   '1m',  604800),
-    ('components',   '5m',  2592000),
+    ('components',   '5m',  7776000),
     ('components',   '1h',  31536000),
     ('logs',            'raw', 2592000),
     ('probe_runs',      'raw', 2592000),
@@ -138,7 +148,7 @@ INSERT INTO retention_policy (resource, resolution, keep_seconds) VALUES
     -- tables get: `GET /events` unions all three into one timeline, so a
     -- shorter window here makes captures disappear out of a feed that still
     -- shows the alerts which produced them, and says nothing about the gap.
-    ('incident_snapshots', 'raw', 7776000),
+    ('incidents',          'raw', 7776000),
     -- raw only: probe metrics have no rollup, because nothing can read one.
     -- See ROLLUP_RESOURCES in services/rollup.rs.
     ('probe',        'raw', 86400),
@@ -822,38 +832,64 @@ CREATE INDEX idx_action_runs_status  ON action_runs(status, created_at DESC);
 -- only queries on the transition hot path.
 CREATE INDEX idx_action_runs_binding ON action_runs(action_id, label_set, created_at DESC);
 
--- ─── INCIDENT SNAPSHOTS ─────────────────────────────────────────────────────
--- Flight-recorder captures: when an alert first crosses its threshold (or an
--- operator/external system asks), the daemon freezes a compact context
--- bundle — host vitals, top processes with their recent in-memory history,
--- recent error logs, co-active alerts, failed units. The capture core is
--- trigger-agnostic; `trigger_kind` says who pulled the handle. `bundle` is
--- bounded JSON assembled from data already in RAM/DB, so a capture never
--- adds load during the incident itself. `after_bundle` lands ~60s later to
--- show how the situation evolved.
-CREATE TABLE incident_snapshots (
-    id           INTEGER PRIMARY KEY,
-    created_at   INTEGER NOT NULL DEFAULT (unixepoch()),
-    trigger_kind TEXT    NOT NULL CHECK (trigger_kind IN ('alert','manual')),
-    category     TEXT    NOT NULL DEFAULT 'resource'
-                   CHECK (category IN ('resource','availability','security','custom')),
-    -- Alert-driven captures; NULL on manual ones. Rule deletion keeps the
-    -- snapshot (the record outlives the rule) but drops the join.
-    rule_id      INTEGER REFERENCES alert_rules(id) ON DELETE SET NULL,
-    rule_name    TEXT,
-    label_set    TEXT,
-    metric_value REAL,
-    -- Manual captures; the caller's stated reason.
-    reason       TEXT,
-    -- Both blobs last, and `after_bundle` before `bundle`: the listing selects
-    -- summary columns plus `after_bundle IS NOT NULL`, and reaching a column
-    -- means stepping over everything declared before it — including a several-KB
-    -- blob and its overflow pages.
-    after_bundle TEXT,
-    bundle       TEXT    NOT NULL
+-- ─── INCIDENTS ──────────────────────────────────────────────────────────────
+-- Flight recorder. An incident is an *episode with a duration*, not a photo:
+-- it opens when an alert first crosses its threshold (or an operator asks),
+-- collects frames at the moments that carry information, and closes when the
+-- rule resolves.
+--
+-- The previous shape — one bundle at the crossing plus one 60 s later — could
+-- only describe an instantaneous spike, and not even that reliably: with the
+-- default `for_duration_secs = 30`, the pending→firing capture always landed
+-- inside the 900 s flap cooldown and was dropped, so the sole surviving frame
+-- was taken at ok→pending, the moment nobody yet knows whether there is an
+-- incident at all. Nothing was recorded when the rule resolved. A fifteen
+-- minute event was therefore described entirely by its first sixty seconds.
+CREATE TABLE incidents (
+    id            INTEGER PRIMARY KEY,
+    opened_at     INTEGER NOT NULL DEFAULT (unixepoch()),
+    -- NULL while the episode is live. Retention never reaps an open one.
+    closed_at     INTEGER,
+    close_reason  TEXT CHECK (close_reason IN ('resolved','expired','daemon_restart')),
+    trigger_kind  TEXT    NOT NULL CHECK (trigger_kind IN ('alert','manual')),
+    category      TEXT    NOT NULL DEFAULT 'resource'
+                    CHECK (category IN ('resource','availability','security','custom')),
+    -- Alert-driven episodes; NULL on manual ones. Rule deletion keeps the
+    -- episode (the record outlives the rule) but drops the join.
+    rule_id       INTEGER REFERENCES alert_rules(id) ON DELETE SET NULL,
+    rule_name     TEXT,
+    label_set     TEXT,
+    -- The value at onset, and the worst seen while the episode was open. The
+    -- pair is the headline an operator reads first: "crossed at 81, peaked
+    -- at 99" says more than either number alone.
+    trigger_value REAL,
+    peak_value    REAL,
+    -- Manual episodes; the caller's stated reason.
+    reason        TEXT
 );
-CREATE INDEX idx_incident_snapshots_ts   ON incident_snapshots(created_at DESC);
-CREATE INDEX idx_incident_snapshots_rule ON incident_snapshots(rule_id, created_at DESC);
+CREATE INDEX idx_incidents_ts   ON incidents(opened_at DESC);
+CREATE INDEX idx_incidents_rule ON incidents(rule_id, opened_at DESC);
+-- Every alert transition asks "is an episode already open for this key", so
+-- the lookup is on the hot path of rule evaluation. Partial, because only the
+-- open rows are ever searched and they are a vanishing fraction of the table.
+CREATE INDEX idx_incidents_open ON incidents(rule_id, label_set) WHERE closed_at IS NULL;
+
+-- One captured moment within an episode. `kind` says why this moment was
+-- worth freezing, which is the whole point of the redesign: `peak` and
+-- `resolution` are the frames the old two-photo shape could never take.
+--
+-- `payload` stays opaque JSON owned by `services::incidents` — the route and
+-- repository layers carry the envelope and never parse the body, so the two
+-- cannot drift apart.
+CREATE TABLE incident_frames (
+    incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+    seq         INTEGER NOT NULL,
+    kind        TEXT    NOT NULL
+                  CHECK (kind IN ('onset','escalation','peak','resolution','followup')),
+    captured_at INTEGER NOT NULL,
+    payload     TEXT    NOT NULL,
+    PRIMARY KEY (incident_id, seq)
+) WITHOUT ROWID;
 
 -- ─── HOST EVENTS ────────────────────────────────────────────────────────────
 -- The host's event ledger: discrete things that happened, as opposed to the

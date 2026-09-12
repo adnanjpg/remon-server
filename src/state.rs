@@ -97,6 +97,15 @@ pub struct AppState {
     pub process_history:
         Arc<RwLock<std::collections::HashMap<u32, crate::models::process::ProcessHistory>>>,
 
+    /// Live alert-driven incident episodes, keyed by (rule_id, label_set).
+    ///
+    /// In `AppState` rather than a module static so each `TestApp` gets its
+    /// own: the tests share one process and a global map would let episodes
+    /// leak between them. Peak tracking reads this on every evaluator tick,
+    /// which is why it is not a database round-trip.
+    pub incident_episodes:
+        Arc<RwLock<std::collections::HashMap<(i64, String), crate::services::incidents::Episode>>>,
+
     pub effective_config: Arc<RwLock<EffectiveConfig>>,
 
     pub collector_stats_interval_ms: Arc<AtomicU64>,
@@ -234,6 +243,7 @@ impl AppState {
             processes_latest: Arc::new(RwLock::new(None)),
             processes_refresh_lock: Arc::new(Mutex::new(())),
             process_history: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            incident_episodes: Arc::new(RwLock::new(std::collections::HashMap::new())),
             effective_config: Arc::new(RwLock::new(effective_config)),
             collector_stats_interval_ms: Arc::new(AtomicU64::new(collector_stats_interval_ms)),
             processes_cache_ttl_ms: Arc::new(AtomicU64::new(processes_cache_ttl_ms)),

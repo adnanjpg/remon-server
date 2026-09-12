@@ -512,22 +512,34 @@ async fn evaluate_rule(
         }
         live.insert(sample.label_set.clone(), next);
 
-        // Flight recorder: freeze context on the first threshold crossing
-        // (ok→pending) and on pending→firing (states restored mid-incident).
-        // Spawned + cooldown-deduped in the incidents service.
-        if matches!(
-            (prior.state, step.state),
-            (AlertLifecycle::Ok, AlertLifecycle::Pending)
-                | (AlertLifecycle::Pending, AlertLifecycle::Firing)
-        ) {
-            crate::services::incidents::spawn_capture_for_alert(
-                Arc::clone(state),
-                rule.id,
-                rule.name.clone(),
-                sample.label_set.clone(),
-                expr.metric.namespace.clone(),
-                sample.value,
-            );
+        // Flight recorder. An incident is an episode: it opens on the first
+        // crossing, takes a frame at each moment worth freezing, and closes
+        // when the rule resolves. All the policy — cooldown, peak thresholds,
+        // frame budget — lives in the incidents service, and `Sustained` is a
+        // map lookup that almost always decides to do nothing.
+        {
+            use crate::services::incidents::AlertPhase;
+            let phase = match (prior.state, step.state) {
+                (AlertLifecycle::Ok, AlertLifecycle::Pending) => Some(AlertPhase::Onset),
+                (AlertLifecycle::Pending, AlertLifecycle::Firing) => Some(AlertPhase::Escalation),
+                (AlertLifecycle::Firing, AlertLifecycle::Firing) => Some(AlertPhase::Sustained),
+                (prior_state, AlertLifecycle::Ok) if prior_state != AlertLifecycle::Ok => {
+                    Some(AlertPhase::Resolved)
+                }
+                _ => None,
+            };
+            if let Some(phase) = phase {
+                crate::services::incidents::on_alert_transition(
+                    state,
+                    phase,
+                    rule.id,
+                    &rule.name,
+                    &sample.label_set,
+                    &expr.metric.namespace,
+                    sample.value,
+                )
+                .await;
+            }
         }
 
         // Actions hang off the same two transitions the event log records —

@@ -1,18 +1,41 @@
-//! Incident flight recorder — freezes a compact context bundle the moment an
-//! alert first crosses its threshold (or on operator/external request), so
-//! "what was happening on the box at that moment" stays answerable long after
-//! the moment is gone.
+//! Incident flight recorder — an episode with a duration, not a photograph.
 //!
-//! Design rules:
-//! - **Trigger-agnostic core.** `spawn_capture_for_alert` and
-//!   `capture_manual` share one bundle builder; who pulled the handle is just
-//!   a column. External detectors reach it via `POST /incidents/capture`.
+//! An incident opens when an alert first crosses its threshold (or an operator
+//! asks), collects a frame at each moment that carries information, and closes
+//! when the rule resolves. `GET /incidents/{id}` hands back the whole reel.
+//!
+//! Why it is shaped this way. The previous design took one bundle at the
+//! crossing and one 60 s later, and that could only describe an instantaneous
+//! spike — not even reliably. With the default `for_duration_secs = 30`, the
+//! `pending→firing` capture always landed inside the 900 s flap cooldown and
+//! was dropped, so the only surviving frame was the one taken at `ok→pending`:
+//! the moment nobody yet knows whether there is an incident at all. Nothing
+//! was recorded when the rule resolved. A fifteen-minute event was therefore
+//! described entirely by its first sixty seconds.
+//!
+//! Design rules, inherited and extended:
+//! - **Trigger-agnostic core.** Alert transitions and `capture_manual` share
+//!   one frame builder; who pulled the handle is just a column.
 //! - **No added load during the incident.** Every slice comes from data that
-//!   already exists (stats cache, process ring, logs table, alert state) or
-//!   from one bounded best-effort shell-out (journal errors, failed units).
-//!   Nothing rescans the process table.
-//! - **Bounded output.** Fixed top-N, line counts, and per-string clamps —
-//!   a bundle is a few KB, never a dump.
+//!   already exists (stats cache, process ring, metrics rows, alert state).
+//!   The two shell-outs (journal, failed units) are reserved for the `onset`
+//!   and `resolution` frames — the ones an operator actually reads first —
+//!   so a long, spiky episode cannot turn into a shell-out storm.
+//! - **Bounded output.** Fixed top-N, line counts, per-string clamps, and a
+//!   hard ceiling on frames per episode. A reel is tens of KB, never a dump.
+//! - **Gauges are referenced, not copied.** A frame carries the instant it was
+//!   taken and nothing more; what the gauges did *across* the episode is read
+//!   back from `metrics_*` between `opened_at` and `closed_at`. An earlier
+//!   draft froze a min/avg/max summary into every frame, on the argument that
+//!   the finer metric tiers age out from under a 90-day episode. Two things
+//!   retired it. Rollups now preserve true extrema, so a `5m` bucket's maximum
+//!   *is* the worst raw sample inside it — the fidelity gap was mostly
+//!   imagined. And the host-gauge tiers are now retained as long as episodes
+//!   are (see the `retention_policy` seed), which is one seed row against a
+//!   duplicated copy of data that already exists. Storage is the cheaper half
+//!   of that trade; the expensive half was that a frame had to know when its
+//!   episode began, and threading that through every capture site was where
+//!   the bugs lived.
 
 use std::sync::Arc;
 
@@ -25,15 +48,69 @@ use crate::storage::repositories::{
     AlertRepository, IncidentRepository, LogRepository, NewIncident,
 };
 
-/// Minimum spacing between captures for the same (rule, label_set). A rule
-/// flapping ok→pending→ok→pending re-captures at most once per window.
+/// Minimum spacing between *episodes* for the same (rule, label_set). A rule
+/// flapping ok→pending→ok→pending opens at most one episode per window.
+///
+/// This no longer suppresses frames: an escalation or a resolution belongs to
+/// the episode that is already open, and dropping it was the bug that made the
+/// old shape lose the second half of every incident.
 pub const ALERT_CAPTURE_COOLDOWN_SECS: i64 = 900;
 
-/// Delay before the follow-up bundle that shows how the situation evolved.
-const AFTER_DELAY_SECS: u64 = 60;
+/// Manual captures have no rule to resolve them, so they get one follow-up
+/// frame and then close.
+const FOLLOWUP_DELAY_SECS: u64 = 60;
 
-/// Processes kept per ranking (cpu, memory) in a bundle.
+/// An episode open longer than this is closed as `expired`. Without a ceiling
+/// a rule that never resolves would hold one row open forever, which blocks
+/// retention and makes every later crossing read as a continuation.
+const MAX_EPISODE_SECS: i64 = 6 * 3600;
+
+/// A peak frame costs a process snapshot and a row, so it has to earn its
+/// place: the value must beat the running peak by this margin *and* be this
+/// far from the last peak frame.
+const PEAK_MARGIN: f64 = 0.05;
+const PEAK_FRAME_MIN_GAP_SECS: i64 = 120;
+
+/// Hard ceiling on frames in one episode. Reached only by something pathological
+/// — a six-hour episode climbing in steps every two minutes — and past it the
+/// peak *value* keeps rising even though no further frames are written.
+const MAX_FRAMES: u32 = 12;
+
+/// Processes kept per ranking (cpu, memory) in a frame.
 const TOP_N: usize = 8;
+
+/// Live state for one open alert episode. Held in `AppState` so peak tracking
+/// costs a read lock per tick instead of a database round-trip.
+#[derive(Debug, Clone)]
+pub struct Episode {
+    pub incident_id: i64,
+    pub opened_at: i64,
+    pub peak_value: f64,
+    pub frames: u32,
+    pub last_peak_frame_at: i64,
+}
+
+/// How much of the bundle a frame carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Depth {
+    /// Everything, shell-outs included.
+    Full,
+    /// Everything available from memory and the database, no shell-outs.
+    Light,
+}
+
+/// Where in its life the evaluator found this rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlertPhase {
+    /// ok→pending: the threshold was just crossed.
+    Onset,
+    /// pending→firing: it held long enough to count.
+    Escalation,
+    /// Still firing. Cheap: only a new worst value writes anything.
+    Sustained,
+    /// Back to ok.
+    Resolved,
+}
 
 /// Category inferred from the triggering rule's metric namespace.
 pub fn category_for_namespace(namespace: &str) -> &'static str {
@@ -46,123 +123,331 @@ pub fn category_for_namespace(namespace: &str) -> &'static str {
     }
 }
 
-/// Fire-and-forget capture for an alert transition. Runs off the evaluator's
-/// tick so a slow slice (journal shell-out) can never stall rule evaluation;
-/// the cooldown check lives here too, keeping the evaluator hook one line.
-pub fn spawn_capture_for_alert(
-    state: Arc<AppState>,
-    rule_id: i64,
-    rule_name: String,
-    label_set: String,
-    namespace: String,
-    metric_value: f64,
-) {
-    tokio::spawn(async move {
-        let repo = IncidentRepository::new(state.db.clone());
-        let now = chrono::Utc::now().timestamp();
-        match repo.latest_alert_capture(rule_id, &label_set).await {
-            Ok(Some(ts)) if now - ts < ALERT_CAPTURE_COOLDOWN_SECS => {
-                debug!("incident capture skipped (cooldown): rule='{rule_name}' label={label_set}");
-                return;
-            }
-            Err(e) => {
-                warn!("incident cooldown check failed for rule='{rule_name}': {e}");
-                return;
-            }
-            _ => {}
-        }
-
-        let bundle = build_bundle(&state).await;
-        let new = NewIncident {
-            trigger_kind: "alert",
-            category: category_for_namespace(&namespace).to_string(),
-            rule_id: Some(rule_id),
-            rule_name: Some(rule_name.clone()),
-            label_set: Some(label_set),
-            metric_value: Some(metric_value),
-            reason: None,
-            bundle: bundle.to_string(),
-        };
-        match repo.insert(&new).await {
-            Ok(id) => {
-                debug!("incident captured: id={id} rule='{rule_name}'");
-                spawn_after_capture(state, id);
-            }
-            Err(e) => warn!("incident insert failed for rule='{rule_name}': {e}"),
-        }
-    });
+/// Close any episode left open by a previous process. Called once at boot:
+/// whatever would have closed them is gone.
+pub async fn close_orphaned_episodes(state: &Arc<AppState>) {
+    let now = chrono::Utc::now().timestamp();
+    match IncidentRepository::new(state.db.clone())
+        .close_all_open(now, "daemon_restart")
+        .await
+    {
+        Ok(n) if n > 0 => debug!("closed {n} incident episode(s) orphaned by a restart"),
+        Ok(_) => {}
+        Err(e) => warn!("orphaned-episode sweep failed: {e}"),
+    }
 }
 
-/// Operator/external capture ("record the box, now"). Returns the snapshot id.
+/// The evaluator's one-line hook. Everything expensive is spawned; the
+/// `Sustained` path stays on the caller's task because it is a map lookup that
+/// almost always decides to do nothing.
+pub async fn on_alert_transition(
+    state: &Arc<AppState>,
+    phase: AlertPhase,
+    rule_id: i64,
+    rule_name: &str,
+    label_set: &str,
+    namespace: &str,
+    value: f64,
+) {
+    let key = (rule_id, label_set.to_string());
+
+    match phase {
+        AlertPhase::Sustained => {
+            // Hot path: one read lock, and a write only when this tick is a
+            // materially new worst.
+            let now = chrono::Utc::now().timestamp();
+            let due = {
+                let map = state.incident_episodes.read().await;
+                match map.get(&key) {
+                    Some(ep) => {
+                        let worse = value > ep.peak_value * (1.0 + PEAK_MARGIN);
+                        let spaced = now - ep.last_peak_frame_at >= PEAK_FRAME_MIN_GAP_SECS;
+                        let expired = now - ep.opened_at >= MAX_EPISODE_SECS;
+                        if expired {
+                            Some((ep.incident_id, true, false))
+                        } else if worse && spaced && ep.frames < MAX_FRAMES {
+                            Some((ep.incident_id, false, true))
+                        } else if value > ep.peak_value {
+                            // Worth remembering, not worth a frame.
+                            Some((ep.incident_id, false, false))
+                        } else {
+                            None
+                        }
+                    }
+                    None => None,
+                }
+            };
+            let Some((incident_id, expired, write_frame)) = due else {
+                return;
+            };
+            if expired {
+                finish_episode(state, key, incident_id, "expired", None).await;
+                return;
+            }
+            {
+                let mut map = state.incident_episodes.write().await;
+                if let Some(ep) = map.get_mut(&key) {
+                    ep.peak_value = ep.peak_value.max(value);
+                    if write_frame {
+                        ep.frames += 1;
+                        ep.last_peak_frame_at = now;
+                    }
+                }
+            }
+            let state = Arc::clone(state);
+            tokio::spawn(async move {
+                let repo = IncidentRepository::new(state.db.clone());
+                if let Err(e) = repo.raise_peak(incident_id, value).await {
+                    warn!("incident peak update failed for id={incident_id}: {e}");
+                }
+                if write_frame {
+                    append_frame(&state, incident_id, "peak", Depth::Light).await;
+                }
+            });
+        }
+
+        AlertPhase::Onset => {
+            let (state, rule_name, namespace) = (
+                Arc::clone(state),
+                rule_name.to_string(),
+                namespace.to_string(),
+            );
+            tokio::spawn(async move {
+                open_episode(&state, key, rule_id, rule_name, namespace, value).await;
+            });
+        }
+
+        AlertPhase::Escalation => {
+            let state = Arc::clone(state);
+            tokio::spawn(async move {
+                let Some((incident_id, _)) = live_episode(&state, &key).await else {
+                    // No open episode: the cooldown declined to open one, or the
+                    // daemon restarted mid-incident. Either way there is nothing
+                    // to append to, and inventing an episode here would report a
+                    // start time that never happened.
+                    return;
+                };
+                bump_frames(&state, &key).await;
+                append_frame(&state, incident_id, "escalation", Depth::Light).await;
+            });
+        }
+
+        AlertPhase::Resolved => {
+            let state = Arc::clone(state);
+            tokio::spawn(async move {
+                let Some((incident_id, _)) = live_episode(&state, &key).await else {
+                    return;
+                };
+                finish_episode(&state, key, incident_id, "resolved", Some(value)).await;
+            });
+        }
+    }
+}
+
+/// Open an episode and take its `onset` frame, unless the flap cooldown says
+/// this key already had one recently.
+async fn open_episode(
+    state: &Arc<AppState>,
+    key: (i64, String),
+    rule_id: i64,
+    rule_name: String,
+    namespace: String,
+    value: f64,
+) {
+    let repo = IncidentRepository::new(state.db.clone());
+    let now = chrono::Utc::now().timestamp();
+
+    // An episode already open for this key means the evaluator saw ok→pending
+    // without an intervening resolve (a restored state, say). Keep the older
+    // one: its `opened_at` is the truthful start of the trouble.
+    match repo.open_episode_for(rule_id, &key.1).await {
+        Ok(Some(_)) => return,
+        Err(e) => {
+            warn!("incident open-episode check failed for rule='{rule_name}': {e}");
+            return;
+        }
+        Ok(None) => {}
+    }
+
+    match repo.latest_alert_capture(rule_id, &key.1).await {
+        Ok(Some(ts)) if now - ts < ALERT_CAPTURE_COOLDOWN_SECS => {
+            debug!(
+                "incident episode skipped (cooldown): rule='{rule_name}' label={}",
+                key.1
+            );
+            return;
+        }
+        Err(e) => {
+            warn!("incident cooldown check failed for rule='{rule_name}': {e}");
+            return;
+        }
+        _ => {}
+    }
+
+    let new = NewIncident {
+        trigger_kind: "alert",
+        category: category_for_namespace(&namespace).to_string(),
+        rule_id: Some(rule_id),
+        rule_name: Some(rule_name.clone()),
+        label_set: Some(key.1.clone()),
+        trigger_value: Some(value),
+        reason: None,
+    };
+    let incident_id = match repo.open(&new).await {
+        Ok(id) => id,
+        Err(e) => {
+            warn!("incident open failed for rule='{rule_name}': {e}");
+            return;
+        }
+    };
+
+    state.incident_episodes.write().await.insert(
+        key,
+        Episode {
+            incident_id,
+            opened_at: now,
+            peak_value: value,
+            frames: 1,
+            last_peak_frame_at: 0,
+        },
+    );
+    debug!("incident episode opened: id={incident_id} rule='{rule_name}'");
+    append_frame(state, incident_id, "onset", Depth::Full).await;
+}
+
+/// Take the closing frame, write the close, and forget the live state.
+async fn finish_episode(
+    state: &Arc<AppState>,
+    key: (i64, String),
+    incident_id: i64,
+    reason: &str,
+    final_value: Option<f64>,
+) {
+    let now = chrono::Utc::now().timestamp();
+    // Forget the live state first: whatever happens below, this key is no
+    // longer recording, and a later tick must not append to a closed episode.
+    state.incident_episodes.write().await.remove(&key);
+
+    if let Some(v) = final_value {
+        let repo = IncidentRepository::new(state.db.clone());
+        if let Err(e) = repo.raise_peak(incident_id, v).await {
+            warn!("incident peak update failed for id={incident_id}: {e}");
+        }
+    }
+    // The closing frame is the one the old shape never took, so it gets the
+    // full depth: whether a unit died or the kernel complained during the
+    // episode is answerable here and nowhere else.
+    append_frame(state, incident_id, "resolution", Depth::Full).await;
+
+    if let Err(e) = IncidentRepository::new(state.db.clone())
+        .close(incident_id, now, reason)
+        .await
+    {
+        warn!("incident close failed for id={incident_id}: {e}");
+    }
+}
+
+/// The open episode's `(id, opened_at)`, from memory when this process opened
+/// it and from the row when it did not.
+async fn live_episode(state: &Arc<AppState>, key: &(i64, String)) -> Option<(i64, i64)> {
+    if let Some(ep) = state.incident_episodes.read().await.get(key) {
+        return Some((ep.incident_id, ep.opened_at));
+    }
+    // The map is process-local; the row is the truth.
+    IncidentRepository::new(state.db.clone())
+        .open_episode_for(key.0, &key.1)
+        .await
+        .ok()
+        .flatten()
+}
+
+async fn bump_frames(state: &Arc<AppState>, key: &(i64, String)) {
+    if let Some(ep) = state.incident_episodes.write().await.get_mut(key) {
+        ep.frames += 1;
+    }
+}
+
+/// Operator/external capture ("record the box, now"). One episode, an `onset`
+/// frame, a follow-up a minute later, then closed — there is no rule whose
+/// resolution could close it.
 pub async fn capture_manual(state: &Arc<AppState>, reason: &str, category: &str) -> AppResult<i64> {
-    let bundle = build_bundle(state).await;
     let repo = IncidentRepository::new(state.db.clone());
     let id = repo
-        .insert(&NewIncident {
+        .open(&NewIncident {
             trigger_kind: "manual",
             category: category.to_string(),
             rule_id: None,
             rule_name: None,
             label_set: None,
-            metric_value: None,
+            trigger_value: None,
             reason: Some(reason.chars().take(500).collect()),
-            bundle: bundle.to_string(),
         })
         .await?;
-    spawn_after_capture(Arc::clone(state), id);
+    append_frame(state, id, "onset", Depth::Full).await;
+
+    let state = Arc::clone(state);
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(FOLLOWUP_DELAY_SECS)).await;
+        append_frame(&state, id, "followup", Depth::Light).await;
+        let now = chrono::Utc::now().timestamp();
+        if let Err(e) = IncidentRepository::new(state.db.clone())
+            .close(id, now, "resolved")
+            .await
+        {
+            warn!("manual incident close failed for id={id}: {e}");
+        }
+    });
     Ok(id)
 }
 
-/// T+60s follow-up: vitals + processes again, so before/after comparison
-/// shows whether the pressure moved.
-fn spawn_after_capture(state: Arc<AppState>, id: i64) {
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(AFTER_DELAY_SECS)).await;
-        let after = json!({
-            "captured_at": chrono::Utc::now().timestamp(),
-            "vitals": vitals_slice(&state).await,
-            "top_processes": processes_slice(&state).await,
-        });
-        if let Err(e) = IncidentRepository::new(state.db.clone())
-            .set_after(id, &after.to_string())
-            .await
-        {
-            warn!("incident after-bundle write failed for id={id}: {e}");
-        }
-    });
-}
-
-/// The full capture bundle. Every slice is best-effort: a failed slice
-/// becomes `null` (or `{"error": ...}`) rather than sinking the capture.
+/// Build one frame and store it. Every slice is best-effort: a failed slice
+/// becomes `null` (or `{"error": …}`) rather than sinking the frame.
 ///
 /// Shell-out slices (journal, init-system state) are skipped in the test
 /// profile: hermetic tests must not depend on the host's journald/systemd
 /// state, and their multi-second best-effort timeouts would turn every
 /// spawned-capture assertion into a timing lottery (bit CI on Linux).
-async fn build_bundle(state: &Arc<AppState>) -> Value {
-    let shell_out_slices = !cfg!(test);
-    let mut bundle = json!({
-        "captured_at": chrono::Utc::now().timestamp(),
+async fn append_frame(state: &Arc<AppState>, incident_id: i64, kind: &str, depth: Depth) {
+    let now = chrono::Utc::now().timestamp();
+    let payload = build_frame(state, kind, depth, now).await;
+    if let Err(e) = IncidentRepository::new(state.db.clone())
+        .append_frame(incident_id, kind, now, &payload.to_string())
+        .await
+    {
+        warn!("incident frame write failed for id={incident_id} kind={kind}: {e}");
+    }
+}
+
+async fn build_frame(state: &Arc<AppState>, kind: &str, depth: Depth, now: i64) -> Value {
+    let shell_out_slices = !cfg!(test) && depth == Depth::Full;
+    // The instant, and only the instant. What the gauges did between frames is
+    // in `metrics_*`, which outlives the episode — see the module header.
+    let mut frame = json!({
+        "kind": kind,
+        "captured_at": now,
         "vitals": vitals_slice(state).await,
         "top_processes": processes_slice(state).await,
-        "recent_daemon_errors": daemon_errors_slice(state).await,
         "co_active_alerts": co_active_alerts_slice(state).await,
-        "failed_services": if shell_out_slices {
+    });
+
+    if depth == Depth::Full {
+        frame["recent_daemon_errors"] = daemon_errors_slice(state).await;
+        frame["failed_services"] = if shell_out_slices {
             failed_services_slice(state).await
         } else {
             Value::Null
-        },
-    });
-    // System-level error events (OOM kills, segfaults, disk errors) are the
-    // slice that answers "did the kernel do something" — Linux journal only;
-    // other platforms simply omit it.
-    if cfg!(target_os = "linux") && shell_out_slices {
-        bundle["system_errors"] = match system_events("err", 20, Some(15)).await {
-            Ok(v) => v,
-            Err(e) => json!({ "error": e }),
         };
+        // System-level error events (OOM kills, segfaults, disk errors) are the
+        // slice that answers "did the kernel do something" — Linux journal only;
+        // other platforms simply omit it.
+        if cfg!(target_os = "linux") && shell_out_slices {
+            frame["system_errors"] = match system_events("err", 20, Some(15)).await {
+                Ok(v) => v,
+                Err(e) => json!({ "error": e }),
+            };
+        }
     }
-    bundle
+    frame
 }
 
 /// Cross-resource host cross-section from the stats cache. The triggering

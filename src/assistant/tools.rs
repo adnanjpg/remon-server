@@ -232,14 +232,15 @@ pub fn definitions(state: &AppState) -> Value {
             "type": "function",
             "function": {
                 "name": "list_incidents",
-                "description": "Flight-recorder snapshots: whenever an alert first crossed its \
-        threshold (or someone asked), the daemon froze the box's context. Returns id, time, \
-        trigger, category, rule and value per snapshot, newest first. Follow up with \
-        incident_detail for the bundle.",
+                "description": "Flight-recorder episodes: an incident opens when an alert first \
+        crosses its threshold (or someone asks) and closes when it resolves. Returns id, \
+        opened_at/closed_at, trigger, category, rule, the value that opened it and the worst it \
+        reached, and how many frames were captured, newest first. Follow up with incident_detail \
+        for the frames. An episode with no closed_at is still happening.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "limit": { "type": "integer", "description": "Max snapshots (1-50). Default 10." }
+                        "limit": { "type": "integer", "description": "Max episodes (1-50). Default 10." }
                     }
                 }
             }
@@ -248,15 +249,18 @@ pub fn definitions(state: &AppState) -> Value {
             "type": "function",
             "function": {
                 "name": "incident_detail",
-                "description": "One incident snapshot's full context bundle: host vitals at \
-        capture time, top processes with their recent in-memory history (spike vs steady), the \
-        daemon's recent errors, system-level errors (OOM kills etc., Linux), co-active alerts and \
-        failed units — plus a follow-up sample from ~60s later. THE tool for 'what caused that \
-        alert at 03:12'.",
+                "description": "One episode's whole reel, oldest frame first, so reading top to \
+        bottom replays what happened. Each frame is labelled by why it was taken — onset (the \
+        threshold crossing), escalation (it held), peak (a new worst), resolution (it cleared) — \
+        and carries host vitals, min/avg/max across the episode so far, top processes with their \
+        recent history (spike vs steady) and co-active alerts. The onset and resolution frames \
+        also carry the daemon's recent errors, system-level errors (OOM kills etc., Linux) and \
+        failed units. THE tool for 'what caused that alert at 03:12'; compare the first and last \
+        frames to see whether it got better or worse.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "id": { "type": "integer", "description": "Snapshot id from list_incidents." }
+                        "id": { "type": "integer", "description": "Episode id from list_incidents." }
                     },
                     "required": ["id"]
                 }
@@ -856,22 +860,25 @@ async fn list_incidents(state: &Arc<AppState>, args: &Value) -> Result<Value, St
         .map(|r| {
             json!({
                 "id": r.id,
-                "captured_at": r.created_at,
+                "opened_at": r.opened_at,
+                "closed_at": r.closed_at,
+                "close_reason": r.close_reason,
                 "trigger": r.trigger_kind,
                 "category": r.category,
                 "rule_name": r.rule_name,
                 "label_set": r.label_set,
-                "metric_value": r.metric_value,
+                "trigger_value": r.trigger_value,
+                "peak_value": r.peak_value,
                 "reason": r.reason,
-                "has_after": r.has_after,
+                "frame_count": r.frame_count,
             })
         })
         .collect();
     Ok(json!({ "count": out.len(), "incidents": out }))
 }
 
-/// One snapshot's full bundle (+ the T+60s follow-up when present). Bundles
-/// are bounded at capture time, so returning them whole is safe.
+/// One episode's whole reel, oldest frame first. Frames are bounded at capture
+/// time and capped per episode, so returning them whole is safe.
 async fn incident_detail(state: &Arc<AppState>, args: &Value) -> Result<Value, String> {
     let id = args
         .get("id")
@@ -881,25 +888,34 @@ async fn incident_detail(state: &Arc<AppState>, args: &Value) -> Result<Value, S
         .get(id)
         .await
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("no incident snapshot with id {id}"))?;
+        .ok_or_else(|| format!("no incident with id {id}"))?;
 
-    let bundle: Value = serde_json::from_str(&row.bundle).unwrap_or(Value::Null);
-    let after: Value = row
-        .after_bundle
-        .as_deref()
-        .map(|s| serde_json::from_str(s).unwrap_or(Value::Null))
-        .unwrap_or(Value::Null);
+    let frames: Vec<Value> = row
+        .frames
+        .into_iter()
+        .map(|f| {
+            json!({
+                "seq": f.seq,
+                "kind": f.kind,
+                "captured_at": f.captured_at,
+                "payload": serde_json::from_str::<Value>(&f.payload).unwrap_or(Value::Null),
+            })
+        })
+        .collect();
+
     Ok(json!({
         "id": row.id,
-        "captured_at": row.created_at,
+        "opened_at": row.opened_at,
+        "closed_at": row.closed_at,
+        "close_reason": row.close_reason,
         "trigger": row.trigger_kind,
         "category": row.category,
         "rule_name": row.rule_name,
         "label_set": row.label_set,
-        "metric_value": row.metric_value,
+        "trigger_value": row.trigger_value,
+        "peak_value": row.peak_value,
         "reason": row.reason,
-        "bundle": bundle,
-        "after": after,
+        "frames": frames,
     }))
 }
 

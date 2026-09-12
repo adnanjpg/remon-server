@@ -365,6 +365,11 @@ async fn run(
     services::events::detect_boot_on_startup(&app_state).await;
     services::events::spawn_system_event_sweep(app_state.clone());
 
+    // Any incident episode still open belongs to a process that is gone. Close
+    // it before the evaluator runs, or the next crossing appends to a stale
+    // episode and reports a start time from before the restart.
+    services::incidents::close_orphaned_episodes(&app_state).await;
+
     collectors::spawn_all(app_state.clone());
     collectors::smart::spawn(app_state.clone(), config.smart.clone());
 

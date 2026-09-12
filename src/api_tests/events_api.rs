@@ -243,8 +243,8 @@ async fn source_filter_survives_a_window_full_of_the_other_source() {
     for (trigger, count) in [("alert", 3), ("manual", 12)] {
         for _ in 0..count {
             sqlx::query(
-                "INSERT INTO incident_snapshots (trigger_kind, category, bundle)
-                 VALUES (?, 'resource', '{}')",
+                "INSERT INTO incidents (trigger_kind, category)
+                 VALUES (?, 'resource')",
             )
             .bind(trigger)
             .execute(&app.state.db)
@@ -414,8 +414,8 @@ async fn paging_does_not_drop_or_repeat_events_sharing_a_second() {
     .expect("insert alert event");
 
     sqlx::query(
-        "INSERT INTO incident_snapshots (created_at, trigger_kind, category, bundle)
-         VALUES (?, 'manual', 'resource', '{}')",
+        "INSERT INTO incidents (opened_at, trigger_kind, category)
+         VALUES (?, 'manual', 'resource')",
     )
     .bind(shared)
     .execute(&app.state.db)

@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT seq as \"seq!\", kind as \"kind!\", captured_at as \"captured_at!\",\n                      payload as \"payload!\"\n                 FROM incident_frames WHERE incident_id = ?\n                ORDER BY captured_at ASC, seq ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "seq!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "incident_frames",
+            "name": "seq"
+          }
+        }
+      },
+      {
+        "name": "kind!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incident_frames",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "captured_at!",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "incident_frames",
+            "name": "captured_at"
+          }
+        }
+      },
+      {
+        "name": "payload!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incident_frames",
+            "name": "payload"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8c72c9610c3957daea48fc28352d5ff4e0c5cba8381f343ad254e8a704b9ff01"
+}

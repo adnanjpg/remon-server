@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO incident_frames (incident_id, seq, kind, captured_at, payload)\n             SELECT ?1, COALESCE(MAX(seq), -1) + 1, ?2, ?3, ?4\n               FROM incident_frames WHERE incident_id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "910d127dbcd4533bfafc2b95efbfa771ee1b98e4fe7948b312bb835aa0c5de33"
+}

@@ -1,0 +1,153 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT i.id as \"id!\", i.opened_at as \"opened_at!\", i.closed_at,\n                      i.close_reason,\n                      i.trigger_kind as \"trigger_kind!\", i.category as \"category!\",\n                      i.rule_name, i.label_set, i.trigger_value, i.peak_value, i.reason,\n                      (SELECT COUNT(*) FROM incident_frames f\n                        WHERE f.incident_id = i.id) as \"frame_count!: i64\"\n               FROM incidents i\n              ORDER BY i.opened_at DESC, i.id DESC\n              LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "incidents",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "opened_at!",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "incidents",
+            "name": "opened_at"
+          }
+        }
+      },
+      {
+        "name": "closed_at",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "incidents",
+            "name": "closed_at"
+          }
+        }
+      },
+      {
+        "name": "close_reason",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incidents",
+            "name": "close_reason"
+          }
+        }
+      },
+      {
+        "name": "trigger_kind!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incidents",
+            "name": "trigger_kind"
+          }
+        }
+      },
+      {
+        "name": "category!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incidents",
+            "name": "category"
+          }
+        }
+      },
+      {
+        "name": "rule_name",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incidents",
+            "name": "rule_name"
+          }
+        }
+      },
+      {
+        "name": "label_set",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incidents",
+            "name": "label_set"
+          }
+        }
+      },
+      {
+        "name": "trigger_value",
+        "ordinal": 8,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "incidents",
+            "name": "trigger_value"
+          }
+        }
+      },
+      {
+        "name": "peak_value",
+        "ordinal": 9,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "incidents",
+            "name": "peak_value"
+          }
+        }
+      },
+      {
+        "name": "reason",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "incidents",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "name": "frame_count!: i64",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "40f368c5ee60db48f29e7de5a57e20b9432570364fe34c722e08b5c12ae4f733"
+}

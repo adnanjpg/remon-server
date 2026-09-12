@@ -96,7 +96,7 @@ impl TimelineRow {
         match self {
             Self::Ledger(r) => r.created_at,
             Self::Alert(e) => e.occurred_at,
-            Self::Incident(i) => i.created_at,
+            Self::Incident(i) => i.opened_at,
         }
     }
 
@@ -195,7 +195,7 @@ impl TimelineRow {
                     .or(i.reason.as_deref())
                     .unwrap_or("host snapshot");
                 EventDto {
-                    ts: i.created_at,
+                    ts: i.opened_at,
                     source: source.to_string(),
                     kind: INCIDENT_KIND.to_string(),
                     severity: "info".to_string(),
@@ -208,7 +208,8 @@ impl TimelineRow {
                     details: Some(serde_json::json!({
                         "trigger": i.trigger_kind,
                         "category": i.category,
-                        "has_after": i.has_after,
+                        "frame_count": i.frame_count,
+                        "closed_at": i.closed_at,
                     })),
                 }
             }
