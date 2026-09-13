@@ -116,10 +116,10 @@ pub async fn maintain(state: &Arc<AppState>, now: i64) {
             _ if now - ep.opened_at >= MAX_EPISODE_SECS => Some("expired"),
             _ => None,
         };
-        if let Some(reason) = reason {
-            if let Err(e) = finish_episode(state, &key, &ep, reason, None).await {
-                warn!("incident maintenance failed: {e}");
-            }
+        if let Some(reason) = reason
+            && let Err(e) = finish_episode(state, &key, &ep, reason, None).await
+        {
+            warn!("incident maintenance failed: {e}");
         }
     }
 }
@@ -135,10 +135,10 @@ pub async fn on_alert_transition(
     _namespace: &str,
     value: f64,
 ) {
-    if let Ok(Some(rule)) = AlertRepository::new(state.db.clone()).get(rule_id).await {
-        if let Ok(expr) = crate::services::alerting::expression::parse(&rule.expression) {
-            on_rule_observation(state, phase, &rule, &expr, label_set, value).await;
-        }
+    if let Ok(Some(rule)) = AlertRepository::new(state.db.clone()).get(rule_id).await
+        && let Ok(expr) = crate::services::alerting::expression::parse(&rule.expression)
+    {
+        on_rule_observation(state, phase, &rule, &expr, label_set, value).await;
     }
 }
 /// The definition comes from the same compiled rule that evaluated this sample.
@@ -178,11 +178,11 @@ async fn observe(
     let now = chrono::Utc::now().timestamp();
     let repo = IncidentRepository::new(state.db.clone());
     let mut existing = state.incident_episodes.read().await.get(&key).cloned();
-    if let Some(ep) = &existing {
-        if ep.expression != rule.expression || ep.for_duration != rule.for_duration_secs {
-            finish_episode(state, &key, ep, "rule_changed", None).await?;
-            existing = None;
-        }
+    if let Some(ep) = &existing
+        && (ep.expression != rule.expression || ep.for_duration != rule.for_duration_secs)
+    {
+        finish_episode(state, &key, ep, "rule_changed", None).await?;
+        existing = None;
     }
     if phase == AlertPhase::Resolved {
         if let Some(ep) = existing {
@@ -211,6 +211,9 @@ async fn observe(
                 rule_name: Some(rule.name.clone()),
                 label_set: Some(key.1.clone()),
                 trigger_value: Some(value),
+                // A directionless comparison has no worst: `severity` returns
+                // `None` for it, and nothing below would ever raise this.
+                initial_worst: severity(expr.comparator, expr.threshold, value).map(|_| value),
                 reason: None,
                 trigger_context: Some(context.to_string()),
             })
@@ -321,7 +324,7 @@ async fn finish_episode(
     } else {
         "interrupted"
     };
-    record_frame(
+    let wrote = record_frame(
         state,
         ep.incident_id,
         kind,
@@ -329,9 +332,20 @@ async fn finish_episode(
         value,
         Some(reason),
     )
-    .await?;
-    state.incident_episodes.write().await.remove(key);
-    Ok(())
+    .await;
+
+    // A transient database error is worth retrying, so the live entry stays and
+    // the next observation or sweep tries again. A row that is already closed
+    // is not: the terminal insert is guarded on `closed_at IS NULL`, so it
+    // returns nothing and there is no state left to write. Keeping the entry
+    // for that case would retry forever, once every maintenance tick.
+    // `NotFound` here can only be the guarded insert returning no row, since
+    // that is the one lookup this path makes.
+    let gone = matches!(&wrote, Err(crate::error::AppError::NotFound(_)));
+    if wrote.is_ok() || gone {
+        state.incident_episodes.write().await.remove(key);
+    }
+    if gone { Ok(()) } else { wrote }
 }
 
 pub async fn capture_manual(state: &Arc<AppState>, reason: &str, category: &str) -> AppResult<i64> {

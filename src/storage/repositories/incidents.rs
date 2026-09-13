@@ -49,6 +49,10 @@ pub struct NewIncident {
     pub rule_name: Option<String>,
     pub label_set: Option<String>,
     pub trigger_value: Option<f64>,
+    /// Where `worst_value` starts. `None` for a comparison with no direction
+    /// (`==` / `!=`), where "worse" is not a thing that can be measured — the
+    /// caller decides that, because only it knows the comparator.
+    pub initial_worst: Option<f64>,
     pub reason: Option<String>,
     pub trigger_context: Option<String>,
 }
@@ -60,15 +64,9 @@ impl IncidentRepository {
         Self { pool }
     }
     pub async fn open(&self, n: &NewIncident) -> AppResult<i64> {
-        let directional = n
-            .trigger_context
-            .as_deref()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .is_none_or(|v| !matches!(v["comparator"].as_str(), Some("==" | "!=")));
-        let initial_worst = if directional { n.trigger_value } else { None };
         let r = sqlx::query("INSERT INTO incidents (trigger_kind, category, rule_id, rule_name, label_set, trigger_value, worst_value, reason, trigger_context) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(n.trigger_kind).bind(&n.category).bind(n.rule_id).bind(&n.rule_name)
-            .bind(&n.label_set).bind(n.trigger_value).bind(initial_worst).bind(&n.reason)
+            .bind(&n.label_set).bind(n.trigger_value).bind(n.initial_worst).bind(&n.reason)
             .bind(&n.trigger_context).execute(&self.pool).await?;
         Ok(r.last_insert_rowid())
     }
