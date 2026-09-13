@@ -853,6 +853,9 @@ CREATE TABLE incidents (
     -- The value at onset, and the worst seen while the episode was open. The
     -- pair is the headline an operator reads first: "crossed at 81, peaked
     -- at 99" says more than either number alone.
+    recovery_started_at INTEGER,
+    violation_count INTEGER NOT NULL DEFAULT 0 CHECK (violation_count >= 0),
+    confirmation_count INTEGER NOT NULL DEFAULT 0 CHECK (confirmation_count >= 0),
     trigger_context TEXT,
     trigger_value REAL,
     worst_value    REAL,
@@ -877,7 +880,7 @@ CREATE TABLE incident_frames (
     incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
     seq         INTEGER NOT NULL,
     kind        TEXT    NOT NULL
-                  CHECK (kind IN ('onset','continuation','escalation','peak','checkpoint','resolution','cleared','interrupted','followup')),
+                  CHECK (kind IN ('onset','continuation','escalation','peak','checkpoint','recovery','relapse','resolution','cleared','interrupted','followup')),
     captured_at INTEGER NOT NULL,
     payload     TEXT    NOT NULL,
     PRIMARY KEY (incident_id, seq)

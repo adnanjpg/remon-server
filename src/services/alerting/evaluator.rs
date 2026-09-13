@@ -524,9 +524,7 @@ async fn evaluate_rule(
                 (AlertLifecycle::Pending, AlertLifecycle::Firing) => Some(AlertPhase::Escalation),
                 (AlertLifecycle::Firing, AlertLifecycle::Firing) => Some(AlertPhase::Sustained),
                 (AlertLifecycle::Pending, AlertLifecycle::Pending) => Some(AlertPhase::Pending),
-                (prior_state, AlertLifecycle::Ok) if prior_state != AlertLifecycle::Ok => {
-                    Some(AlertPhase::Resolved)
-                }
+                (_, AlertLifecycle::Ok) => Some(AlertPhase::Resolved),
                 _ => None,
             };
             if let Some(phase) = phase {

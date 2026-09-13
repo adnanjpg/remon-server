@@ -81,6 +81,10 @@ pub struct IncidentSummaryDto {
     /// `resolved` | `expired` | `daemon_restart`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub close_reason: Option<String>,
+    pub recovery_started_at: Option<i64>,
+    pub violation_count: i64,
+    pub confirmation_count: i64,
+
     pub trigger_kind: String,
     pub category: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -125,6 +129,10 @@ pub struct IncidentDto {
     pub closed_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub close_reason: Option<String>,
+    pub recovery_started_at: Option<i64>,
+    pub violation_count: i64,
+    pub confirmation_count: i64,
+
     pub trigger_kind: String,
     pub category: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -165,6 +173,9 @@ pub async fn list(
             opened_at: r.opened_at,
             closed_at: r.closed_at,
             close_reason: r.close_reason,
+            recovery_started_at: r.recovery_started_at,
+            violation_count: r.violation_count,
+            confirmation_count: r.confirmation_count,
             trigger_kind: r.trigger_kind,
             category: r.category,
             rule_name: r.rule_name,
@@ -215,6 +226,9 @@ pub async fn get(
         opened_at: row.opened_at,
         closed_at: row.closed_at,
         close_reason: row.close_reason,
+        recovery_started_at: row.recovery_started_at,
+        violation_count: row.violation_count,
+        confirmation_count: row.confirmation_count,
         trigger_kind: row.trigger_kind,
         category: row.category,
         rule_name: row.rule_name,

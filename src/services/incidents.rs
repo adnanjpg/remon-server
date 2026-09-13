@@ -15,7 +15,7 @@ const FOLLOWUP_DELAY_SECS: u64 = 60;
 const MAX_EPISODE_SECS: i64 = 6 * 3600;
 const PEAK_MARGIN: f64 = 0.05;
 const PEAK_FRAME_MIN_GAP_SECS: i64 = 120;
-const CHECKPOINT_AT: [i64; 5] = [600, 1800, 3600, 7200, 14400];
+const CHECKPOINT_AT: [i64; 4] = [600, 1800, 7200, 14400];
 const MAX_FRAMES: u32 = 12;
 const TOP_N: usize = 8;
 
@@ -36,6 +36,13 @@ pub struct Episode {
     pub confirmed: bool,
     pub checkpoints: usize,
     pub peaks: u32,
+    pub recovery_started_at: Option<i64>,
+    pub violation_count: i64,
+    pub confirmation_count: i64,
+    pub cycle_confirmed: bool,
+    pub recovery_frame_taken: bool,
+    pub relapse_frame_taken: bool,
+    pub escalation_frame_taken: bool,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Depth {
@@ -104,7 +111,9 @@ pub async fn maintain(state: &Arc<AppState>, now: i64) {
             Ok(None) => Some("rule_removed"),
             Ok(Some(r)) if !r.enabled => Some("rule_disabled"),
             Ok(Some(r))
-                if r.expression != ep.expression || r.for_duration_secs != ep.for_duration =>
+                if r.expression != ep.expression
+                    || r.for_duration_secs != ep.for_duration
+                    || r.eval_interval_secs != ep.eval_interval =>
             {
                 Some("rule_changed")
             }
@@ -117,7 +126,7 @@ pub async fn maintain(state: &Arc<AppState>, now: i64) {
             _ => None,
         };
         if let Some(reason) = reason
-            && let Err(e) = finish_episode(state, &key, &ep, reason, None).await
+            && let Err(e) = finish_episode(state, &key, &ep, reason, None, now).await
         {
             warn!("incident maintenance failed: {e}");
         }
@@ -161,12 +170,38 @@ pub async fn on_rule_observation(
         rule,
         expr,
         value,
+        chrono::Utc::now().timestamp(),
     )
     .await
     {
         warn!("incident observation failed for rule={}: {e}", rule.id);
     }
 }
+/// Tests drive the real observer with explicit wall time, without sleeps.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub async fn observe_at(
+    state: &Arc<AppState>,
+    phase: AlertPhase,
+    rule: &crate::models::alert::AlertRule,
+    expr: &Expression,
+    label: &str,
+    value: f64,
+    now: i64,
+) -> AppResult<()> {
+    let _guard = state.incident_gate.lock().await;
+    observe(
+        state,
+        phase,
+        (rule.id, label.into()),
+        rule,
+        expr,
+        value,
+        now,
+    )
+    .await
+}
+#[allow(clippy::too_many_arguments)]
 async fn observe(
     state: &Arc<AppState>,
     phase: AlertPhase,
@@ -174,19 +209,74 @@ async fn observe(
     rule: &crate::models::alert::AlertRule,
     expr: &Expression,
     value: f64,
+    now: i64,
 ) -> AppResult<()> {
-    let now = chrono::Utc::now().timestamp();
     let repo = IncidentRepository::new(state.db.clone());
     let mut existing = state.incident_episodes.read().await.get(&key).cloned();
     if let Some(ep) = &existing
-        && (ep.expression != rule.expression || ep.for_duration != rule.for_duration_secs)
+        && (ep.expression != rule.expression
+            || ep.for_duration != rule.for_duration_secs
+            || ep.eval_interval != rule.eval_interval_secs)
     {
-        finish_episode(state, &key, ep, "rule_changed", None).await?;
+        finish_episode(state, &key, ep, "rule_changed", None, now).await?;
         existing = None;
     }
+    // A late sample cannot bridge a missing-data interval merely because the sweep has not run.
+    if let Some(ep) = &existing {
+        let reason = if now - ep.last_seen_at >= (ep.eval_interval * 3).max(120) {
+            Some("data_gap")
+        } else if now - ep.opened_at >= MAX_EPISODE_SECS {
+            Some("expired")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            finish_episode(state, &key, ep, reason, None, now).await?;
+            existing = None;
+        }
+    }
     if phase == AlertPhase::Resolved {
-        if let Some(ep) = existing {
-            finish_episode(state, &key, &ep, "resolved", Some(value)).await?;
+        let Some(mut ep) = existing else {
+            return Ok(());
+        };
+        ep.last_seen_at = now;
+        if ep.recovery_started_at.is_none() {
+            ep.recovery_started_at = Some(now);
+            repo.update_observation(
+                ep.incident_id,
+                ep.recovery_started_at,
+                ep.violation_count,
+                ep.confirmation_count,
+            )
+            .await?;
+        }
+        state
+            .incident_episodes
+            .write()
+            .await
+            .insert(key.clone(), ep.clone());
+        if !ep.recovery_frame_taken {
+            record_frame_at(
+                state,
+                ep.incident_id,
+                "recovery",
+                Depth::Light,
+                Some(value),
+                None,
+                now,
+            )
+            .await?;
+            ep.recovery_frame_taken = true;
+            ep.frames += 1;
+            state
+                .incident_episodes
+                .write()
+                .await
+                .insert(key.clone(), ep.clone());
+        }
+        // Only healthy evaluations close a recovery window; a maintenance timer never does.
+        if now - ep.recovery_started_at.unwrap() >= (ep.eval_interval * 2).max(60) {
+            finish_episode(state, &key, &ep, "resolved", Some(value), now).await?;
         }
         return Ok(());
     }
@@ -202,7 +292,7 @@ async fn observe(
         let context = json!({ "previous_incident_id":previous, "expression":rule.expression, "comparator":expr.comparator.as_str(),
             "threshold":expr.threshold, "namespace":expr.metric.namespace, "field":expr.metric.field,
             "for_duration_secs":rule.for_duration_secs, "eval_interval_secs":rule.eval_interval_secs,
-            "severity":rule.severity, "capture_policy": {"max_frames":MAX_FRAMES,"max_episode_secs":MAX_EPISODE_SECS,"checkpoint_offsets_secs":CHECKPOINT_AT,"peak_relative_change":PEAK_MARGIN,"min_peak_interval_secs":PEAK_FRAME_MIN_GAP_SECS}, "start_kind": if continuation { "continuation" } else { "crossing" } });
+            "severity":rule.severity, "capture_policy": {"recovery_hold_secs":(rule.eval_interval_secs*2).max(60),"max_frames":MAX_FRAMES,"max_episode_secs":MAX_EPISODE_SECS,"checkpoint_offsets_secs":CHECKPOINT_AT,"peak_relative_change":PEAK_MARGIN,"min_peak_interval_secs":PEAK_FRAME_MIN_GAP_SECS}, "start_kind": if continuation { "continuation" } else { "crossing" } });
         let id = repo
             .open(&NewIncident {
                 trigger_kind: "alert",
@@ -234,6 +324,13 @@ async fn observe(
             confirmed: false,
             checkpoints: 0,
             peaks: 0,
+            recovery_started_at: None,
+            violation_count: 1,
+            confirmation_count: 0,
+            cycle_confirmed: false,
+            recovery_frame_taken: false,
+            relapse_frame_taken: false,
+            escalation_frame_taken: false,
         };
         // Publish before capture so a failed write is retried by the next observation.
         state
@@ -243,7 +340,34 @@ async fn observe(
             .insert(key.clone(), ep.clone());
         ep
     };
+    let relapsed = ep.recovery_started_at.is_some();
+    if relapsed {
+        ep.recovery_started_at = None;
+        ep.violation_count += 1;
+        ep.cycle_confirmed = false;
+    }
+    let confirming =
+        !ep.cycle_confirmed && matches!(phase, AlertPhase::Escalation | AlertPhase::Sustained);
+    if confirming {
+        ep.confirmation_count += 1;
+        ep.cycle_confirmed = true;
+        ep.confirmed = true;
+    }
+    if relapsed || confirming {
+        repo.update_observation(
+            ep.incident_id,
+            ep.recovery_started_at,
+            ep.violation_count,
+            ep.confirmation_count,
+        )
+        .await?;
+    }
     ep.last_seen_at = now;
+    state
+        .incident_episodes
+        .write()
+        .await
+        .insert(key.clone(), ep.clone());
     if severity(ep.comparator, ep.threshold, value)
         > severity(ep.comparator, ep.threshold, ep.worst_value)
     {
@@ -261,9 +385,16 @@ async fn observe(
         } else {
             "continuation"
         })
-    } else if !ep.confirmed && matches!(phase, AlertPhase::Escalation | AlertPhase::Sustained) {
+    } else if ep.confirmed && !ep.escalation_frame_taken {
         Some("escalation")
-    } else if ep.frames < MAX_FRAMES - (if ep.confirmed { 1 } else { 2 })
+    } else if ep.violation_count > 1 && !ep.relapse_frame_taken {
+        Some("relapse")
+    } else if ep.frames
+        < MAX_FRAMES
+            - 1
+            - u32::from(!ep.escalation_frame_taken)
+            - u32::from(!ep.recovery_frame_taken)
+            - u32::from(!ep.relapse_frame_taken)
         && now - ep.last_peak_frame_at >= PEAK_FRAME_MIN_GAP_SECS
     {
         let delta = severity(ep.comparator, ep.threshold, value)
@@ -271,7 +402,7 @@ async fn observe(
             .map(|(a, b)| a - b)
             .unwrap_or(0.0);
         let margin = ep.last_frame_value.abs().max(ep.threshold.abs()).max(1.0) * PEAK_MARGIN;
-        if delta >= margin && ep.peaks < 4 && value == ep.worst_value {
+        if delta >= margin && ep.peaks < 3 && value == ep.worst_value {
             Some("peak")
         } else if CHECKPOINT_AT
             .get(ep.checkpoints)
@@ -290,8 +421,14 @@ async fn observe(
         } else {
             Depth::Light
         };
-        record_frame(state, ep.incident_id, kind, depth, Some(value), None).await?;
+        record_frame_at(state, ep.incident_id, kind, depth, Some(value), None, now).await?;
         ep.frames += 1;
+        if kind == "escalation" {
+            ep.escalation_frame_taken = true;
+        }
+        if kind == "relapse" {
+            ep.relapse_frame_taken = true;
+        }
         if kind == "peak" {
             ep.peaks += 1;
         }
@@ -314,6 +451,7 @@ async fn finish_episode(
     ep: &Episode,
     reason: &str,
     value: Option<f64>,
+    now: i64,
 ) -> AppResult<()> {
     let kind = if reason == "resolved" {
         if ep.confirmed {
@@ -324,13 +462,14 @@ async fn finish_episode(
     } else {
         "interrupted"
     };
-    let wrote = record_frame(
+    let wrote = record_frame_at(
         state,
         ep.incident_id,
         kind,
         Depth::Full,
         value,
         Some(reason),
+        now,
     )
     .await;
 
@@ -391,7 +530,27 @@ async fn record_frame(
     value: Option<f64>,
     close_reason: Option<&str>,
 ) -> AppResult<()> {
-    let now = chrono::Utc::now().timestamp();
+    record_frame_at(
+        state,
+        id,
+        kind,
+        depth,
+        value,
+        close_reason,
+        chrono::Utc::now().timestamp(),
+    )
+    .await
+}
+#[allow(clippy::too_many_arguments)]
+async fn record_frame_at(
+    state: &Arc<AppState>,
+    id: i64,
+    kind: &str,
+    depth: Depth,
+    value: Option<f64>,
+    close_reason: Option<&str>,
+    now: i64,
+) -> AppResult<()> {
     let mut payload = json!({ "kind":kind, "captured_at":now, "trigger_value":value,
         "vitals":vitals_slice(state).await, "top_processes":processes_slice(state).await,
         "co_active_alerts":co_active_alerts_slice(state).await });

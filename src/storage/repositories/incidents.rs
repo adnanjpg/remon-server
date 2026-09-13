@@ -8,6 +8,10 @@ pub struct IncidentSummaryRow {
     pub opened_at: i64,
     pub closed_at: Option<i64>,
     pub close_reason: Option<String>,
+    pub recovery_started_at: Option<i64>,
+    pub violation_count: i64,
+    pub confirmation_count: i64,
+
     pub trigger_kind: String,
     pub category: String,
     pub rule_name: Option<String>,
@@ -31,6 +35,10 @@ pub struct IncidentRow {
     pub opened_at: i64,
     pub closed_at: Option<i64>,
     pub close_reason: Option<String>,
+    pub recovery_started_at: Option<i64>,
+    pub violation_count: i64,
+    pub confirmation_count: i64,
+
     pub trigger_kind: String,
     pub category: String,
     pub rule_name: Option<String>,
@@ -64,11 +72,22 @@ impl IncidentRepository {
         Self { pool }
     }
     pub async fn open(&self, n: &NewIncident) -> AppResult<i64> {
-        let r = sqlx::query("INSERT INTO incidents (trigger_kind, category, rule_id, rule_name, label_set, trigger_value, worst_value, reason, trigger_context) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        let r = sqlx::query("INSERT INTO incidents (trigger_kind, category, rule_id, rule_name, label_set, trigger_value, worst_value, reason, trigger_context, violation_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(n.trigger_kind).bind(&n.category).bind(n.rule_id).bind(&n.rule_name)
             .bind(&n.label_set).bind(n.trigger_value).bind(n.initial_worst).bind(&n.reason)
-            .bind(&n.trigger_context).execute(&self.pool).await?;
+            .bind(&n.trigger_context).bind(if n.trigger_kind == "alert" {1} else {0}).execute(&self.pool).await?;
         Ok(r.last_insert_rowid())
+    }
+    pub async fn update_observation(
+        &self,
+        id: i64,
+        recovery: Option<i64>,
+        violations: i64,
+        confirmations: i64,
+    ) -> AppResult<()> {
+        sqlx::query("UPDATE incidents SET recovery_started_at=?2,violation_count=?3,confirmation_count=?4 WHERE id=?1 AND closed_at IS NULL")
+            .bind(id).bind(recovery).bind(violations).bind(confirmations).execute(&self.pool).await?;
+        Ok(())
     }
     pub async fn close_stale_manual(&self, now: i64) -> AppResult<()> {
         sqlx::query("UPDATE incidents SET closed_at=?1,close_reason='data_gap' WHERE trigger_kind='manual' AND closed_at IS NULL AND opened_at<?1-120").bind(now).execute(&self.pool).await?;
@@ -174,6 +193,9 @@ impl IncidentRepository {
             opened_at: r.opened_at,
             closed_at: r.closed_at,
             close_reason: r.close_reason,
+            recovery_started_at: r.recovery_started_at,
+            violation_count: r.violation_count,
+            confirmation_count: r.confirmation_count,
             trigger_kind: r.trigger_kind,
             category: r.category,
             rule_name: r.rule_name,

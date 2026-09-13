@@ -58,6 +58,41 @@ async fn wait_for_episode(app: &TestApp) -> i64 {
     panic!("no incident episode was opened");
 }
 
+async fn settle_episode(app: &TestApp, value: f64) {
+    let (key, ep) = app
+        .state
+        .incident_episodes
+        .read()
+        .await
+        .iter()
+        .next()
+        .map(|(k, e)| (k.clone(), e.clone()))
+        .expect("open episode");
+    let rule = crate::storage::repositories::AlertRepository::new(app.state.db.clone())
+        .get(key.0)
+        .await
+        .unwrap()
+        .unwrap();
+    let expr = crate::services::alerting::expression::parse(&rule.expression).unwrap();
+    let hold = (ep.eval_interval * 2).max(60);
+    let step = ep.eval_interval.max(1);
+    let mut now = ep.last_seen_at;
+    while now < ep.last_seen_at + hold {
+        now += step;
+        incidents::observe_at(
+            &app.state,
+            incidents::AlertPhase::Resolved,
+            &rule,
+            &expr,
+            &key.1,
+            value,
+            now,
+        )
+        .await
+        .unwrap();
+    }
+}
+
 async fn seed_cpu(app: &TestApp, usage: f64) {
     let now = chrono::Utc::now().timestamp();
     sqlx::query(
@@ -257,8 +292,18 @@ async fn escalation_and_resolution_land_in_one_episode() {
     evaluator::evaluate_once(&rule, &expr, &app.state)
         .await
         .unwrap();
-    let frames = wait_for_frames(&app, id, 3).await;
-    assert_eq!(frames[2], "resolution", "resolution frame was never taken");
+    assert!(
+        IncidentRepository::new(app.state.db.clone())
+            .get(id)
+            .await
+            .unwrap()
+            .unwrap()
+            .closed_at
+            .is_none()
+    );
+    settle_episode(&app, 0.5).await;
+    let frames = wait_for_frames(&app, id, 4).await;
+    assert_eq!(frames[3], "resolution", "resolution frame was never taken");
 
     // And exactly one episode holds all three.
     let rows = IncidentRepository::new(app.state.db.clone())
@@ -266,7 +311,7 @@ async fn escalation_and_resolution_land_in_one_episode() {
         .await
         .unwrap();
     assert_eq!(rows.len(), 1, "the episode was split in two");
-    assert_eq!(rows[0].frame_count, 3);
+    assert_eq!(rows[0].frame_count, 4);
     assert!(rows[0].closed_at.is_some(), "episode left open");
     assert_eq!(rows[0].close_reason.as_deref(), Some("resolved"));
     assert_eq!(rows[0].trigger_value, Some(95.0));
@@ -386,7 +431,7 @@ async fn an_unremarkable_tick_writes_no_frame() {
 
 /// Notification suppression must not erase a distinct observed violation.
 #[tokio::test]
-async fn a_second_violation_is_not_lost_to_notification_cooldown() {
+async fn a_nearby_confirmed_recurrence_is_grouped_without_discarding_it() {
     use crate::services::alerting::evaluator;
 
     let app = TestApp::spawn().await;
@@ -418,7 +463,8 @@ async fn a_second_violation_is_not_lost_to_notification_cooldown() {
         .list(10)
         .await
         .unwrap();
-    assert_eq!(rows.len(), 2, "a new violation was silently discarded");
+    assert_eq!(rows.len(), 1, "a nearby recurrence split the episode");
+    assert_eq!(rows[0].violation_count, 2);
 }
 
 /// A frame records the instant it was taken and does not carry a frozen copy
@@ -687,6 +733,7 @@ async fn immediate_transitions_preserve_order_and_frozen_rule() {
         incidents::on_alert_transition(&app.state, phase, rule.id, &rule.name, "", "cpu", value)
             .await;
     }
+    settle_episode(&app, 0.0).await;
     let repo = IncidentRepository::new(app.state.db.clone());
     let row = repo
         .get(repo.list(1).await.unwrap()[0].id)
@@ -698,7 +745,7 @@ async fn immediate_transitions_preserve_order_and_frozen_rule() {
             .iter()
             .map(|f| f.kind.as_str())
             .collect::<Vec<_>>(),
-        vec!["onset", "escalation", "resolution"]
+        vec!["onset", "escalation", "recovery", "resolution"]
     );
     assert_eq!(row.worst_value, Some(95.0));
     assert_eq!(row.close_reason.as_deref(), Some("resolved"));
@@ -758,6 +805,7 @@ async fn low_threshold_records_the_minimum_and_not_the_recovery() {
         .await;
     incidents::on_alert_transition(&app.state, Resolved, rule.id, &rule.name, "", "cpu", 20.0)
         .await;
+    settle_episode(&app, 20.0).await;
     let repo = IncidentRepository::new(app.state.db.clone());
     let row = repo
         .get(repo.list(1).await.unwrap()[0].id)
@@ -859,6 +907,7 @@ async fn checkpoints_and_peak_budget_leave_room_for_resolution() {
             .await;
     }
     incidents::on_alert_transition(&app.state, Resolved, rule.id, &rule.name, "", "cpu", 0.0).await;
+    settle_episode(&app, 0.0).await;
     let repo = IncidentRepository::new(app.state.db.clone());
     let row = repo
         .get(repo.list(1).await.unwrap()[0].id)
@@ -868,7 +917,7 @@ async fn checkpoints_and_peak_budget_leave_room_for_resolution() {
     assert!(row.frames.len() <= 12);
     assert_eq!(
         row.frames.iter().filter(|f| f.kind == "checkpoint").count(),
-        5
+        4
     );
     assert_eq!(row.frames.last().unwrap().kind, "resolution");
     assert_eq!(row.worst_value, Some(60.0));
@@ -1061,4 +1110,216 @@ async fn restart_settles_pending_enrichment() {
     let payload: Value = serde_json::from_str(&row.frames[0].payload).unwrap();
     assert_eq!(payload["enrichment"], "interrupted");
     assert_eq!(row.close_reason.as_deref(), Some("daemon_restart"));
+}
+
+#[tokio::test]
+async fn a_day_of_unconfirmed_flapping_is_bounded_and_counts_every_crossing() {
+    use crate::services::incidents::AlertPhase::*;
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let (mut rule, _) = arm_cpu_rule(&app, &token, 30).await;
+    rule.expression = "cpu.usage_percent > 80".into();
+    sqlx::query("UPDATE alert_rules SET expression=? WHERE id=?")
+        .bind(&rule.expression)
+        .bind(rule.id)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let expr = crate::services::alerting::expression::parse(&rule.expression).unwrap();
+    let base = chrono::Utc::now().timestamp();
+    for tick in 0..8640 {
+        let (phase, value) = if tick % 2 == 0 {
+            (Onset, 82.0)
+        } else {
+            (Resolved, 79.0)
+        };
+        incidents::observe_at(&app.state, phase, &rule, &expr, "", value, base + tick * 10)
+            .await
+            .unwrap();
+    }
+    let repo = IncidentRepository::new(app.state.db.clone());
+    let rows = repo.list(100).await.unwrap();
+    assert_eq!(
+        rows.len(),
+        4,
+        "flapping must only split at the six-hour recording boundary"
+    );
+    assert_eq!(rows.iter().map(|r| r.violation_count).sum::<i64>(), 4320);
+    assert!(
+        rows.iter()
+            .all(|r| r.confirmation_count == 0 && r.frame_count <= 12)
+    );
+    assert_eq!(rows.iter().filter(|r| r.closed_at.is_none()).count(), 1);
+    assert!(
+        rows.iter()
+            .filter(|r| r.closed_at.is_some())
+            .all(|r| r.close_reason.as_deref() == Some("expired"))
+    );
+}
+
+#[tokio::test]
+async fn relapse_resets_recovery_without_reopening_a_closed_record() {
+    use crate::services::incidents::AlertPhase::*;
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let (rule, expr) = arm_cpu_rule(&app, &token, 30).await;
+    let t = chrono::Utc::now().timestamp();
+    for (offset, phase, value) in [
+        (0, Onset, 82.0),
+        (10, Resolved, 0.5),
+        (20, Onset, 81.0),
+        (30, Resolved, 0.5),
+        (50, Resolved, 0.5),
+        (70, Resolved, 0.5),
+    ] {
+        incidents::observe_at(&app.state, phase, &rule, &expr, "", value, t + offset)
+            .await
+            .unwrap();
+    }
+    let repo = IncidentRepository::new(app.state.db.clone());
+    let rows = repo.list(10).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].closed_at.is_none());
+    assert_eq!(rows[0].recovery_started_at, Some(t + 30));
+    assert_eq!(rows[0].violation_count, 2);
+    incidents::observe_at(&app.state, Resolved, &rule, &expr, "", 0.5, t + 90)
+        .await
+        .unwrap();
+    let row = repo.get(rows[0].id).await.unwrap().unwrap();
+    assert_eq!(row.closed_at, Some(t + 90));
+    assert_eq!(row.recovery_started_at, Some(t + 30));
+    assert_eq!(
+        row.frames
+            .iter()
+            .map(|f| f.kind.as_str())
+            .collect::<Vec<_>>(),
+        vec!["onset", "recovery", "relapse", "cleared"]
+    );
+    incidents::observe_at(&app.state, Onset, &rule, &expr, "", 95.0, t + 100)
+        .await
+        .unwrap();
+    assert_eq!(repo.list(10).await.unwrap().len(), 2);
+    assert_eq!(
+        repo.get(row.id).await.unwrap().unwrap().closed_at,
+        row.closed_at
+    );
+}
+
+#[tokio::test]
+async fn recovery_needs_healthy_evaluations_and_cannot_bridge_missing_data() {
+    use crate::services::incidents::AlertPhase::*;
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let (rule, expr) = arm_cpu_rule(&app, &token, 30).await;
+    let t = chrono::Utc::now().timestamp();
+    incidents::observe_at(&app.state, Onset, &rule, &expr, "", 82.0, t)
+        .await
+        .unwrap();
+    incidents::observe_at(&app.state, Resolved, &rule, &expr, "", 0.5, t + 10)
+        .await
+        .unwrap();
+    incidents::maintain(&app.state, t + 80).await;
+    let repo = IncidentRepository::new(app.state.db.clone());
+    let id = repo.list(1).await.unwrap()[0].id;
+    assert!(
+        repo.get(id).await.unwrap().unwrap().closed_at.is_none(),
+        "a timer is not evidence of health"
+    );
+    incidents::observe_at(&app.state, Resolved, &rule, &expr, "", 0.5, t + 140)
+        .await
+        .unwrap();
+    let row = repo.get(id).await.unwrap().unwrap();
+    assert_eq!(row.close_reason.as_deref(), Some("data_gap"));
+    assert_eq!(row.frames.last().unwrap().kind, "interrupted");
+}
+
+#[tokio::test]
+async fn repeated_confirmations_are_counted_without_spending_a_frame_each_time() {
+    use crate::services::incidents::AlertPhase::*;
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let (rule, expr) = arm_cpu_rule(&app, &token, 0).await;
+    let t = chrono::Utc::now().timestamp();
+    for (offset, phase, value) in [
+        (0, Onset, 82.0),
+        (10, Escalation, 82.0),
+        (20, Resolved, 0.5),
+        (30, Onset, 81.0),
+        (40, Escalation, 81.0),
+        (50, Resolved, 0.5),
+        (70, Resolved, 0.5),
+        (90, Resolved, 0.5),
+        (110, Resolved, 0.5),
+    ] {
+        incidents::observe_at(&app.state, phase, &rule, &expr, "", value, t + offset)
+            .await
+            .unwrap();
+    }
+    let repo = IncidentRepository::new(app.state.db.clone());
+    let rows = repo.list(10).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].violation_count, 2);
+    assert_eq!(rows[0].confirmation_count, 2);
+    let row = repo.get(rows[0].id).await.unwrap().unwrap();
+    assert_eq!(row.close_reason.as_deref(), Some("resolved"));
+    assert_eq!(
+        row.frames.iter().filter(|f| f.kind == "escalation").count(),
+        1
+    );
+    assert_eq!(row.frames.last().unwrap().kind, "resolution");
+}
+
+#[tokio::test]
+async fn rule_changes_interrupt_a_recovery_window() {
+    use crate::services::incidents::AlertPhase::*;
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let (rule, expr) = arm_cpu_rule(&app, &token, 30).await;
+    let t = chrono::Utc::now().timestamp();
+    incidents::observe_at(&app.state, Onset, &rule, &expr, "", 82.0, t)
+        .await
+        .unwrap();
+    incidents::observe_at(&app.state, Resolved, &rule, &expr, "", 0.5, t + 10)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE alert_rules SET expression='cpu.usage_percent > 90' WHERE id=?")
+        .bind(rule.id)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    incidents::maintain(&app.state, t + 20).await;
+    let repo = IncidentRepository::new(app.state.db.clone());
+    let row = repo.list(1).await.unwrap().remove(0);
+    assert_eq!(row.close_reason.as_deref(), Some("rule_changed"));
+    assert_eq!(row.closed_at, Some(t + 20));
+}
+
+#[tokio::test]
+async fn recovery_hold_uses_evaluation_cadence_not_alarm_confirmation_duration() {
+    use crate::services::incidents::AlertPhase::*;
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let (mut rule, expr) = arm_cpu_rule(&app, &token, 600).await;
+    rule.eval_interval_secs = 45;
+    let t = chrono::Utc::now().timestamp();
+    incidents::observe_at(&app.state, Onset, &rule, &expr, "", 82.0, t)
+        .await
+        .unwrap();
+    for offset in [10, 55, 99] {
+        incidents::observe_at(&app.state, Resolved, &rule, &expr, "", 0.5, t + offset)
+            .await
+            .unwrap();
+    }
+    let repo = IncidentRepository::new(app.state.db.clone());
+    let rows = repo.list(1).await.unwrap();
+    assert!(rows[0].closed_at.is_none());
+    let context: Value = serde_json::from_str(rows[0].trigger_context.as_ref().unwrap()).unwrap();
+    assert_eq!(context["capture_policy"]["recovery_hold_secs"], 90);
+    incidents::observe_at(&app.state, Resolved, &rule, &expr, "", 0.5, t + 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.get(rows[0].id).await.unwrap().unwrap().closed_at,
+        Some(t + 100)
+    );
 }

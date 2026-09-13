@@ -236,7 +236,7 @@ pub fn definitions(state: &AppState) -> Value {
         crosses its threshold (or someone asks) and closes when it resolves. Returns id, \
         opened_at/closed_at, trigger, category, rule, the value that opened it and the worst it \
         reached, and how many frames were captured, newest first. Follow up with incident_detail \
-        for the frames. No closed_at means recording is open, not proof of fresh data. close_reason distinguishes recovery from interruption. trigger_context is the frozen rule; worst_value respects its comparator.",
+        for the frames. No closed_at means recording is open, not proof of fresh data. recovery_started_at on an open episode means healthy evaluations are being checked for stability. violation_count counts excursions, confirmation_count counts firing cycles. Nearby excursions share an episode until sustained healthy evaluations close it; the alert notification lifecycle is independent. close_reason distinguishes recovery from interruption. trigger_context is the frozen rule; worst_value respects its comparator.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -255,7 +255,7 @@ pub fn definitions(state: &AppState) -> Value {
         and carries instant host vitals, the evaluated trigger_value, top processes with their \
         recent history (spike vs steady) and co-active alerts. The onset and resolution frames \
         also carry the daemon's recent errors, system-level errors (OOM kills etc., Linux) and \
-        failed units when enrichment is available. Frames are selected evidence, not continuous measurements; use metric_history for the time range and never infer exact episode extrema from partially overlapping rollup buckets. Only resolved means recovery; interrupted/expired/restart do not. Eq/Ne rules have no numeric worst direction. THE tool for 'what caused that alert at 03:12'; compare the first and last \
+        failed units when enrichment is available. Frames are selected evidence, not continuous measurements; use metric_history for the time range and never infer exact episode extrema from partially overlapping rollup buckets. For resolved episodes, recovery_started_at is the start of the final healthy run; closed_at is its later confirmation time, not the end of the violation. Recovery and relapse frames are representative, not an exhaustive transition log. Only resolved means recovery; interrupted/expired/restart do not. Eq/Ne rules have no numeric worst direction. THE tool for 'what caused that alert at 03:12'; compare the first and last \
         frames to see whether it got better or worse.",
                 "parameters": {
                     "type": "object",
@@ -863,6 +863,7 @@ async fn list_incidents(state: &Arc<AppState>, args: &Value) -> Result<Value, St
                 "opened_at": r.opened_at,
                 "closed_at": r.closed_at,
                 "close_reason": r.close_reason,
+                "recovery_started_at":r.recovery_started_at,"violation_count":r.violation_count,"confirmation_count":r.confirmation_count,
                 "trigger": r.trigger_kind,
                 "category": r.category,
                 "rule_name": r.rule_name,
@@ -909,6 +910,7 @@ async fn incident_detail(state: &Arc<AppState>, args: &Value) -> Result<Value, S
         "opened_at": row.opened_at,
         "closed_at": row.closed_at,
         "close_reason": row.close_reason,
+        "recovery_started_at":row.recovery_started_at,"violation_count":row.violation_count,"confirmation_count":row.confirmation_count,
         "trigger": row.trigger_kind,
         "category": row.category,
         "rule_name": row.rule_name,
