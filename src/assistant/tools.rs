@@ -236,7 +236,7 @@ pub fn definitions(state: &AppState) -> Value {
         crosses its threshold (or someone asks) and closes when it resolves. Returns id, \
         opened_at/closed_at, trigger, category, rule, the value that opened it and the worst it \
         reached, and how many frames were captured, newest first. Follow up with incident_detail \
-        for the frames. An episode with no closed_at is still happening.",
+        for the frames. No closed_at means recording is open, not proof of fresh data. close_reason distinguishes recovery from interruption. trigger_context is the frozen rule; worst_value respects its comparator.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -252,10 +252,10 @@ pub fn definitions(state: &AppState) -> Value {
                 "description": "One episode's whole reel, oldest frame first, so reading top to \
         bottom replays what happened. Each frame is labelled by why it was taken — onset (the \
         threshold crossing), escalation (it held), peak (a new worst), resolution (it cleared) — \
-        and carries host vitals, min/avg/max across the episode so far, top processes with their \
+        and carries instant host vitals, the evaluated trigger_value, top processes with their \
         recent history (spike vs steady) and co-active alerts. The onset and resolution frames \
         also carry the daemon's recent errors, system-level errors (OOM kills etc., Linux) and \
-        failed units. THE tool for 'what caused that alert at 03:12'; compare the first and last \
+        failed units when enrichment is available. Frames are selected evidence, not continuous measurements; use metric_history for the time range and never infer exact episode extrema from partially overlapping rollup buckets. Only resolved means recovery; interrupted/expired/restart do not. Eq/Ne rules have no numeric worst direction. THE tool for 'what caused that alert at 03:12'; compare the first and last \
         frames to see whether it got better or worse.",
                 "parameters": {
                     "type": "object",
@@ -868,7 +868,8 @@ async fn list_incidents(state: &Arc<AppState>, args: &Value) -> Result<Value, St
                 "rule_name": r.rule_name,
                 "label_set": r.label_set,
                 "trigger_value": r.trigger_value,
-                "peak_value": r.peak_value,
+                "worst_value": r.worst_value,
+                "trigger_context": r.trigger_context.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
                 "reason": r.reason,
                 "frame_count": r.frame_count,
             })
@@ -913,7 +914,8 @@ async fn incident_detail(state: &Arc<AppState>, args: &Value) -> Result<Value, S
         "rule_name": row.rule_name,
         "label_set": row.label_set,
         "trigger_value": row.trigger_value,
-        "peak_value": row.peak_value,
+        "worst_value": row.worst_value,
+        "trigger_context": row.trigger_context.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
         "reason": row.reason,
         "frames": frames,
     }))

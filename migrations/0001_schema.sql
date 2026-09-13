@@ -833,24 +833,15 @@ CREATE INDEX idx_action_runs_status  ON action_runs(status, created_at DESC);
 CREATE INDEX idx_action_runs_binding ON action_runs(action_id, label_set, created_at DESC);
 
 -- ─── INCIDENTS ──────────────────────────────────────────────────────────────
--- Flight recorder. An incident is an *episode with a duration*, not a photo:
--- it opens when an alert first crosses its threshold (or an operator asks),
--- collects frames at the moments that carry information, and closes when the
--- rule resolves.
---
--- The previous shape — one bundle at the crossing plus one 60 s later — could
--- only describe an instantaneous spike, and not even that reliably: with the
--- default `for_duration_secs = 30`, the pending→firing capture always landed
--- inside the 900 s flap cooldown and was dropped, so the sole surviving frame
--- was taken at ok→pending, the moment nobody yet knows whether there is an
--- incident at all. Nothing was recorded when the rule resolved. A fifteen
--- minute event was therefore described entirely by its first sixty seconds.
+-- A bounded record of observed rule evaluation, with a frozen trigger definition.
+-- Missing data, rule changes and recording deadlines are interruptions, never
+-- proof of recovery. Notification cooldown does not discard a new violation.
 CREATE TABLE incidents (
     id            INTEGER PRIMARY KEY,
     opened_at     INTEGER NOT NULL DEFAULT (unixepoch()),
     -- NULL while the episode is live. Retention never reaps an open one.
     closed_at     INTEGER,
-    close_reason  TEXT CHECK (close_reason IN ('resolved','expired','daemon_restart')),
+    close_reason  TEXT CHECK (close_reason IN ('resolved','expired','daemon_restart','completed','data_gap','rule_removed','rule_disabled','rule_changed')),
     trigger_kind  TEXT    NOT NULL CHECK (trigger_kind IN ('alert','manual')),
     category      TEXT    NOT NULL DEFAULT 'resource'
                     CHECK (category IN ('resource','availability','security','custom')),
@@ -862,8 +853,9 @@ CREATE TABLE incidents (
     -- The value at onset, and the worst seen while the episode was open. The
     -- pair is the headline an operator reads first: "crossed at 81, peaked
     -- at 99" says more than either number alone.
+    trigger_context TEXT,
     trigger_value REAL,
-    peak_value    REAL,
+    worst_value    REAL,
     -- Manual episodes; the caller's stated reason.
     reason        TEXT
 );
@@ -872,7 +864,7 @@ CREATE INDEX idx_incidents_rule ON incidents(rule_id, opened_at DESC);
 -- Every alert transition asks "is an episode already open for this key", so
 -- the lookup is on the hot path of rule evaluation. Partial, because only the
 -- open rows are ever searched and they are a vanishing fraction of the table.
-CREATE INDEX idx_incidents_open ON incidents(rule_id, label_set) WHERE closed_at IS NULL;
+CREATE UNIQUE INDEX idx_incidents_open ON incidents(rule_id, label_set) WHERE closed_at IS NULL;
 
 -- One captured moment within an episode. `kind` says why this moment was
 -- worth freezing, which is the whole point of the redesign: `peak` and
@@ -885,7 +877,7 @@ CREATE TABLE incident_frames (
     incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
     seq         INTEGER NOT NULL,
     kind        TEXT    NOT NULL
-                  CHECK (kind IN ('onset','escalation','peak','resolution','followup')),
+                  CHECK (kind IN ('onset','continuation','escalation','peak','checkpoint','resolution','cleared','interrupted','followup')),
     captured_at INTEGER NOT NULL,
     payload     TEXT    NOT NULL,
     PRIMARY KEY (incident_id, seq)

@@ -295,6 +295,17 @@ async fn a_new_worst_value_earns_a_peak_frame() {
     let id = wait_for_episode(&app).await;
     wait_for_frames(&app, id, 1).await;
 
+    incidents::on_alert_transition(
+        &app.state,
+        AlertPhase::Escalation,
+        rule.id,
+        &rule.name,
+        "",
+        "cpu",
+        50.0,
+    )
+    .await;
+
     // Backdate the last peak frame so the spacing rule cannot veto this one;
     // the margin is what is under test, not the clock.
     {
@@ -314,14 +325,14 @@ async fn a_new_worst_value_earns_a_peak_frame() {
         99.0,
     )
     .await;
-    let frames = wait_for_frames(&app, id, 2).await;
-    assert_eq!(frames[1], "peak");
+    let frames = wait_for_frames(&app, id, 3).await;
+    assert_eq!(frames[2], "peak");
 
     let rows = IncidentRepository::new(app.state.db.clone())
         .list(1)
         .await
         .unwrap();
-    assert_eq!(rows[0].peak_value, Some(99.0));
+    assert_eq!(rows[0].worst_value, Some(99.0));
     assert_eq!(rows[0].trigger_value, Some(50.0));
 }
 
@@ -352,7 +363,7 @@ async fn an_unremarkable_tick_writes_no_frame() {
     for v in [88.0, 90.5, 91.0] {
         incidents::on_alert_transition(
             &app.state,
-            AlertPhase::Sustained,
+            AlertPhase::Pending,
             rule.id,
             &rule.name,
             "",
@@ -370,13 +381,12 @@ async fn an_unremarkable_tick_writes_no_frame() {
         .expect("row");
     assert_eq!(row.frames.len(), 1, "a quiet tick wrote a frame");
     // The peak still tracks the highest seen, frame or no frame.
-    assert_eq!(row.peak_value, Some(91.0));
+    assert_eq!(row.worst_value, Some(91.0));
 }
 
-/// The cooldown still exists, but it now governs *episodes*: a rule that flaps
-/// must not open a fresh one each time.
+/// Notification suppression must not erase a distinct observed violation.
 #[tokio::test]
-async fn the_cooldown_suppresses_a_second_episode_not_a_frame() {
+async fn a_second_violation_is_not_lost_to_notification_cooldown() {
     use crate::services::alerting::evaluator;
 
     let app = TestApp::spawn().await;
@@ -397,7 +407,7 @@ async fn the_cooldown_suppresses_a_second_episode_not_a_frame() {
         .unwrap();
     wait_for_frames(&app, id, 3).await;
 
-    // Cross again immediately: inside the cooldown, so no new episode.
+    // Cross again immediately: a distinct violation still needs its own record.
     seed_cpu(&app, 95.0).await;
     evaluator::evaluate_once(&rule, &expr, &app.state)
         .await
@@ -408,7 +418,7 @@ async fn the_cooldown_suppresses_a_second_episode_not_a_frame() {
         .list(10)
         .await
         .unwrap();
-    assert_eq!(rows.len(), 1, "the flap opened a second episode");
+    assert_eq!(rows.len(), 2, "a new violation was silently discarded");
 }
 
 /// A frame records the instant it was taken and does not carry a frozen copy
@@ -664,4 +674,391 @@ async fn rest_list_is_newest_first_and_honours_limit() {
     assert_eq!(st, StatusCode::OK, "body: {body}");
     assert_eq!(body["count"], 1);
     assert_eq!(body["incidents"][0]["id"], *ids.last().expect("last"));
+}
+
+/// No polling between transitions: logical ordering cannot depend on enrichment speed.
+#[tokio::test]
+async fn immediate_transitions_preserve_order_and_frozen_rule() {
+    use crate::services::incidents::AlertPhase::*;
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let (rule, _) = arm_cpu_rule(&app, &token, 0).await;
+    for (phase, value) in [(Onset, 50.0), (Escalation, 95.0), (Resolved, 0.0)] {
+        incidents::on_alert_transition(&app.state, phase, rule.id, &rule.name, "", "cpu", value)
+            .await;
+    }
+    let repo = IncidentRepository::new(app.state.db.clone());
+    let row = repo
+        .get(repo.list(1).await.unwrap()[0].id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.frames
+            .iter()
+            .map(|f| f.kind.as_str())
+            .collect::<Vec<_>>(),
+        vec!["onset", "escalation", "resolution"]
+    );
+    assert_eq!(row.worst_value, Some(95.0));
+    assert_eq!(row.close_reason.as_deref(), Some("resolved"));
+    let context: Value = serde_json::from_str(row.trigger_context.as_ref().unwrap()).unwrap();
+    assert_eq!(context["expression"], rule.expression);
+    assert_eq!(context["comparator"], ">");
+    assert!(repo.append_frame(row.id, "peak", 0, "{}").await.is_err());
+}
+
+#[tokio::test]
+async fn gradual_worsening_compares_against_recorded_frame() {
+    use crate::services::incidents::AlertPhase::*;
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let (rule, _) = arm_cpu_rule(&app, &token, 0).await;
+    incidents::on_alert_transition(&app.state, Onset, rule.id, &rule.name, "", "cpu", 80.0).await;
+    incidents::on_alert_transition(&app.state, Escalation, rule.id, &rule.name, "", "cpu", 80.0)
+        .await;
+    for ep in app.state.incident_episodes.write().await.values_mut() {
+        ep.last_peak_frame_at = 0;
+    }
+    for value in [81.0, 82.0, 83.0, 84.0] {
+        incidents::on_alert_transition(
+            &app.state, Sustained, rule.id, &rule.name, "", "cpu", value,
+        )
+        .await;
+    }
+    let repo = IncidentRepository::new(app.state.db.clone());
+    let row = repo
+        .get(repo.list(1).await.unwrap()[0].id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.frames.last().unwrap().kind, "peak");
+    assert_eq!(row.worst_value, Some(84.0));
+}
+
+#[tokio::test]
+async fn low_threshold_records_the_minimum_and_not_the_recovery() {
+    use crate::services::incidents::AlertPhase::*;
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let (rule, _) = arm_cpu_rule(&app, &token, 0).await;
+    sqlx::query("UPDATE alert_rules SET expression='cpu.usage_percent < 10' WHERE id=?")
+        .bind(rule.id)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    for (phase, value) in [(Onset, 9.0), (Escalation, 8.0)] {
+        incidents::on_alert_transition(&app.state, phase, rule.id, &rule.name, "", "cpu", value)
+            .await;
+    }
+    for ep in app.state.incident_episodes.write().await.values_mut() {
+        ep.last_peak_frame_at = 0;
+    }
+    incidents::on_alert_transition(&app.state, Sustained, rule.id, &rule.name, "", "cpu", 2.0)
+        .await;
+    incidents::on_alert_transition(&app.state, Resolved, rule.id, &rule.name, "", "cpu", 20.0)
+        .await;
+    let repo = IncidentRepository::new(app.state.db.clone());
+    let row = repo
+        .get(repo.list(1).await.unwrap()[0].id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.worst_value, Some(2.0));
+    assert_eq!(row.frames[2].kind, "peak");
+    let last: Value = serde_json::from_str(&row.frames.last().unwrap().payload).unwrap();
+    assert_eq!(last["trigger_value"], 20.0);
+}
+
+#[tokio::test]
+async fn missing_data_closes_without_claiming_recovery_and_can_resume() {
+    use crate::services::incidents::AlertPhase::*;
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let (rule, _) = arm_cpu_rule(&app, &token, 0).await;
+    incidents::on_alert_transition(&app.state, Onset, rule.id, &rule.name, "", "cpu", 80.0).await;
+    let now = chrono::Utc::now().timestamp();
+    for ep in app.state.incident_episodes.write().await.values_mut() {
+        ep.last_seen_at = now - 10000;
+    }
+    incidents::maintain(&app.state, now).await;
+    let repo = IncidentRepository::new(app.state.db.clone());
+    let row = repo
+        .get(repo.list(1).await.unwrap()[0].id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.close_reason.as_deref(), Some("data_gap"));
+    assert_eq!(row.frames.last().unwrap().kind, "interrupted");
+    incidents::on_alert_transition(&app.state, Sustained, rule.id, &rule.name, "", "cpu", 81.0)
+        .await;
+    let rows = repo.list(2).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    let resumed = repo.get(rows[0].id).await.unwrap().unwrap();
+    assert_eq!(resumed.frames[0].kind, "continuation");
+    let context: Value = serde_json::from_str(resumed.trigger_context.as_ref().unwrap()).unwrap();
+    assert_eq!(context["previous_incident_id"], row.id);
+}
+
+#[tokio::test]
+async fn rule_changes_and_recording_limit_are_interruptions() {
+    use crate::services::incidents::AlertPhase::*;
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let (rule, _) = arm_cpu_rule(&app, &token, 0).await;
+    incidents::on_alert_transition(&app.state, Onset, rule.id, &rule.name, "", "cpu", 80.0).await;
+    let now = chrono::Utc::now().timestamp();
+    for ep in app.state.incident_episodes.write().await.values_mut() {
+        ep.opened_at = now - 21601;
+    }
+    incidents::maintain(&app.state, now).await;
+    let repo = IncidentRepository::new(app.state.db.clone());
+    let row = repo
+        .get(repo.list(1).await.unwrap()[0].id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.close_reason.as_deref(), Some("expired"));
+    assert_eq!(row.frames.last().unwrap().kind, "interrupted");
+    incidents::on_alert_transition(&app.state, Sustained, rule.id, &rule.name, "", "cpu", 80.0)
+        .await;
+    sqlx::query("UPDATE alert_rules SET expression='cpu.usage_percent > 90' WHERE id=?")
+        .bind(rule.id)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    incidents::maintain(&app.state, now).await;
+    assert_eq!(
+        repo.list(1).await.unwrap()[0].close_reason.as_deref(),
+        Some("rule_changed")
+    );
+}
+
+#[tokio::test]
+async fn checkpoints_and_peak_budget_leave_room_for_resolution() {
+    use crate::services::incidents::AlertPhase::*;
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let (rule, _) = arm_cpu_rule(&app, &token, 0).await;
+    incidents::on_alert_transition(&app.state, Onset, rule.id, &rule.name, "", "cpu", 10.0).await;
+    incidents::on_alert_transition(&app.state, Escalation, rule.id, &rule.name, "", "cpu", 10.0)
+        .await;
+    for at in [600, 1800, 3600, 7200, 14400] {
+        for ep in app.state.incident_episodes.write().await.values_mut() {
+            ep.opened_at = chrono::Utc::now().timestamp() - at;
+            ep.last_peak_frame_at = 0;
+        }
+        incidents::on_alert_transition(&app.state, Sustained, rule.id, &rule.name, "", "cpu", 10.0)
+            .await;
+    }
+    for v in [20.0, 30.0, 40.0, 50.0, 60.0] {
+        for ep in app.state.incident_episodes.write().await.values_mut() {
+            ep.last_peak_frame_at = 0;
+        }
+        incidents::on_alert_transition(&app.state, Sustained, rule.id, &rule.name, "", "cpu", v)
+            .await;
+    }
+    incidents::on_alert_transition(&app.state, Resolved, rule.id, &rule.name, "", "cpu", 0.0).await;
+    let repo = IncidentRepository::new(app.state.db.clone());
+    let row = repo
+        .get(repo.list(1).await.unwrap()[0].id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(row.frames.len() <= 12);
+    assert_eq!(
+        row.frames.iter().filter(|f| f.kind == "checkpoint").count(),
+        5
+    );
+    assert_eq!(row.frames.last().unwrap().kind, "resolution");
+    assert_eq!(row.worst_value, Some(60.0));
+}
+
+#[tokio::test]
+async fn state_comparisons_do_not_invent_numeric_worsening() {
+    use crate::services::incidents::AlertPhase::*;
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let (rule, _) = arm_cpu_rule(&app, &token, 0).await;
+    sqlx::query("UPDATE alert_rules SET expression='cpu.usage_percent != 0' WHERE id=?")
+        .bind(rule.id)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    incidents::on_alert_transition(&app.state, Onset, rule.id, &rule.name, "", "cpu", 1.0).await;
+    incidents::on_alert_transition(&app.state, Escalation, rule.id, &rule.name, "", "cpu", 2.0)
+        .await;
+    for ep in app.state.incident_episodes.write().await.values_mut() {
+        ep.last_peak_frame_at = 0;
+    }
+    incidents::on_alert_transition(&app.state, Sustained, rule.id, &rule.name, "", "cpu", 100.0)
+        .await;
+    let repo = IncidentRepository::new(app.state.db.clone());
+    let row = repo
+        .get(repo.list(1).await.unwrap()[0].id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!row.frames.iter().any(|f| f.kind == "peak"));
+    assert_eq!(row.worst_value, None);
+}
+
+#[tokio::test]
+async fn closing_frame_and_envelope_commit_together() {
+    use crate::storage::repositories::NewIncident;
+    let app = TestApp::spawn().await;
+    let repo = IncidentRepository::new(app.state.db.clone());
+    let id = repo
+        .open(&NewIncident {
+            trigger_kind: "manual",
+            category: "custom".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    repo.append_frame(id, "onset", 1, "{}").await.unwrap();
+    sqlx::query("CREATE TRIGGER refuse_close BEFORE UPDATE OF closed_at ON incidents BEGIN SELECT RAISE(ABORT,'test close failure'); END").execute(&app.state.db).await.unwrap();
+    assert!(
+        repo.write_frame(id, "resolution", 2, "{}", Some("resolved"))
+            .await
+            .is_err()
+    );
+    let row = repo.get(id).await.unwrap().unwrap();
+    assert_eq!(row.frames.len(), 1);
+    assert!(row.closed_at.is_none());
+}
+
+#[tokio::test]
+async fn disabled_rules_and_abandoned_manual_recordings_are_closed() {
+    use crate::services::incidents::AlertPhase;
+    use crate::storage::repositories::NewIncident;
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let (rule, _) = arm_cpu_rule(&app, &token, 0).await;
+    incidents::on_alert_transition(
+        &app.state,
+        AlertPhase::Onset,
+        rule.id,
+        &rule.name,
+        "",
+        "cpu",
+        80.0,
+    )
+    .await;
+    sqlx::query("UPDATE alert_rules SET enabled=0 WHERE id=?")
+        .bind(rule.id)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    incidents::maintain(&app.state, chrono::Utc::now().timestamp()).await;
+    let repo = IncidentRepository::new(app.state.db.clone());
+    assert_eq!(
+        repo.list(1).await.unwrap()[0].close_reason.as_deref(),
+        Some("rule_disabled")
+    );
+    let id = repo
+        .open(&NewIncident {
+            trigger_kind: "manual",
+            category: "custom".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    incidents::maintain(&app.state, chrono::Utc::now().timestamp() + 121).await;
+    assert_eq!(
+        repo.get(id).await.unwrap().unwrap().close_reason.as_deref(),
+        Some("data_gap")
+    );
+}
+
+#[tokio::test]
+async fn trigger_snapshot_matches_evaluated_definition_during_rule_edit() {
+    use crate::services::alerting::expression;
+    use crate::services::incidents::AlertPhase::*;
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let (rule, expr) = arm_cpu_rule(&app, &token, 0).await;
+    sqlx::query("UPDATE alert_rules SET expression='cpu.usage_percent > 90' WHERE id=?")
+        .bind(rule.id)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    incidents::on_rule_observation(&app.state, Onset, &rule, &expr, "", 50.0).await;
+    let repo = IncidentRepository::new(app.state.db.clone());
+    let first = repo.list(1).await.unwrap()[0].clone();
+    let ctx: Value = serde_json::from_str(first.trigger_context.as_ref().unwrap()).unwrap();
+    assert_eq!(ctx["expression"], rule.expression);
+    let mut edited = rule.clone();
+    edited.expression = "cpu.usage_percent > 90".into();
+    incidents::on_rule_observation(
+        &app.state,
+        Sustained,
+        &edited,
+        &expression::parse(&edited.expression).unwrap(),
+        "",
+        95.0,
+    )
+    .await;
+    let old = repo.get(first.id).await.unwrap().unwrap();
+    assert_eq!(old.close_reason.as_deref(), Some("rule_changed"));
+    assert_eq!(old.worst_value, Some(50.0));
+    assert_eq!(repo.list(10).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_rebound_below_the_recorded_worst_is_not_a_new_peak() {
+    use crate::services::incidents::AlertPhase::*;
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let (rule, _) = arm_cpu_rule(&app, &token, 0).await;
+    for (p, v) in [(Onset, 80.0), (Escalation, 80.0)] {
+        incidents::on_alert_transition(&app.state, p, rule.id, &rule.name, "", "cpu", v).await;
+    }
+    for ep in app.state.incident_episodes.write().await.values_mut() {
+        ep.last_peak_frame_at = 0;
+    }
+    incidents::on_alert_transition(&app.state, Sustained, rule.id, &rule.name, "", "cpu", 100.0)
+        .await;
+    for ep in app.state.incident_episodes.write().await.values_mut() {
+        ep.opened_at = chrono::Utc::now().timestamp() - 600;
+        ep.last_peak_frame_at = 0;
+    }
+    incidents::on_alert_transition(&app.state, Sustained, rule.id, &rule.name, "", "cpu", 50.0)
+        .await;
+    for ep in app.state.incident_episodes.write().await.values_mut() {
+        ep.last_peak_frame_at = 0;
+    }
+    incidents::on_alert_transition(&app.state, Sustained, rule.id, &rule.name, "", "cpu", 70.0)
+        .await;
+    let repo = IncidentRepository::new(app.state.db.clone());
+    let row = repo
+        .get(repo.list(1).await.unwrap()[0].id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.frames.iter().filter(|f| f.kind == "peak").count(), 1);
+    assert_eq!(row.worst_value, Some(100.0));
+}
+
+#[tokio::test]
+async fn restart_settles_pending_enrichment() {
+    use crate::storage::repositories::NewIncident;
+    let app = TestApp::spawn().await;
+    let repo = IncidentRepository::new(app.state.db.clone());
+    let id = repo
+        .open(&NewIncident {
+            trigger_kind: "manual",
+            category: "custom".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    repo.append_frame(id, "onset", 1, "{\"enrichment\":\"pending\"}")
+        .await
+        .unwrap();
+    incidents::close_orphaned_episodes(&app.state).await;
+    let row = repo.get(id).await.unwrap().unwrap();
+    let payload: Value = serde_json::from_str(&row.frames[0].payload).unwrap();
+    assert_eq!(payload["enrichment"], "interrupted");
+    assert_eq!(row.close_reason.as_deref(), Some("daemon_restart"));
 }

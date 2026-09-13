@@ -523,19 +523,19 @@ async fn evaluate_rule(
                 (AlertLifecycle::Ok, AlertLifecycle::Pending) => Some(AlertPhase::Onset),
                 (AlertLifecycle::Pending, AlertLifecycle::Firing) => Some(AlertPhase::Escalation),
                 (AlertLifecycle::Firing, AlertLifecycle::Firing) => Some(AlertPhase::Sustained),
+                (AlertLifecycle::Pending, AlertLifecycle::Pending) => Some(AlertPhase::Pending),
                 (prior_state, AlertLifecycle::Ok) if prior_state != AlertLifecycle::Ok => {
                     Some(AlertPhase::Resolved)
                 }
                 _ => None,
             };
             if let Some(phase) = phase {
-                crate::services::incidents::on_alert_transition(
+                crate::services::incidents::on_rule_observation(
                     state,
                     phase,
-                    rule.id,
-                    &rule.name,
+                    rule,
+                    expr,
                     &sample.label_set,
-                    &expr.metric.namespace,
                     sample.value,
                 )
                 .await;

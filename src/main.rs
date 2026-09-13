@@ -369,6 +369,7 @@ async fn run(
     // it before the evaluator runs, or the next crossing appends to a stale
     // episode and reports a start time from before the restart.
     services::incidents::close_orphaned_episodes(&app_state).await;
+    services::incidents::spawn(app_state.clone());
 
     collectors::spawn_all(app_state.clone());
     collectors::smart::spawn(app_state.clone(), config.smart.clone());

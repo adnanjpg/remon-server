@@ -103,6 +103,8 @@ pub struct AppState {
     /// own: the tests share one process and a global map would let episodes
     /// leak between them. Peak tracking reads this on every evaluator tick,
     /// which is why it is not a database round-trip.
+    pub incident_gate: tokio::sync::Mutex<()>,
+    pub incident_enrichment: Arc<tokio::sync::Semaphore>,
     pub incident_episodes:
         Arc<RwLock<std::collections::HashMap<(i64, String), crate::services::incidents::Episode>>>,
 
@@ -243,6 +245,8 @@ impl AppState {
             processes_latest: Arc::new(RwLock::new(None)),
             processes_refresh_lock: Arc::new(Mutex::new(())),
             process_history: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            incident_gate: tokio::sync::Mutex::new(()),
+            incident_enrichment: Arc::new(tokio::sync::Semaphore::new(2)),
             incident_episodes: Arc::new(RwLock::new(std::collections::HashMap::new())),
             effective_config: Arc::new(RwLock::new(effective_config)),
             collector_stats_interval_ms: Arc::new(AtomicU64::new(collector_stats_interval_ms)),

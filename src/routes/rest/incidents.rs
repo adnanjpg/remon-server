@@ -91,7 +91,8 @@ pub struct IncidentSummaryDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trigger_value: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub peak_value: Option<f64>,
+    pub worst_value: Option<f64>,
+    pub trigger_context: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// Frames captured so far — one means only the opening moment is on record.
@@ -133,7 +134,8 @@ pub struct IncidentDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trigger_value: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub peak_value: Option<f64>,
+    pub worst_value: Option<f64>,
+    pub trigger_context: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// Oldest first, so reading top to bottom replays the episode.
@@ -168,7 +170,11 @@ pub async fn list(
             rule_name: r.rule_name,
             label_set: r.label_set,
             trigger_value: r.trigger_value,
-            peak_value: r.peak_value,
+            worst_value: r.worst_value,
+            trigger_context: r
+                .trigger_context
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok()),
             reason: r.reason,
             frame_count: r.frame_count,
         })
@@ -214,7 +220,12 @@ pub async fn get(
         rule_name: row.rule_name,
         label_set: row.label_set,
         trigger_value: row.trigger_value,
-        peak_value: row.peak_value,
+        worst_value: row.worst_value,
+        trigger_context: row
+            .trigger_context
+            .as_deref()
+            .map(|s| parse_bundle(s, id, "trigger context"))
+            .transpose()?,
         reason: row.reason,
         frames,
     }))
