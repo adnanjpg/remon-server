@@ -17,6 +17,9 @@ use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct GetProcessesQuery {
+    /// Return a complete, unfiltered snapshot; ignores search, sort and pagination.
+    #[serde(default)]
+    pub snapshot: bool,
     /// Filter by process name (case-insensitive substring match).
     pub search: Option<String>,
     /// Filter by state: running | sleeping | stopped | zombie | idle
@@ -59,6 +62,15 @@ pub async fn get_processes(
 
     let process_list = get_or_refresh_processes(&state).await;
     let total = process_list.processes.len();
+
+    if q.snapshot {
+        return Json(GetProcessesResponse {
+            processes: process_list.processes.clone(),
+            total,
+            filtered_total: total,
+            timestamp: process_list.timestamp,
+        });
+    }
 
     let limit = q.limit.min(1000);
 
@@ -119,6 +131,7 @@ pub async fn get_processes(
         processes,
         total,
         filtered_total,
+        timestamp: process_list.timestamp,
     })
 }
 

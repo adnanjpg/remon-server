@@ -120,3 +120,59 @@ async fn kill_refuses_out_of_range_pid() {
         .await;
     assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+/// A tree needs the complete parent graph from one sample, including on hosts
+/// beyond the normal endpoint's 1,000-row limit.
+#[tokio::test]
+async fn full_snapshot_preserves_all_processes_and_collection_time() {
+    use crate::models::process::{ProcessInfo, ProcessList, ProcessState};
+    use std::sync::Arc;
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let timestamp = chrono::Utc::now().timestamp();
+    app.state
+        .processes_cache_ttl_ms
+        .store(60_000, std::sync::atomic::Ordering::Relaxed);
+    let processes = (1..=1205)
+        .map(|pid| ProcessInfo {
+            pid,
+            parent_pid: if pid == 1 { None } else { Some(pid - 1) },
+            name: format!("worker-{pid}"),
+            cmd: vec![],
+            exe: None,
+            cwd: None,
+            user: None,
+            cpu_percent: 0.0,
+            memory_bytes: 0,
+            memory_percent: 0.0,
+            state: ProcessState::Sleeping,
+            started_at: Some(timestamp),
+            threads: Some(1),
+        })
+        .collect();
+    *app.state.processes_latest.write().await = Some(Arc::new(ProcessList {
+        processes,
+        total_count: 1205,
+        timestamp,
+    }));
+    let (st, body) = app
+        .request(
+            "GET",
+            "/processes?snapshot=true&limit=5&offset=10&search=missing",
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(body["processes"].as_array().unwrap().len(), 1205);
+    assert_eq!(body["total"], 1205);
+    assert_eq!(body["filtered_total"], 1205);
+    assert_eq!(body["timestamp"], timestamp);
+    assert_eq!(body["processes"][1204]["parent_pid"], 1204);
+    let (st, body) = app
+        .request("GET", "/processes?limit=5", Some(&token), None)
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(body["processes"].as_array().unwrap().len(), 5);
+    assert_eq!(body["timestamp"], timestamp);
+}
