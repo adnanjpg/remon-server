@@ -37,7 +37,7 @@ pub use probes::{ProbeDefinitionRow, ProbeRepository};
 pub use process::{ProcessGroupRow, ProcessMetricsRepository};
 pub use resolutions::{Resolution, ResolutionRepository};
 pub use retention::RetentionRepository;
-pub use rollup_state::RollupStateRepository;
+pub use rollup_state::{RollupProgress, RollupStateRepository};
 pub use runtime_state::RuntimeStateRepository;
 pub use smart::{SmartDeviceRow, SmartRepository};
 

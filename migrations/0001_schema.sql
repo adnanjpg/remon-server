@@ -163,6 +163,8 @@ INSERT INTO retention_policy (resource, resolution, keep_seconds) VALUES
 CREATE TABLE rollup_state (
     resource       TEXT NOT NULL,
     resolution     TEXT NOT NULL,
+    -- NULL means legacy/unknown coverage; never infer it from the last cursor.
+    processed_from INTEGER,
     last_bucket_ts INTEGER NOT NULL DEFAULT 0,
     last_run_at    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (resource, resolution)

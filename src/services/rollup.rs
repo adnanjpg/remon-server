@@ -20,6 +20,7 @@ use std::time::Duration;
 use log::{debug, warn};
 
 use crate::state::AppState;
+use crate::storage::repositories::RollupProgress;
 use crate::storage::repositories::{Resolution, ResolutionRepository, RollupStateRepository};
 
 /// Child buckets one tick will aggregate before leaving the rest to the next.
@@ -263,7 +264,7 @@ pub(crate) async fn run_once(state: &AppState) -> anyhow::Result<()> {
 async fn rollup_resource(
     state: &AppState,
     cursor_repo: &RollupStateRepository,
-    cursors: &mut std::collections::HashMap<(String, String), i64>,
+    cursors: &mut std::collections::HashMap<(String, String), RollupProgress>,
     target: &Resolution,
     resource: &str,
     now: i64,
@@ -282,39 +283,77 @@ async fn rollup_resource(
     let latest_closed_start = (now / bucket - 1) * bucket;
 
     let key = (resource.to_string(), target.name.clone());
-    let cursor_at = cursors.get(&key).copied().unwrap_or(0);
-    let start_from = if cursor_at == 0 {
-        // First time: only roll up the most recent bucket; don't back-fill
-        // the entire history of the parent table.
-        latest_closed_start
-    } else {
-        cursor_at + bucket
+    let previous = cursors.get(&key).copied();
+    let keep: Option<i64> = sqlx::query_scalar(
+        "SELECT keep_seconds FROM retention_policy WHERE resource = ? AND resolution = ?",
+    )
+    .bind(resource)
+    .bind(parent)
+    .fetch_optional(&state.db)
+    .await?;
+    // Without a retention policy we cannot certify the source's availability.
+    let Some(keep) = keep else {
+        return Ok(());
     };
-
-    if start_from > latest_closed_start {
+    let retained_from = now.saturating_sub(keep);
+    let (parent_from, parent_settled_through) = if parent == "raw" {
+        // The table name comes only from ROLLUP_RESOURCES, never a request.
+        let first: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT MIN(timestamp) FROM metrics_{resource} WHERE resolution = 'raw'"
+        )))
+        .fetch_one(&state.db)
+        .await?;
+        let first = match first {
+            Some(first) => first,
+            // A known sweep may advance across a genuine observation gap.
+            None if previous.and_then(|p| p.processed_from).is_some() => retained_from,
+            None => return Ok(()),
+        };
+        let known_from = previous.and_then(|p| p.processed_from).unwrap_or(first);
+        (
+            first.min(known_from).max(retained_from),
+            latest_closed_start + bucket,
+        )
+    } else {
+        let Some(progress) = cursors.get(&(resource.to_string(), parent.to_string())) else {
+            return Ok(());
+        };
+        let Some(from) = progress.processed_from else {
+            return Ok(());
+        };
+        let parent_interval: i64 =
+            sqlx::query_scalar("SELECT interval_seconds FROM resolutions WHERE name = ?")
+                .bind(parent)
+                .fetch_one(&state.db)
+                .await?;
+        (
+            from.max(retained_from),
+            progress.last_bucket_ts + parent_interval,
+        )
+    };
+    let first_complete = parent_from.div_euclid(bucket) * bucket
+        + if parent_from.rem_euclid(bucket) == 0 {
+            0
+        } else {
+            bucket
+        };
+    // Unknown legacy coverage is rebuilt from retained, certified parent data.
+    // If retention overtook a backlog, start a new certified interval instead
+    // of claiming that the now-unrecoverable gap was processed.
+    let resume = previous.filter(|p| p.processed_from.is_some());
+    let start_from = resume
+        .map(|p| p.last_bucket_ts + bucket)
+        .unwrap_or(first_complete)
+        .max(first_complete);
+    let processed_from = match resume {
+        Some(p) if p.last_bucket_ts + bucket >= first_complete => p.processed_from.unwrap(),
+        _ => start_from,
+    };
+    if start_from > latest_closed_start || start_from + bucket > parent_settled_through {
         return Ok(());
     }
-
     let mut bucket_start = start_from;
-
-    // The end of what the parent has finished writing. A bucket is only ready
-    // to aggregate once the parent has covered all of it — rows present are not
-    // the same as a complete range, and averaging a window the parent is still
-    // filling freezes a partial value the cursor then moves past.
-    //
-    // `raw` is written live by the collectors, so every closed bucket is
-    // complete. A rolled parent is trusted only to the start of its own last
-    // written bucket, which trails by one parent bucket and never overstates.
-    let parent_settled_through = if parent == "raw" {
-        latest_closed_start + bucket
-    } else {
-        cursors
-            .get(&(resource.to_string(), parent.to_string()))
-            .copied()
-            .unwrap_or(0)
-    };
-
-    let mut commit_through = cursor_at;
+    let mut commit_through = start_from - bucket;
     let mut wrote_any = false;
 
     // Bounds the work of one tick without bounding how far back the cursor can
@@ -362,11 +401,17 @@ async fn rollup_resource(
         bucket_start = bucket_end;
     }
 
-    if commit_through != cursor_at {
+    if commit_through >= start_from {
         cursor_repo
-            .set(resource, &target.name, commit_through)
+            .set(resource, &target.name, processed_from, commit_through)
             .await?;
-        cursors.insert(key, commit_through);
+        cursors.insert(
+            key,
+            RollupProgress {
+                processed_from: Some(processed_from),
+                last_bucket_ts: commit_through,
+            },
+        );
         debug!(
             "rollup committed: resource={} resolution={} last_bucket_ts={} wrote_rows={}",
             resource, target.name, commit_through, wrote_any
@@ -509,13 +554,32 @@ async fn aggregate_one_bucket(
     };
     let sql = sqlx::AssertSqlSafe(sql);
 
+    // Rebuilding unknown legacy coverage must also replace an empty bucket:
+    // INSERT ... SELECT alone would leave an obsolete row behind. Publish the
+    // replacement atomically, including network totals, so readers see neither
+    // a temporary hole nor half of a resource's bucket.
+    let mut tx = state.db.begin().await?;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DELETE FROM metrics_{resource} WHERE resolution = ? AND timestamp = ?"
+    )))
+    .bind(target)
+    .bind(bucket_start)
+    .execute(&mut *tx)
+    .await?;
+    if resource == "network" {
+        sqlx::query("DELETE FROM metrics_network_total WHERE resolution = ? AND timestamp = ?")
+            .bind(target)
+            .bind(bucket_start)
+            .execute(&mut *tx)
+            .await?;
+    }
     let result = sqlx::query(sql)
         .bind(target)
         .bind(bucket_start)
         .bind(parent)
         .bind(bucket_start)
         .bind(bucket_end)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?;
 
     if resource == "network" {
@@ -537,8 +601,9 @@ async fn aggregate_one_bucket(
             .bind(parent)
             .bind(bucket_start)
             .bind(bucket_end)
-            .execute(&state.db)
+            .execute(&mut *tx)
             .await?;
     }
+    tx.commit().await?;
     Ok(result.rows_affected() > 0)
 }

@@ -8,8 +8,8 @@ use super::TestApp;
 
 async fn set_cursor(app: &TestApp, resource: &str, resolution: &str, ts: i64) {
     sqlx::query(
-        "INSERT INTO rollup_state (resource, resolution, last_bucket_ts, last_run_at)
-         VALUES (?, ?, ?, 0)
+        "INSERT INTO rollup_state (resource, resolution, processed_from, last_bucket_ts, last_run_at)
+         VALUES (?, ?, 0, ?, 0)
          ON CONFLICT(resource, resolution) DO UPDATE SET last_bucket_ts = excluded.last_bucket_ts",
     )
     .bind(resource)
@@ -230,5 +230,91 @@ async fn a_written_bucket_after_a_gap_does_not_drag_the_cursor_over_it() {
         after <= parent_at,
         "5m cursor jumped to {after}: a later bucket that happened to have \
          rows dragged it over buckets the parent still owes"
+    );
+}
+
+pub(super) async fn samples(app: &TestApp, start: i64, end: i64) {
+    let mut tx = app.state.db.begin().await.unwrap();
+    for ts in (start..end).step_by(2) {
+        sqlx::query(
+            "INSERT INTO metrics_cpu (resolution, timestamp, usage_percent, load_1m,
+            load_5m, load_15m, steal_percent, context_switches_per_sec)
+            VALUES ('raw', ?, ?, 1.0, 2.0, 3.0, ?, ?)",
+        )
+        .bind(ts)
+        .bind((ts % 101) as f64 / 3.0)
+        .bind(if ts % 6 == 0 { Some(0.25) } else { None })
+        .bind(ts % 17)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn rollup_first_bucket_is_inside_parent_coverage_at_every_tier() {
+    let app = TestApp::spawn().await;
+    let base = (chrono::Utc::now().timestamp() / 3600 - 3) * 3600;
+    samples(&app, base + 37, base + 7200).await;
+    crate::services::rollup::run_once(&app.state).await.unwrap();
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT resolution, processed_from FROM rollup_state WHERE resource = 'cpu' ORDER BY processed_from"
+    ).fetch_all(&app.state.db).await.unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            ("1m".into(), base + 60),
+            ("5m".into(), base + 300),
+            ("1h".into(), base + 3600)
+        ]
+    );
+    for (resolution, first) in rows {
+        let earliest: i64 =
+            sqlx::query_scalar("SELECT MIN(timestamp) FROM metrics_cpu WHERE resolution = ?")
+                .bind(resolution)
+                .fetch_one(&app.state.db)
+                .await
+                .unwrap();
+        assert_eq!(earliest, first);
+    }
+}
+
+#[tokio::test]
+async fn rollup_unknown_legacy_coverage_is_rebuilt_not_inferred_from_first_row() {
+    let app = TestApp::spawn().await;
+    let base = (chrono::Utc::now().timestamp() / 60 - 30) * 60;
+    samples(&app, base + 17, base + 600).await;
+    // A stale derived row in an empty raw bucket must not survive rebuilding.
+    sqlx::query("INSERT INTO metrics_cpu (resolution, timestamp, usage_percent, load_1m, load_5m, load_15m) VALUES ('1m', ?, 99.0, 1.0, 1.0, 1.0)")
+        .bind(base + 660).execute(&app.state.db).await.unwrap();
+    sqlx::query(
+        "INSERT INTO rollup_state (resource, resolution, last_bucket_ts) VALUES ('cpu', '1m', ?)",
+    )
+    .bind(base + 600)
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    crate::services::rollup::run_once(&app.state).await.unwrap();
+    let first: i64 = sqlx::query_scalar(
+        "SELECT processed_from FROM rollup_state WHERE resource = 'cpu' AND resolution = '1m'",
+    )
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(first, base + 60);
+    let count: i64 = sqlx::query_scalar("SELECT usage_percent_valid_count FROM metrics_cpu WHERE resolution = '1m' AND timestamp = ?")
+        .bind(base + 60).fetch_one(&app.state.db).await.unwrap();
+    assert_eq!(count, 30);
+    let stale: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM metrics_cpu WHERE resolution = '1m' AND timestamp = ?",
+    )
+    .bind(base + 660)
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        stale, 0,
+        "empty rebuilt bucket must not retain an old derived value"
     );
 }

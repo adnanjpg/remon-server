@@ -39,8 +39,8 @@ async fn docker_counters_roll_up_by_max_and_gauges_by_average() {
     // A closed bucket, with the cursor parked immediately before it.
     let bucket = (now / 60 - 3) * 60;
     sqlx::query(
-        "INSERT INTO rollup_state (resource, resolution, last_bucket_ts, last_run_at)
-         VALUES ('docker', '1m', ?, 0)
+        "INSERT INTO rollup_state (resource, resolution, processed_from, last_bucket_ts, last_run_at)
+         VALUES ('docker', '1m', 0, ?, 0)
          ON CONFLICT(resource, resolution) DO UPDATE SET last_bucket_ts = excluded.last_bucket_ts",
     )
     .bind(bucket - 60)
@@ -87,8 +87,8 @@ async fn docker_counters_roll_up_by_max_and_gauges_by_average() {
 
 async fn set_cursor(app: &TestApp, resource: &str, resolution: &str, ts: i64) {
     sqlx::query(
-        "INSERT INTO rollup_state (resource, resolution, last_bucket_ts, last_run_at)
-         VALUES (?, ?, ?, 0)
+        "INSERT INTO rollup_state (resource, resolution, processed_from, last_bucket_ts, last_run_at)
+         VALUES (?, ?, 0, ?, 0)
          ON CONFLICT(resource, resolution) DO UPDATE SET last_bucket_ts = excluded.last_bucket_ts",
     )
     .bind(resource)
@@ -254,7 +254,11 @@ async fn cpu_statistics_do_not_fabricate_extrema_for_mixed_legacy_buckets() {
     set_cursor(&app, "cpu", "5m", bucket - 300).await;
     sqlx::query("INSERT INTO metrics_cpu (resolution, timestamp, usage_percent, load_1m, load_5m, load_15m) VALUES ('raw', ?, 100, 0, 0, 0)")
         .bind(bucket).execute(&app.state.db).await.unwrap();
+    // The legacy minute must be behind the parent's completed cursor. A row
+    // ahead of it is pending/retryable and will correctly be replaced from raw.
+    crate::services::rollup::run_once(&app.state).await.unwrap();
     child_cpu(&app, bucket + 60, 10.0, 30, None).await;
+    set_cursor(&app, "cpu", "5m", bucket - 300).await;
     crate::services::rollup::run_once(&app.state).await.unwrap();
     let repo = crate::storage::repositories::MetricsRepository::new(app.state.db.clone());
     let rows = repo.read_cpu("5m", bucket, bucket + 299, 10).await.unwrap();
