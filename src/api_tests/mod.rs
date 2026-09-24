@@ -17,6 +17,7 @@ mod assistant_api;
 mod assistant_tools;
 mod auth_flow;
 mod config_api;
+mod cpu_chart;
 mod dbbench;
 mod disk_forecast_api;
 mod events_api;

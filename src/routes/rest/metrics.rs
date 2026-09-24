@@ -90,11 +90,39 @@ pub async fn cpu_history(
 ) -> AppResult<Json<CpuHistoryResponse>> {
     let (start, end, resolution, limit) = resolve_range(&q)?;
     let repo = MetricsRepository::new(state.db.clone());
+    if q.resolution.is_none() {
+        let (rows, chart) = crate::storage::repositories::read_cpu_chart(
+            &state.db,
+            start,
+            end,
+            q.max_points.unwrap_or(300),
+        )
+        .await?;
+        let resolution = chart
+            .sources
+            .first()
+            .filter(|first| {
+                chart
+                    .sources
+                    .iter()
+                    .all(|s| s.resolution == first.resolution)
+            })
+            .map(|s| s.resolution.clone());
+        return Ok(Json(CpuHistoryResponse {
+            resolution,
+            chart: Some(chart),
+            points: rows.into_iter().map(CpuPoint::from).collect(),
+        }));
+    }
     let rows = repo.read_cpu(&resolution, start, end, limit).await?;
 
     let points = rows.into_iter().map(CpuPoint::from).collect();
 
-    Ok(Json(CpuHistoryResponse { resolution, points }))
+    Ok(Json(CpuHistoryResponse {
+        resolution: Some(resolution),
+        chart: None,
+        points,
+    }))
 }
 
 /// GET /metrics/cpu/cores — per-core usage. Always raw (the per-core
@@ -589,11 +617,27 @@ pub async fn batch_history(
         let res = resolution.clone();
         let repo = &repo;
         futs.push(match *r {
-            "cpu" => Box::pin(async move {
-                let rows = repo.read_cpu(&res, start, end, limit).await?;
-                Ok(BatchSeries::Cpu {
-                    points: rows.into_iter().map(CpuPoint::from).collect(),
-                })
+            "cpu" => Box::pin({
+                let pool = state.db.clone();
+                let automatic = q.resolution.is_none();
+                let max_points = q.max_points.unwrap_or(300);
+                async move {
+                    if automatic {
+                        let (rows, chart) = crate::storage::repositories::read_cpu_chart(
+                            &pool, start, end, max_points,
+                        )
+                        .await?;
+                        return Ok(BatchSeries::Cpu {
+                            chart: Some(chart),
+                            points: rows.into_iter().map(CpuPoint::from).collect(),
+                        });
+                    }
+                    let rows = repo.read_cpu(&res, start, end, limit).await?;
+                    Ok(BatchSeries::Cpu {
+                        chart: None,
+                        points: rows.into_iter().map(CpuPoint::from).collect(),
+                    })
+                }
             }),
             "cpu_cores" => Box::pin(async move {
                 let rows = repo.read_cpu_cores(start, end, limit).await?;

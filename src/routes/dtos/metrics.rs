@@ -13,8 +13,10 @@ pub struct MetricsRangeQuery {
     /// Optional override; otherwise auto-selected from the span.
     /// One of: "raw", "1m", "5m", "1h".
     pub resolution: Option<String>,
-    /// Hard cap on points returned. Defaults to 1000, max 5000.
+    /// Stored-row cap, default/max 5000. Automatic CPU uses max_points instead.
     pub limit: Option<u32>,
+    /// CPU chart output budget (16..2000); ignored for other resources.
+    pub max_points: Option<u32>,
 }
 
 // ===== CPU =====
@@ -73,7 +75,10 @@ impl From<crate::storage::repositories::CpuHistoryRow> for CpuPoint {
 
 #[derive(Debug, Serialize)]
 pub struct CpuHistoryResponse {
-    pub resolution: String,
+    /// A single storage tier, or null when chart sources are mixed/unavailable.
+    pub resolution: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chart: Option<crate::storage::repositories::ChartMetadata>,
     pub points: Vec<CpuPoint>,
 }
 
@@ -388,6 +393,8 @@ pub struct BatchMetricsQuery {
     pub end: Option<i64>,
     pub resolution: Option<String>,
     pub limit: Option<u32>,
+    /// CPU chart output budget (16..2000); ignored for other resources.
+    pub max_points: Option<u32>,
 }
 
 /// Tagged on `resource` so new variants (probe, pressure) stay additive.
@@ -395,6 +402,8 @@ pub struct BatchMetricsQuery {
 #[serde(tag = "resource", rename_all = "snake_case")]
 pub enum BatchSeries {
     Cpu {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        chart: Option<crate::storage::repositories::ChartMetadata>,
         points: Vec<CpuPoint>,
     },
     CpuCores {
@@ -419,8 +428,7 @@ pub enum BatchSeries {
 pub struct BatchMetricsResponse {
     pub start: i64,
     pub end: i64,
-    /// Resolution applied to every series — one per request, like the
-    /// single-resource endpoints.
+    /// Default storage resolution for series without their own chart metadata.
     pub resolution: String,
     pub series: Vec<BatchSeries>,
 }

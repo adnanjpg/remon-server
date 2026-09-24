@@ -451,70 +451,7 @@ impl MetricsRepository {
         .await?;
         let mut result = Vec::with_capacity(rows.len());
         for row in rows.into_iter().rev() {
-            let version: Option<i64> = row.try_get("summary_version")?;
-            let statistics = if resolution == "raw" || version == Some(1) {
-                let mut stats = BTreeMap::new();
-                for field in [
-                    "usage_percent",
-                    "load_1m",
-                    "load_5m",
-                    "load_15m",
-                    "steal_percent",
-                    "iowait_percent",
-                    "guest_percent",
-                    "user_percent",
-                    "system_percent",
-                    "context_switches_per_sec",
-                    "process_forks_per_sec",
-                ] {
-                    let stat = if resolution == "raw" {
-                        let value: Option<f64> = if field == "context_switches_per_sec"
-                            || field == "process_forks_per_sec"
-                        {
-                            row.try_get::<Option<i64>, _>(field)?.map(|v| v as f64)
-                        } else {
-                            row.try_get(field)?
-                        };
-                        GaugeStatistics {
-                            min: value,
-                            max: value,
-                            sum: value.unwrap_or(0.0),
-                            valid_count: i64::from(value.is_some()),
-                        }
-                    } else {
-                        GaugeStatistics {
-                            min: row.try_get(format!("{field}_min").as_str())?,
-                            max: row.try_get(format!("{field}_max").as_str())?,
-                            sum: row.try_get(format!("{field}_sum").as_str())?,
-                            valid_count: row.try_get(format!("{field}_valid_count").as_str())?,
-                        }
-                    };
-                    stats.insert(field.to_string(), stat);
-                }
-                Some(stats)
-            } else {
-                None
-            };
-            result.push(CpuHistoryRow {
-                timestamp: row.try_get("timestamp")?,
-                usage_percent: row.try_get("usage_percent")?,
-                load_1m: row.try_get("load_1m")?,
-                load_5m: row.try_get("load_5m")?,
-                load_15m: row.try_get("load_15m")?,
-                steal_percent: row.try_get("steal_percent")?,
-                iowait_percent: row.try_get("iowait_percent")?,
-                guest_percent: row.try_get("guest_percent")?,
-                user_percent: row.try_get("user_percent")?,
-                system_percent: row.try_get("system_percent")?,
-                context_switches_per_sec: row.try_get("context_switches_per_sec")?,
-                process_forks_per_sec: row.try_get("process_forks_per_sec")?,
-                bucket_seconds: if resolution == "raw" {
-                    0
-                } else {
-                    row.try_get("bucket_seconds")?
-                },
-                statistics,
-            });
+            result.push(cpu_history_row(row, resolution == "raw")?);
         }
         Ok(result)
     }
@@ -1232,4 +1169,59 @@ impl MetricsRepository {
         };
         Ok(result.rows_affected() + extra)
     }
+}
+
+/// Shared conversion for stored rows and query-time buckets.
+pub(super) fn cpu_history_row(row: sqlx::sqlite::SqliteRow, raw: bool) -> AppResult<CpuHistoryRow> {
+    let version: Option<i64> = row.try_get("summary_version")?;
+    let statistics = if raw || version == Some(1) {
+        let mut stats = BTreeMap::new();
+        for &field in super::cpu_chart::CPU_FIELDS {
+            let stat = if raw {
+                let value: Option<f64> =
+                    if field == "context_switches_per_sec" || field == "process_forks_per_sec" {
+                        row.try_get::<Option<i64>, _>(field)?.map(|v| v as f64)
+                    } else {
+                        row.try_get(field)?
+                    };
+                GaugeStatistics {
+                    min: value,
+                    max: value,
+                    sum: value.unwrap_or(0.0),
+                    valid_count: i64::from(value.is_some()),
+                }
+            } else {
+                GaugeStatistics {
+                    min: row.try_get(format!("{field}_min").as_str())?,
+                    max: row.try_get(format!("{field}_max").as_str())?,
+                    sum: row.try_get(format!("{field}_sum").as_str())?,
+                    valid_count: row.try_get(format!("{field}_valid_count").as_str())?,
+                }
+            };
+            stats.insert(field.to_string(), stat);
+        }
+        Some(stats)
+    } else {
+        None
+    };
+    Ok(CpuHistoryRow {
+        timestamp: row.try_get("timestamp")?,
+        usage_percent: row.try_get("usage_percent")?,
+        load_1m: row.try_get("load_1m")?,
+        load_5m: row.try_get("load_5m")?,
+        load_15m: row.try_get("load_15m")?,
+        steal_percent: row.try_get("steal_percent")?,
+        iowait_percent: row.try_get("iowait_percent")?,
+        guest_percent: row.try_get("guest_percent")?,
+        user_percent: row.try_get("user_percent")?,
+        system_percent: row.try_get("system_percent")?,
+        context_switches_per_sec: row.try_get("context_switches_per_sec")?,
+        process_forks_per_sec: row.try_get("process_forks_per_sec")?,
+        bucket_seconds: if raw {
+            0
+        } else {
+            row.try_get("bucket_seconds")?
+        },
+        statistics,
+    })
 }
