@@ -3,6 +3,27 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.25.0] - 2026-09-26
+
+### Added
+
+- CPU, memory, disk and network history accept a point budget and report the actual bucket size and source coverage.
+- Incidents track alert episodes, recovery and closure reasons.
+
+### Changed
+
+- Process browsing returns complete snapshots.
+- Automatic history combines retained resolutions to cover the requested window, including recent data not yet rolled up.
+
+### Fixed
+
+- Rollups certify their processed range and exclude incomplete initial buckets from aggregation.
+- Short chart windows stay on raw samples when the client clock runs slightly ahead.
+
+### Upgrade
+
+- Schema changes are folded into the initial migration. Existing databases require the corresponding schema updates and SQLx migration checksum update before starting this version; preserve existing data.
+
 ## [0.24.0] - 2026-09-12
 
 ### Added
