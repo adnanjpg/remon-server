@@ -1,4 +1,5 @@
 use log::warn;
+use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 use std::collections::BTreeMap;
 
@@ -528,78 +529,9 @@ impl MetricsRepository {
             .bind(limit)
             .fetch_all(&self.pool)
             .await?;
-        let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
-            let version: Option<i64> = row.try_get("summary_version")?;
-            let statistics = if resolution == "raw" || version == Some(1) {
-                let mut stats = BTreeMap::new();
-                for (field, integer) in [
-                    ("total_bytes", true),
-                    ("used_bytes", true),
-                    ("available_bytes", true),
-                    ("cached_bytes", true),
-                    ("swap_used_bytes", true),
-                    ("page_faults_minor_per_sec", true),
-                    ("page_faults_major_per_sec", true),
-                    ("swap_in_pages_per_sec", true),
-                    ("swap_out_pages_per_sec", true),
-                    ("used_percent", false),
-                ] {
-                    let value = if resolution == "raw" {
-                        if integer {
-                            row.try_get::<Option<i64>, _>(field)?.map(|v| v as f64)
-                        } else {
-                            row.try_get::<Option<f64>, _>(if field == "used_percent" {
-                                "effective_used_percent"
-                            } else {
-                                field
-                            })?
-                        }
-                    } else {
-                        None
-                    };
-                    let stat = if resolution == "raw" {
-                        GaugeStatistics {
-                            min: value,
-                            max: value,
-                            sum: value.unwrap_or(0.0),
-                            valid_count: i64::from(value.is_some()),
-                        }
-                    } else {
-                        GaugeStatistics {
-                            min: row.try_get(format!("{field}_min").as_str())?,
-                            max: row.try_get(format!("{field}_max").as_str())?,
-                            sum: row.try_get(format!("{field}_sum").as_str())?,
-                            valid_count: row.try_get(format!("{field}_valid_count").as_str())?,
-                        }
-                    };
-                    stats.insert(field.to_string(), stat);
-                }
-                Some(stats)
-            } else {
-                None
-            };
-            out.push(MemoryHistoryRow {
-                timestamp: row.try_get("timestamp")?,
-                total_bytes: row.try_get("total_bytes")?,
-                used_bytes: row.try_get("used_bytes")?,
-                available_bytes: row.try_get("available_bytes")?,
-                cached_bytes: row.try_get("cached_bytes")?,
-                swap_used_bytes: row.try_get("swap_used_bytes")?,
-                page_faults_minor_per_sec: row.try_get("page_faults_minor_per_sec")?,
-                page_faults_major_per_sec: row.try_get("page_faults_major_per_sec")?,
-                swap_in_pages_per_sec: row.try_get("swap_in_pages_per_sec")?,
-                swap_out_pages_per_sec: row.try_get("swap_out_pages_per_sec")?,
-                used_percent: row.try_get("effective_used_percent")?,
-                bucket_seconds: if resolution == "raw" {
-                    0
-                } else {
-                    row.try_get("bucket_seconds")?
-                },
-                statistics,
-            });
-        }
-        Ok(out)
+        rows.into_iter()
+            .map(|r| memory_history_row(r, resolution == "raw"))
+            .collect()
     }
 
     pub async fn read_disk(
@@ -645,79 +577,9 @@ impl MetricsRepository {
             .bind(limit)
             .fetch_all(&self.pool)
             .await?;
-        let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
-            let version: Option<i64> = row.try_get("summary_version")?;
-            let statistics = if resolution == "raw" || version == Some(1) {
-                let mut stats = BTreeMap::new();
-                for (field, integer) in [
-                    ("total_bytes", true),
-                    ("used_bytes", true),
-                    ("available_bytes", true),
-                    ("read_bytes_per_sec", true),
-                    ("write_bytes_per_sec", true),
-                    ("inode_used_percent", false),
-                    ("read_iops", true),
-                    ("write_iops", true),
-                    ("io_util_percent", false),
-                    ("used_percent", false),
-                ] {
-                    let value = if resolution == "raw" {
-                        if integer {
-                            row.try_get::<Option<i64>, _>(field)?.map(|v| v as f64)
-                        } else {
-                            row.try_get::<Option<f64>, _>(if field == "used_percent" {
-                                "effective_used_percent"
-                            } else {
-                                field
-                            })?
-                        }
-                    } else {
-                        None
-                    };
-                    let stat = if resolution == "raw" {
-                        GaugeStatistics {
-                            min: value,
-                            max: value,
-                            sum: value.unwrap_or(0.0),
-                            valid_count: i64::from(value.is_some()),
-                        }
-                    } else {
-                        GaugeStatistics {
-                            min: row.try_get(format!("{field}_min").as_str())?,
-                            max: row.try_get(format!("{field}_max").as_str())?,
-                            sum: row.try_get(format!("{field}_sum").as_str())?,
-                            valid_count: row.try_get(format!("{field}_valid_count").as_str())?,
-                        }
-                    };
-                    stats.insert(field.to_string(), stat);
-                }
-                Some(stats)
-            } else {
-                None
-            };
-            out.push(DiskHistoryRow {
-                timestamp: row.try_get("timestamp")?,
-                mount_point: row.try_get("mount_point")?,
-                total_bytes: row.try_get("total_bytes")?,
-                used_bytes: row.try_get("used_bytes")?,
-                available_bytes: row.try_get("available_bytes")?,
-                read_bytes_per_sec: row.try_get("read_bytes_per_sec")?,
-                write_bytes_per_sec: row.try_get("write_bytes_per_sec")?,
-                inode_used_percent: row.try_get("inode_used_percent")?,
-                read_iops: row.try_get("read_iops")?,
-                write_iops: row.try_get("write_iops")?,
-                io_util_percent: row.try_get("io_util_percent")?,
-                used_percent: row.try_get("effective_used_percent")?,
-                bucket_seconds: if resolution == "raw" {
-                    0
-                } else {
-                    row.try_get("bucket_seconds")?
-                },
-                statistics,
-            });
-        }
-        Ok(out)
+        rows.into_iter()
+            .map(|r| disk_history_row(r, resolution == "raw"))
+            .collect()
     }
 
     pub async fn read_docker(
@@ -833,71 +695,9 @@ impl MetricsRepository {
             .bind(limit)
             .fetch_all(&self.pool)
             .await?;
-        let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
-            let version: Option<i64> = row.try_get("summary_version")?;
-            let statistics = if resolution == "raw" || version == Some(1) {
-                let mut stats = BTreeMap::new();
-                for (field, integer) in [
-                    ("rx_bytes_per_sec", true),
-                    ("tx_bytes_per_sec", true),
-                    ("rx_packets_per_sec", true),
-                    ("tx_packets_per_sec", true),
-                    ("errors_in_per_sec", true),
-                    ("errors_out_per_sec", true),
-                ] {
-                    let value = if resolution == "raw" {
-                        if integer {
-                            row.try_get::<Option<i64>, _>(field)?.map(|v| v as f64)
-                        } else {
-                            row.try_get::<Option<f64>, _>(if field == "used_percent" {
-                                "effective_used_percent"
-                            } else {
-                                field
-                            })?
-                        }
-                    } else {
-                        None
-                    };
-                    let stat = if resolution == "raw" {
-                        GaugeStatistics {
-                            min: value,
-                            max: value,
-                            sum: value.unwrap_or(0.0),
-                            valid_count: i64::from(value.is_some()),
-                        }
-                    } else {
-                        GaugeStatistics {
-                            min: row.try_get(format!("{field}_min").as_str())?,
-                            max: row.try_get(format!("{field}_max").as_str())?,
-                            sum: row.try_get(format!("{field}_sum").as_str())?,
-                            valid_count: row.try_get(format!("{field}_valid_count").as_str())?,
-                        }
-                    };
-                    stats.insert(field.to_string(), stat);
-                }
-                Some(stats)
-            } else {
-                None
-            };
-            out.push(NetworkHistoryRow {
-                timestamp: row.try_get("timestamp")?,
-                interface_name: row.try_get("interface_name")?,
-                rx_bytes_per_sec: row.try_get("rx_bytes_per_sec")?,
-                tx_bytes_per_sec: row.try_get("tx_bytes_per_sec")?,
-                rx_packets_per_sec: row.try_get("rx_packets_per_sec")?,
-                tx_packets_per_sec: row.try_get("tx_packets_per_sec")?,
-                errors_in_per_sec: row.try_get("errors_in_per_sec")?,
-                errors_out_per_sec: row.try_get("errors_out_per_sec")?,
-                bucket_seconds: if resolution == "raw" {
-                    0
-                } else {
-                    row.try_get("bucket_seconds")?
-                },
-                statistics,
-            });
-        }
-        Ok(out)
+        rows.into_iter()
+            .map(|r| network_history_row(r, resolution == "raw"))
+            .collect()
     }
 
     pub async fn read_network_totals(
@@ -1171,39 +971,55 @@ impl MetricsRepository {
     }
 }
 
-/// Shared conversion for stored rows and query-time buckets.
-pub(super) fn cpu_history_row(row: sqlx::sqlite::SqliteRow, raw: bool) -> AppResult<CpuHistoryRow> {
+/// Per-field statistics: a raw row is its own summary, a bucket carries stored ones.
+fn statistics(
+    row: &SqliteRow,
+    raw: bool,
+    fields: &[&str],
+) -> AppResult<Option<BTreeMap<String, GaugeStatistics>>> {
     let version: Option<i64> = row.try_get("summary_version")?;
-    let statistics = if raw || version == Some(1) {
-        let mut stats = BTreeMap::new();
-        for &field in super::cpu_chart::CPU_FIELDS {
-            let stat = if raw {
-                let value: Option<f64> =
-                    if field == "context_switches_per_sec" || field == "process_forks_per_sec" {
-                        row.try_get::<Option<i64>, _>(field)?.map(|v| v as f64)
-                    } else {
-                        row.try_get(field)?
-                    };
-                GaugeStatistics {
-                    min: value,
-                    max: value,
-                    sum: value.unwrap_or(0.0),
-                    valid_count: i64::from(value.is_some()),
-                }
+    if !raw && version != Some(1) {
+        return Ok(None);
+    }
+    let mut stats = BTreeMap::new();
+    for &field in fields {
+        let stat = if raw {
+            let value: Option<f64> = if field == "used_percent" {
+                row.try_get("effective_used_percent")?
+            } else if super::chart::REAL_FIELDS.contains(&field) {
+                row.try_get(field)?
             } else {
-                GaugeStatistics {
-                    min: row.try_get(format!("{field}_min").as_str())?,
-                    max: row.try_get(format!("{field}_max").as_str())?,
-                    sum: row.try_get(format!("{field}_sum").as_str())?,
-                    valid_count: row.try_get(format!("{field}_valid_count").as_str())?,
-                }
+                row.try_get::<Option<i64>, _>(field)?.map(|v| v as f64)
             };
-            stats.insert(field.to_string(), stat);
-        }
-        Some(stats)
+            GaugeStatistics {
+                min: value,
+                max: value,
+                sum: value.unwrap_or(0.0),
+                valid_count: i64::from(value.is_some()),
+            }
+        } else {
+            GaugeStatistics {
+                min: row.try_get(format!("{field}_min").as_str())?,
+                max: row.try_get(format!("{field}_max").as_str())?,
+                sum: row.try_get(format!("{field}_sum").as_str())?,
+                valid_count: row.try_get(format!("{field}_valid_count").as_str())?,
+            }
+        };
+        stats.insert(field.to_string(), stat);
+    }
+    Ok(Some(stats))
+}
+
+fn bucket_seconds(row: &SqliteRow, raw: bool) -> AppResult<i64> {
+    Ok(if raw {
+        0
     } else {
-        None
-    };
+        row.try_get("bucket_seconds")?
+    })
+}
+
+/// Shared conversion for stored rows and query-time buckets.
+pub(super) fn cpu_history_row(row: SqliteRow, raw: bool) -> AppResult<CpuHistoryRow> {
     Ok(CpuHistoryRow {
         timestamp: row.try_get("timestamp")?,
         usage_percent: row.try_get("usage_percent")?,
@@ -1217,11 +1033,59 @@ pub(super) fn cpu_history_row(row: sqlx::sqlite::SqliteRow, raw: bool) -> AppRes
         system_percent: row.try_get("system_percent")?,
         context_switches_per_sec: row.try_get("context_switches_per_sec")?,
         process_forks_per_sec: row.try_get("process_forks_per_sec")?,
-        bucket_seconds: if raw {
-            0
-        } else {
-            row.try_get("bucket_seconds")?
-        },
-        statistics,
+        bucket_seconds: bucket_seconds(&row, raw)?,
+        statistics: statistics(&row, raw, super::chart::CPU_FIELDS)?,
+    })
+}
+
+pub(super) fn memory_history_row(row: SqliteRow, raw: bool) -> AppResult<MemoryHistoryRow> {
+    Ok(MemoryHistoryRow {
+        timestamp: row.try_get("timestamp")?,
+        total_bytes: row.try_get("total_bytes")?,
+        used_bytes: row.try_get("used_bytes")?,
+        available_bytes: row.try_get("available_bytes")?,
+        cached_bytes: row.try_get("cached_bytes")?,
+        swap_used_bytes: row.try_get("swap_used_bytes")?,
+        page_faults_minor_per_sec: row.try_get("page_faults_minor_per_sec")?,
+        page_faults_major_per_sec: row.try_get("page_faults_major_per_sec")?,
+        swap_in_pages_per_sec: row.try_get("swap_in_pages_per_sec")?,
+        swap_out_pages_per_sec: row.try_get("swap_out_pages_per_sec")?,
+        used_percent: row.try_get("effective_used_percent")?,
+        bucket_seconds: bucket_seconds(&row, raw)?,
+        statistics: statistics(&row, raw, super::chart::MEMORY_FIELDS)?,
+    })
+}
+
+pub(super) fn disk_history_row(row: SqliteRow, raw: bool) -> AppResult<DiskHistoryRow> {
+    Ok(DiskHistoryRow {
+        timestamp: row.try_get("timestamp")?,
+        mount_point: row.try_get("mount_point")?,
+        total_bytes: row.try_get("total_bytes")?,
+        used_bytes: row.try_get("used_bytes")?,
+        available_bytes: row.try_get("available_bytes")?,
+        read_bytes_per_sec: row.try_get("read_bytes_per_sec")?,
+        write_bytes_per_sec: row.try_get("write_bytes_per_sec")?,
+        inode_used_percent: row.try_get("inode_used_percent")?,
+        read_iops: row.try_get("read_iops")?,
+        write_iops: row.try_get("write_iops")?,
+        io_util_percent: row.try_get("io_util_percent")?,
+        used_percent: row.try_get("effective_used_percent")?,
+        bucket_seconds: bucket_seconds(&row, raw)?,
+        statistics: statistics(&row, raw, super::chart::DISK_FIELDS)?,
+    })
+}
+
+pub(super) fn network_history_row(row: SqliteRow, raw: bool) -> AppResult<NetworkHistoryRow> {
+    Ok(NetworkHistoryRow {
+        timestamp: row.try_get("timestamp")?,
+        interface_name: row.try_get("interface_name")?,
+        rx_bytes_per_sec: row.try_get("rx_bytes_per_sec")?,
+        tx_bytes_per_sec: row.try_get("tx_bytes_per_sec")?,
+        rx_packets_per_sec: row.try_get("rx_packets_per_sec")?,
+        tx_packets_per_sec: row.try_get("tx_packets_per_sec")?,
+        errors_in_per_sec: row.try_get("errors_in_per_sec")?,
+        errors_out_per_sec: row.try_get("errors_out_per_sec")?,
+        bucket_seconds: bucket_seconds(&row, raw)?,
+        statistics: statistics(&row, raw, super::chart::NETWORK_FIELDS)?,
     })
 }

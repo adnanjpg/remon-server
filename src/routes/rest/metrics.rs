@@ -18,7 +18,10 @@ use crate::routes::dtos::metrics::{
 use crate::routes::extractors::{Claims, ValidatedQuery};
 use crate::services::forecast;
 use crate::state::AppState;
-use crate::storage::repositories::{MetricsRepository, ResolutionRepository};
+use crate::storage::repositories::{
+    ChartMetadata, MetricsRepository, ResolutionRepository, read_cpu_chart, read_disk_chart,
+    read_memory_chart, read_network_chart,
+};
 
 /// Default span when client omits start/end: last hour.
 const DEFAULT_SPAN_SECS: i64 = 3600;
@@ -56,6 +59,16 @@ fn pick_resolution(span_secs: i64) -> &'static str {
     }
 }
 
+/// The stored tier behind a chart, when only one contributed.
+fn single_tier(chart: &ChartMetadata) -> Option<String> {
+    let first = chart.sources.first()?;
+    chart
+        .sources
+        .iter()
+        .all(|s| s.resolution == first.resolution)
+        .then(|| first.resolution.clone())
+}
+
 /// Resolve (start, end, resolution, limit) from the optional query params.
 /// Validates `resolution` against the known set.
 fn resolve_range(q: &MetricsRangeQuery) -> AppResult<(i64, i64, String, u32)> {
@@ -91,25 +104,10 @@ pub async fn cpu_history(
     let (start, end, resolution, limit) = resolve_range(&q)?;
     let repo = MetricsRepository::new(state.db.clone());
     if q.resolution.is_none() {
-        let (rows, chart) = crate::storage::repositories::read_cpu_chart(
-            &state.db,
-            start,
-            end,
-            q.max_points.unwrap_or(300),
-        )
-        .await?;
-        let resolution = chart
-            .sources
-            .first()
-            .filter(|first| {
-                chart
-                    .sources
-                    .iter()
-                    .all(|s| s.resolution == first.resolution)
-            })
-            .map(|s| s.resolution.clone());
+        let (rows, chart) =
+            read_cpu_chart(&state.db, start, end, q.max_points.unwrap_or(300)).await?;
         return Ok(Json(CpuHistoryResponse {
-            resolution,
+            resolution: single_tier(&chart),
             chart: Some(chart),
             points: rows.into_iter().map(CpuPoint::from).collect(),
         }));
@@ -159,12 +157,25 @@ pub async fn memory_history(
     ValidatedQuery(q): ValidatedQuery<MetricsRangeQuery>,
 ) -> AppResult<Json<MemoryHistoryResponse>> {
     let (start, end, resolution, limit) = resolve_range(&q)?;
+    if q.resolution.is_none() {
+        let (rows, chart) =
+            read_memory_chart(&state.db, start, end, q.max_points.unwrap_or(300)).await?;
+        return Ok(Json(MemoryHistoryResponse {
+            resolution: single_tier(&chart),
+            chart: Some(chart),
+            points: rows.into_iter().map(MemoryPoint::from).collect(),
+        }));
+    }
     let repo = MetricsRepository::new(state.db.clone());
     let rows = repo.read_memory(&resolution, start, end, limit).await?;
 
     let points = rows.into_iter().map(MemoryPoint::from).collect();
 
-    Ok(Json(MemoryHistoryResponse { resolution, points }))
+    Ok(Json(MemoryHistoryResponse {
+        resolution: Some(resolution),
+        chart: None,
+        points,
+    }))
 }
 
 /// GET /metrics/disk — points per (timestamp, mount_point); client groups
@@ -175,12 +186,25 @@ pub async fn disk_history(
     ValidatedQuery(q): ValidatedQuery<MetricsRangeQuery>,
 ) -> AppResult<Json<DiskHistoryResponse>> {
     let (start, end, resolution, limit) = resolve_range(&q)?;
+    if q.resolution.is_none() {
+        let (rows, chart) =
+            read_disk_chart(&state.db, start, end, q.max_points.unwrap_or(300)).await?;
+        return Ok(Json(DiskHistoryResponse {
+            resolution: single_tier(&chart),
+            chart: Some(chart),
+            points: rows.into_iter().map(DiskPoint::from).collect(),
+        }));
+    }
     let repo = MetricsRepository::new(state.db.clone());
     let rows = repo.read_disk(&resolution, start, end, limit).await?;
 
     let points = rows.into_iter().map(DiskPoint::from).collect();
 
-    Ok(Json(DiskHistoryResponse { resolution, points }))
+    Ok(Json(DiskHistoryResponse {
+        resolution: Some(resolution),
+        chart: None,
+        points,
+    }))
 }
 
 /// GET /metrics/network — points per (timestamp, interface_name).
@@ -190,6 +214,16 @@ pub async fn network_history(
     ValidatedQuery(q): ValidatedQuery<MetricsRangeQuery>,
 ) -> AppResult<Json<NetworkHistoryResponse>> {
     let (start, end, resolution, limit) = resolve_range(&q)?;
+    if q.resolution.is_none() {
+        let (rows, totals, chart) =
+            read_network_chart(&state.db, start, end, q.max_points.unwrap_or(300)).await?;
+        return Ok(Json(NetworkHistoryResponse {
+            resolution: single_tier(&chart),
+            chart: Some(chart),
+            points: rows.into_iter().map(NetworkPoint::from).collect(),
+            totals: totals.into_iter().map(NetworkPoint::from).collect(),
+        }));
+    }
     let repo = MetricsRepository::new(state.db.clone());
     let rows = repo.read_network(&resolution, start, end, limit).await?;
 
@@ -202,7 +236,8 @@ pub async fn network_history(
         .collect();
 
     Ok(Json(NetworkHistoryResponse {
-        resolution,
+        resolution: Some(resolution),
+        chart: None,
         points,
         totals,
     }))
@@ -611,33 +646,28 @@ pub async fn batch_history(
     // Run per-resource reads in parallel. Cores has no rollup so it
     // ignores `resolution` — repo handles that.
     let repo = MetricsRepository::new(state.db.clone());
+    let automatic = q.resolution.is_none();
+    let max_points = q.max_points.unwrap_or(300);
     let mut futs: Vec<futures_util::future::BoxFuture<'_, AppResult<BatchSeries>>> =
         Vec::with_capacity(requested.len());
     for r in &requested {
         let res = resolution.clone();
         let repo = &repo;
+        let pool = &state.db;
         futs.push(match *r {
-            "cpu" => Box::pin({
-                let pool = state.db.clone();
-                let automatic = q.resolution.is_none();
-                let max_points = q.max_points.unwrap_or(300);
-                async move {
-                    if automatic {
-                        let (rows, chart) = crate::storage::repositories::read_cpu_chart(
-                            &pool, start, end, max_points,
-                        )
-                        .await?;
-                        return Ok(BatchSeries::Cpu {
-                            chart: Some(chart),
-                            points: rows.into_iter().map(CpuPoint::from).collect(),
-                        });
-                    }
-                    let rows = repo.read_cpu(&res, start, end, limit).await?;
-                    Ok(BatchSeries::Cpu {
-                        chart: None,
+            "cpu" => Box::pin(async move {
+                if automatic {
+                    let (rows, chart) = read_cpu_chart(pool, start, end, max_points).await?;
+                    return Ok(BatchSeries::Cpu {
+                        chart: Some(chart),
                         points: rows.into_iter().map(CpuPoint::from).collect(),
-                    })
+                    });
                 }
+                let rows = repo.read_cpu(&res, start, end, limit).await?;
+                Ok(BatchSeries::Cpu {
+                    chart: None,
+                    points: rows.into_iter().map(CpuPoint::from).collect(),
+                })
             }),
             "cpu_cores" => Box::pin(async move {
                 let rows = repo.read_cpu_cores(start, end, limit).await?;
@@ -654,20 +684,46 @@ pub async fn batch_history(
                 })
             }),
             "memory" => Box::pin(async move {
+                if automatic {
+                    let (rows, chart) = read_memory_chart(pool, start, end, max_points).await?;
+                    return Ok(BatchSeries::Memory {
+                        chart: Some(chart),
+                        points: rows.into_iter().map(MemoryPoint::from).collect(),
+                    });
+                }
                 let rows = repo.read_memory(&res, start, end, limit).await?;
                 Ok(BatchSeries::Memory {
+                    chart: None,
                     points: rows.into_iter().map(MemoryPoint::from).collect(),
                 })
             }),
             "disk" => Box::pin(async move {
+                if automatic {
+                    let (rows, chart) = read_disk_chart(pool, start, end, max_points).await?;
+                    return Ok(BatchSeries::Disk {
+                        chart: Some(chart),
+                        points: rows.into_iter().map(DiskPoint::from).collect(),
+                    });
+                }
                 let rows = repo.read_disk(&res, start, end, limit).await?;
                 Ok(BatchSeries::Disk {
+                    chart: None,
                     points: rows.into_iter().map(DiskPoint::from).collect(),
                 })
             }),
             "network" => Box::pin(async move {
+                if automatic {
+                    let (rows, totals, chart) =
+                        read_network_chart(pool, start, end, max_points).await?;
+                    return Ok(BatchSeries::Network {
+                        chart: Some(chart),
+                        points: rows.into_iter().map(NetworkPoint::from).collect(),
+                        totals: totals.into_iter().map(NetworkPoint::from).collect(),
+                    });
+                }
                 let rows = repo.read_network(&res, start, end, limit).await?;
                 Ok(BatchSeries::Network {
+                    chart: None,
                     points: rows.into_iter().map(NetworkPoint::from).collect(),
                     totals: repo
                         .read_network_totals(&res, start, end, limit)

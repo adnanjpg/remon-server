@@ -1,5 +1,7 @@
-mod cpu_chart;
-pub use cpu_chart::{ChartMetadata, read_cpu_chart};
+mod chart;
+pub use chart::{
+    ChartMetadata, read_cpu_chart, read_disk_chart, read_memory_chart, read_network_chart,
+};
 mod actions;
 mod alerts;
 mod config;

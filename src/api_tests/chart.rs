@@ -1,5 +1,7 @@
 use super::{TestApp, rollup_cursor::samples};
-use crate::storage::repositories::read_cpu_chart;
+use crate::storage::repositories::{
+    read_cpu_chart, read_disk_chart, read_memory_chart, read_network_chart,
+};
 
 #[tokio::test]
 async fn cpu_chart_stitched_statistics_match_raw_with_seams_inside_output_buckets() {
@@ -87,6 +89,17 @@ async fn cpu_chart_raw_probe_preserves_whole_window_or_rebuckets() {
             .sum::<i64>(),
         100
     );
+}
+
+#[tokio::test]
+async fn cpu_chart_raw_probe_tolerates_client_clock_ahead() {
+    let app = TestApp::spawn().await;
+    let now = chrono::Utc::now().timestamp();
+    samples(&app, now - 100, now).await;
+    let (_, meta) = read_cpu_chart(&app.state.db, now - 100, now + 5, 300)
+        .await
+        .unwrap();
+    assert_eq!(meta.bucket_seconds, 0);
 }
 
 #[tokio::test]
@@ -194,4 +207,166 @@ async fn cpu_chart_retention_boundary_never_reads_a_partial_source_bucket() {
     assert_eq!(meta.sources[0].from, base + 300);
     assert_eq!(meta.unavailable[0].start, base);
     assert_eq!(meta.unavailable[0].end, base + 300);
+}
+
+async fn host_samples(app: &TestApp, start: i64, end: i64) {
+    let mut tx = app.state.db.begin().await.unwrap();
+    for ts in (start..end).step_by(2) {
+        let used = 1000 + ts % 97;
+        sqlx::query(
+            "INSERT INTO metrics_memory (resolution, timestamp, total_bytes, used_bytes,
+            available_bytes, cached_bytes, swap_used_bytes) VALUES ('raw', ?, 4000, ?, ?, 10, 0)",
+        )
+        .bind(ts)
+        .bind(used)
+        .bind(4000 - used)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        for (mount, total) in [("/", 1000), ("/data", 5000)] {
+            sqlx::query(
+                "INSERT INTO metrics_disk (resolution, timestamp, mount_point, total_bytes,
+                used_bytes, available_bytes) VALUES ('raw', ?, ?, ?, ?, 0)",
+            )
+            .bind(ts)
+            .bind(mount)
+            .bind(total)
+            .bind(ts % 89)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        }
+        for iface in ["eth0", "eth1"] {
+            sqlx::query(
+                "INSERT INTO metrics_network (resolution, timestamp, interface_name,
+                rx_bytes_per_sec, tx_bytes_per_sec, rx_packets_per_sec, tx_packets_per_sec)
+                VALUES ('raw', ?, ?, ?, 1, 1, 1)",
+            )
+            .bind(ts)
+            .bind(iface)
+            .bind(ts % 53)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO metrics_network_total (resolution, timestamp, rx_bytes_per_sec,
+            tx_bytes_per_sec, rx_packets_per_sec, tx_packets_per_sec, errors_in_per_sec,
+            errors_out_per_sec) VALUES ('raw', ?, ?, 2, 2, 2, 0, 0)",
+        )
+        .bind(ts)
+        .bind(2 * (ts % 53))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn host_charts_bucket_every_key_and_derive_raw_percentages() {
+    let app = TestApp::spawn().await;
+    let base = (chrono::Utc::now().timestamp() / 600 - 20) * 600;
+    host_samples(&app, base, base + 6000).await;
+    crate::services::rollup::run_once(&app.state).await.unwrap();
+
+    let (points, meta) = read_memory_chart(&app.state.db, base, base + 6000, 50)
+        .await
+        .unwrap();
+    assert!(meta.bucket_seconds > 0 && points.len() <= 50);
+    let valid: i64 = points
+        .iter()
+        .map(|p| p.statistics.as_ref().unwrap()["used_percent"].valid_count)
+        .sum();
+    assert_eq!(valid, 3000);
+    for p in &points {
+        let s = &p.statistics.as_ref().unwrap()["used_percent"];
+        let mean = p.used_percent.unwrap();
+        assert!(s.min.unwrap() <= mean && mean <= s.max.unwrap());
+        assert!((mean - s.sum / s.valid_count as f64).abs() < 1e-9);
+    }
+
+    let (points, meta) = read_disk_chart(&app.state.db, base, base + 6000, 50)
+        .await
+        .unwrap();
+    let buckets = (meta.aligned.end - meta.aligned.start) / meta.bucket_seconds;
+    assert_eq!(points.len() as i64, 2 * buckets);
+    for p in points.iter().filter(|p| p.mount_point == "/data") {
+        let s = &p.statistics.as_ref().unwrap()["used_percent"];
+        assert!(s.max.unwrap() <= 100.0 * 88.0 / 5000.0 + 1e-9);
+    }
+
+    let (rows, totals, meta) = read_network_chart(&app.state.db, base, base + 6000, 50)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2 * totals.len());
+    for t in &totals {
+        assert_eq!(t.bucket_seconds, meta.bucket_seconds);
+        let pair: Vec<_> = rows.iter().filter(|r| r.timestamp == t.timestamp).collect();
+        assert_eq!(pair.len(), 2);
+        let rx = &t.statistics.as_ref().unwrap()["rx_bytes_per_sec"];
+        let sum: f64 = pair
+            .iter()
+            .map(|r| r.statistics.as_ref().unwrap()["rx_bytes_per_sec"].sum)
+            .sum();
+        assert!((rx.sum - sum).abs() < 1e-6);
+    }
+}
+
+#[tokio::test]
+async fn host_charts_serve_short_windows_as_raw_samples() {
+    let app = TestApp::spawn().await;
+    let now = chrono::Utc::now().timestamp();
+    host_samples(&app, now - 200, now).await;
+    let (points, meta) = read_disk_chart(&app.state.db, now - 200, now + 5, 300)
+        .await
+        .unwrap();
+    assert_eq!(meta.bucket_seconds, 0);
+    assert_eq!(points.len(), 200);
+    let root = points.iter().find(|p| p.mount_point == "/").unwrap();
+    assert_eq!(
+        root.used_percent,
+        Some(100.0 * root.used_bytes as f64 / root.total_bytes as f64)
+    );
+    let (_, meta) = read_memory_chart(&app.state.db, now - 200, now, 300)
+        .await
+        .unwrap();
+    assert_eq!(meta.bucket_seconds, 0);
+}
+
+#[tokio::test]
+async fn host_charts_exposed_by_rest_and_batch() {
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let base = chrono::Utc::now().timestamp() - 1000;
+    host_samples(&app, base, base + 200).await;
+    let q = format!("start={base}&end={}&max_points=16", base + 200);
+    for route in ["memory", "disk", "network"] {
+        let (status, body) = app
+            .request("GET", &format!("/metrics/{route}?{q}"), Some(&token), None)
+            .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["chart"]["max_points"], 16, "{route}");
+    }
+    let (_, body) = app
+        .request(
+            "GET",
+            &format!("/metrics/batch?resources=memory,disk,network&{q}"),
+            Some(&token),
+            None,
+        )
+        .await;
+    for s in body["series"].as_array().unwrap() {
+        assert!(s["chart"]["bucket_seconds"].as_i64().unwrap() > 0, "{s}");
+    }
+    let (_, body) = app
+        .request(
+            "GET",
+            &format!("/metrics/memory?{q}&resolution=raw"),
+            Some(&token),
+            None,
+        )
+        .await;
+    assert!(body.get("chart").is_none());
+    assert_eq!(body["resolution"], "raw");
 }

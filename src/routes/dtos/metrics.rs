@@ -13,9 +13,9 @@ pub struct MetricsRangeQuery {
     /// Optional override; otherwise auto-selected from the span.
     /// One of: "raw", "1m", "5m", "1h".
     pub resolution: Option<String>,
-    /// Stored-row cap, default/max 5000. Automatic CPU uses max_points instead.
+    /// Stored-row cap, default/max 5000. Automatic charts use max_points instead.
     pub limit: Option<u32>,
-    /// CPU chart output budget (16..2000); ignored for other resources.
+    /// Chart output budget per series (16..2000) for automatic cpu, memory, disk and network.
     pub max_points: Option<u32>,
 }
 
@@ -147,7 +147,10 @@ impl From<crate::storage::repositories::MemoryHistoryRow> for MemoryPoint {
 
 #[derive(Debug, Serialize)]
 pub struct MemoryHistoryResponse {
-    pub resolution: String,
+    /// A single storage tier, or null when chart sources are mixed/unavailable.
+    pub resolution: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chart: Option<crate::storage::repositories::ChartMetadata>,
     pub points: Vec<MemoryPoint>,
 }
 
@@ -201,7 +204,10 @@ impl From<crate::storage::repositories::DiskHistoryRow> for DiskPoint {
 
 #[derive(Debug, Serialize)]
 pub struct DiskHistoryResponse {
-    pub resolution: String,
+    /// A single storage tier, or null when chart sources are mixed/unavailable.
+    pub resolution: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chart: Option<crate::storage::repositories::ChartMetadata>,
     pub points: Vec<DiskPoint>,
 }
 
@@ -246,7 +252,10 @@ impl From<crate::storage::repositories::NetworkHistoryRow> for NetworkPoint {
 pub struct NetworkHistoryResponse {
     /// Simultaneous non-tunnel interface totals, with their own rollup state.
     pub totals: Vec<NetworkPoint>,
-    pub resolution: String,
+    /// A single storage tier, or null when chart sources are mixed/unavailable.
+    pub resolution: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chart: Option<crate::storage::repositories::ChartMetadata>,
     pub points: Vec<NetworkPoint>,
 }
 
@@ -393,7 +402,7 @@ pub struct BatchMetricsQuery {
     pub end: Option<i64>,
     pub resolution: Option<String>,
     pub limit: Option<u32>,
-    /// CPU chart output budget (16..2000); ignored for other resources.
+    /// Chart output budget per series (16..2000) for automatic cpu, memory, disk and network.
     pub max_points: Option<u32>,
 }
 
@@ -410,12 +419,18 @@ pub enum BatchSeries {
         points: Vec<CpuCorePoint>,
     },
     Memory {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        chart: Option<crate::storage::repositories::ChartMetadata>,
         points: Vec<MemoryPoint>,
     },
     Disk {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        chart: Option<crate::storage::repositories::ChartMetadata>,
         points: Vec<DiskPoint>,
     },
     Network {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        chart: Option<crate::storage::repositories::ChartMetadata>,
         points: Vec<NetworkPoint>,
         totals: Vec<NetworkPoint>,
     },
