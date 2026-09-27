@@ -34,7 +34,7 @@ use log::{debug, error, info, warn};
 use serde_json::json;
 use tokio::sync::{mpsc, watch};
 
-use crate::notify::{Notification, NotificationEvent, Severity};
+use crate::notify::{Notification, NotificationEvent, Severity, Target};
 use crate::state::AppState;
 use crate::storage::repositories::{
     DeviceRepository, HostEventRepository, NewHostEvent, RuntimeStateRepository,
@@ -200,11 +200,18 @@ async fn page(state: &Arc<AppState>, kind: &str, sev: Severity, body: String, co
     } else {
         body
     };
+    let subject = host_event_subject(kind);
     let n = Notification {
-        title: format!("[{}] {}", server_name, host_event_subject(kind)),
+        title: format!("[{}] {}", server_name, subject),
         body,
         severity: sev,
         event: NotificationEvent::HostEvent,
+        target: Target {
+            server: server_name,
+            key: format!("event:{kind}"),
+            subject: subject.to_string(),
+            path: "/events",
+        },
     };
     state.notify_queue.dispatch(n, None);
 }

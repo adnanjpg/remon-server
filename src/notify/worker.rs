@@ -181,6 +181,7 @@ mod tests {
             body: String::new(),
             severity: Severity::Warn,
             event: NotificationEvent::Fired,
+            target: Default::default(),
         }
     }
 

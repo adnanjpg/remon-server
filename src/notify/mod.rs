@@ -4,7 +4,7 @@ pub mod types;
 pub mod url_policy;
 pub mod worker;
 
-pub use types::{Notification, NotificationEvent, Severity};
+pub use types::{Notification, NotificationEvent, Severity, Target};
 pub use worker::NotifyQueue;
 
 use std::sync::Arc;
@@ -210,6 +210,12 @@ impl NotificationManager {
             body: "Your notification channel is working correctly.".to_string(),
             severity: Severity::Warn,
             event: NotificationEvent::Fired,
+            target: Target {
+                server: server_name.to_string(),
+                key: "test".to_string(),
+                subject: "Test Notification".to_string(),
+                path: "/notifications",
+            },
         };
 
         // Self-retrying channels can take a full fan-out budget; single-shot

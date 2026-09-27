@@ -55,4 +55,20 @@ pub struct Notification {
     pub body: String,
     pub severity: Severity,
     pub event: NotificationEvent,
+    pub target: Target,
+}
+
+/// Where a notification comes from and where it leads. Text channels read
+/// `title`/`body`; Web Push sends these so the client can render and route.
+#[derive(Debug, Clone, Default)]
+pub struct Target {
+    /// The sending server's display name.
+    pub server: String,
+    /// Stable identity of what the notification is about; a fire and its
+    /// resolve share one, so the client can replace the first with the second.
+    pub key: String,
+    /// Plain subject (rule name, event subject), without `title`'s prefixes.
+    pub subject: String,
+    /// App section to open, e.g. `/alerts`.
+    pub path: &'static str,
 }

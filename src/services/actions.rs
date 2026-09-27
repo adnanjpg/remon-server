@@ -46,7 +46,7 @@ use crate::models::action::{
     RunOrigin, RunStatus,
 };
 use crate::models::alert::AlertSeverity;
-use crate::notify::{Notification, NotificationEvent, Severity};
+use crate::notify::{Notification, NotificationEvent, Severity, Target};
 use crate::state::AppState;
 use crate::storage::repositories::{ActionRepository, NewActionRun, NewHostEvent};
 
@@ -288,6 +288,12 @@ async fn propose(
         ),
         severity: severity_of(ctx.severity),
         event: NotificationEvent::ActionRequired,
+        target: Target {
+            server: server_name,
+            key: format!("run:{run_id}"),
+            subject: ctx.rule_name.clone(),
+            path: "/actions",
+        },
     };
     state.notify_queue.dispatch(n, None);
 
@@ -445,6 +451,12 @@ pub async fn execute_run(
                 ),
                 severity: Severity::Crit,
                 event: NotificationEvent::HostEvent,
+                target: Target {
+                    server: server_name,
+                    key: format!("action:{}", binding.id),
+                    subject: binding.summary(),
+                    path: "/actions",
+                },
             },
             None,
         );

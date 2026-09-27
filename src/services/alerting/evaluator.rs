@@ -48,7 +48,7 @@ use crate::models::action::ActionTrigger;
 use crate::models::alert::{
     AlertEventType, AlertLifecycle, AlertRule, AlertSeverity, AlertStateRow,
 };
-use crate::notify::{Notification, NotificationEvent, Severity};
+use crate::notify::{Notification, NotificationEvent, Severity, Target};
 use crate::state::AppState;
 use crate::storage::repositories::AlertRepository;
 
@@ -822,11 +822,13 @@ async fn fire_notification(
     value: f64,
     meta: Option<&str>,
 ) -> Notification {
+    let server = server_name(state).await;
     Notification {
-        title: titled(state, &rule.name).await,
+        title: format!("[{}] {}", server, rule.name),
         body: format_fire_body(rule, label_set, value, meta),
         severity: alert_severity(rule.severity),
         event: NotificationEvent::Fired,
+        target: alert_target(server, rule, label_set),
     }
 }
 
@@ -837,19 +839,31 @@ async fn resolve_notification(
     value: f64,
     meta: Option<&str>,
 ) -> Notification {
+    let server = server_name(state).await;
     Notification {
-        title: titled(state, &rule.name).await,
+        title: format!("[{}] {}", server, rule.name),
         body: format_resolve_body(rule, label_set, value, meta),
         severity: alert_severity(rule.severity),
         event: NotificationEvent::Resolved,
+        target: alert_target(server, rule, label_set),
     }
 }
 
-/// `[server_name] rule name` — lets one Telegram chat / ntfy topic receiving
-/// alerts from several remon instances attribute each notification.
-async fn titled(state: &AppState, rule_name: &str) -> String {
-    let server_name = state.effective_config.read().await.server_name.clone();
-    format!("[{}] {}", server_name, rule_name)
+/// Titles read `[server_name] rule name` so one Telegram chat or ntfy topic
+/// receiving alerts from several remon instances can attribute each one.
+async fn server_name(state: &AppState) -> String {
+    state.effective_config.read().await.server_name.clone()
+}
+
+/// One key per rule and label set: the fire and the resolve of the same
+/// series share it.
+fn alert_target(server: String, rule: &AlertRule, label_set: &str) -> Target {
+    Target {
+        server,
+        key: format!("alert:{}:{}", rule.id, label_set),
+        subject: rule.name.clone(),
+        path: "/alerts",
+    }
 }
 
 fn alert_severity(s: AlertSeverity) -> Severity {
