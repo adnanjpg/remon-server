@@ -279,12 +279,12 @@ async fn propose(
     let n = Notification {
         title: format!("[{}] Action needed: {}", server_name, ctx.rule_name),
         body: format!(
-            "{} is firing{}.\nProposed: {}\nConfirm with POST /actions/runs/{}/confirm — expires in {}m.",
+            "{} is firing{}.\nProposed: {}\nConfirm it under Actions in remon within {}m (run {}).",
             ctx.rule_name,
             label_suffix(&ctx.label_set),
             binding.summary(),
-            run_id,
             state.actions_config.proposal_ttl_secs / 60,
+            run_id,
         ),
         severity: severity_of(ctx.severity),
         event: NotificationEvent::ActionRequired,
