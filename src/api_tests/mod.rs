@@ -157,18 +157,9 @@ impl TestApp {
         let probe_registry = crate::probes::registry::new_registry();
         let action_registry = crate::actions::registry::new_registry();
 
-        let vapid = Arc::new(
-            crate::services::webpush::load_or_generate(db.pool())
-                .await
-                .expect("vapid keypair"),
-        );
-        let notify = NotificationManager::new(
-            db.pool().clone(),
-            NotificationsConfig::default(),
-            Arc::clone(&vapid),
-        )
-        .await
-        .expect("notification manager");
+        let notify = NotificationManager::new(db.pool().clone(), NotificationsConfig::default())
+            .await
+            .expect("notification manager");
 
         let (notify_queue, notify_rx) = crate::notify::worker::channel();
         let (ledger_queue, ledger_rx) = crate::services::events::ledger_channel();
@@ -193,7 +184,6 @@ impl TestApp {
             notify,
             notify_queue,
             ledger_queue,
-            vapid,
         ));
 
         // Started like production: without it, dispatched notifications would

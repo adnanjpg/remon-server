@@ -3,9 +3,8 @@
 //! Precedence: an explicit strong secret from config/env wins — it lets an
 //! operator rotate the secret or share one across instances. Otherwise the
 //! server falls back to a per-install secret generated on first boot and
-//! persisted in `server_secrets`, mirroring the generate-or-load contract the
-//! VAPID keypair uses (see `services::webpush`). A fresh deployment therefore
-//! comes up securely with no secret wrangling.
+//! persisted in `server_secrets`. A fresh deployment therefore comes up
+//! securely with no secret wrangling.
 
 use anyhow::{Context, Result};
 use rand::Rng;

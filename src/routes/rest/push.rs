@@ -1,33 +1,21 @@
-//! Web Push registration endpoints.
+//! Web Push registration.
 //!
-//! - `GET /push/vapid-public-key` — returns the server's VAPID public
-//!   key as a base64url-encoded uncompressed P-256 point. The browser
-//!   feeds this directly into `pushManager.subscribe({ applicationServerKey })`.
+//! - `POST /me/push-subscription` stores the calling browser's subscription
+//!   on its device row: the relay endpoint, the encryption keys, and the
+//!   browser's own VAPID key, which this server signs its pushes with. A
+//!   browser holds one subscription and brings the same key to every server,
+//!   so it can take alerts from all of them.
 //!
-//! - `POST /me/push-subscription` — accepts the three-tuple the browser
-//!   gets back from the relay (endpoint URL + p256dh + auth secret) and
-//!   stores it on the calling device. Phase 3 reads these out when an
-//!   alert fires.
-//!
-//! - `DELETE /me/push-subscription` — clears the triplet so the device
-//!   stops receiving notifications without losing the rest of its
-//!   pairing.
+//! - `DELETE /me/push-subscription` clears it, leaving the pairing intact.
 
 use axum::{Json, extract::State, http::StatusCode};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::error::{AppError, AppResult};
 use crate::routes::extractors::Claims;
 use crate::state::AppState;
-use crate::storage::repositories::DeviceRepository;
-
-#[derive(Debug, Serialize)]
-pub struct VapidPublicKeyResponse {
-    /// Base64url-encoded uncompressed P-256 point (65 bytes raw,
-    /// leading 0x04). This is what `applicationServerKey` expects.
-    pub public_key: String,
-}
+use crate::storage::repositories::{DeviceRepository, WebPushSubscription};
 
 #[derive(Debug, Deserialize)]
 pub struct SubscribePushRequest {
@@ -40,19 +28,19 @@ pub struct SubscribePushRequest {
     pub p256dh: String,
     /// Per-subscription HMAC auth secret, base64url-encoded.
     pub auth: String,
+    /// The browser's own VAPID private key (PKCS#8 PEM) the subscription was
+    /// made with.
+    pub vapid_private_key: String,
+    /// Opaque handle echoed back in each payload as `ref`.
+    #[serde(default, rename = "ref")]
+    pub reference: Option<String>,
+    /// `warn` or `crit`. Omitted: both.
+    #[serde(default)]
+    pub min_severity: Option<String>,
 }
 
-/// GET /push/vapid-public-key — public-key half of the server's VAPID
-/// identity, in the format the browser's subscribe call expects.
-pub async fn vapid_public_key(
-    State(state): State<Arc<AppState>>,
-) -> AppResult<Json<VapidPublicKeyResponse>> {
-    let public_key = state
-        .vapid_keys
-        .public_key_for_client()
-        .map_err(|e| AppError::Internal(format!("derive VAPID public key: {}", e)))?;
-    Ok(Json(VapidPublicKeyResponse { public_key }))
-}
+/// Longest `ref` accepted; it rides in every payload, which is capped at 4 KB.
+const MAX_REF_LEN: usize = 128;
 
 /// POST /me/push-subscription — register the calling device's browser
 /// subscription. Idempotent: re-posting overwrites the previous triplet.
@@ -74,12 +62,38 @@ pub async fn subscribe_push(
         .await
         .map_err(AppError::BadRequest)?;
 
+    crate::services::webpush::client_public_key(&req.vapid_private_key)
+        .map_err(|_| AppError::BadRequest("vapid_private_key is not a P-256 PKCS#8 key".into()))?;
+    if req
+        .reference
+        .as_ref()
+        .is_some_and(|r| r.len() > MAX_REF_LEN)
+    {
+        return Err(AppError::BadRequest(format!(
+            "ref is longer than {MAX_REF_LEN} bytes"
+        )));
+    }
+    if req
+        .min_severity
+        .as_deref()
+        .is_some_and(|s| s != "warn" && s != "crit")
+    {
+        return Err(AppError::BadRequest(
+            "min_severity must be 'warn' or 'crit'".to_string(),
+        ));
+    }
+
     let repo = DeviceRepository::new(state.db.clone());
     repo.set_web_push_subscription(
         &claims.device_id,
-        Some(&req.endpoint),
-        Some(&req.p256dh),
-        Some(&req.auth),
+        Some(&WebPushSubscription {
+            endpoint: req.endpoint,
+            p256dh: req.p256dh,
+            auth: req.auth,
+            vapid_key: req.vapid_private_key,
+            reference: req.reference,
+            min_severity: req.min_severity,
+        }),
     )
     .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -92,7 +106,7 @@ pub async fn unsubscribe_push(
     State(state): State<Arc<AppState>>,
 ) -> AppResult<StatusCode> {
     let repo = DeviceRepository::new(state.db.clone());
-    repo.set_web_push_subscription(&claims.device_id, None, None, None)
+    repo.set_web_push_subscription(&claims.device_id, None)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }

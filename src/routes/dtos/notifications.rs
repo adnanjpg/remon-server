@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-const VALID_TYPES: &[&str] = &["fcm", "telegram", "ntfy", "webhook", "web-push"];
+const VALID_TYPES: &[&str] = &["fcm", "telegram", "ntfy", "webhook"];
 const VALID_SEVERITIES: &[&str] = &["warn", "crit"];
 
 #[derive(Debug, Deserialize)]

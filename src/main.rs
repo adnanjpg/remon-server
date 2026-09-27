@@ -297,20 +297,9 @@ async fn run(
     let probe_registry = probes::registry::new_registry();
     let action_registry = actions::registry::new_registry();
 
-    // Push delivery cannot work without a VAPID keypair.
-    let vapid_keys = Arc::new(
-        services::webpush::load_or_generate(db.pool())
-            .await
-            .context("load/generate VAPID keypair")?,
-    );
-
-    let notify = notify::NotificationManager::new(
-        db.pool().clone(),
-        config.notifications.clone(),
-        Arc::clone(&vapid_keys),
-    )
-    .await
-    .context("initialize notification manager")?;
+    let notify = notify::NotificationManager::new(db.pool().clone(), config.notifications.clone())
+        .await
+        .context("initialize notification manager")?;
 
     // Queues first, tasks after the state exists: the tasks need the shutdown
     // channel `AppState` owns, the producers need the queue handles.
@@ -337,7 +326,6 @@ async fn run(
         notify,
         notify_queue,
         ledger_queue,
-        vapid_keys,
     ));
     info!("app state initialized with broadcast channels and layered config");
 

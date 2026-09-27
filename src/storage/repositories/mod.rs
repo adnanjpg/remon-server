@@ -25,7 +25,7 @@ mod smart;
 pub use actions::{ActionRepository, NewActionRun, RunQuery, UpsertActionBinding};
 pub use alerts::{AlertEventWithRule, AlertRepository, UpsertAlertRule};
 pub use config::{ConfigRepository, RuntimeOverrides};
-pub use devices::DeviceRepository;
+pub use devices::{DeviceRepository, WebPushSubscription, WebPushTarget};
 #[cfg(feature = "docker")]
 pub use docker::{DockerMetricsRepository, DockerStatsRow};
 pub use heartbeats::{HeartbeatRepository, UpsertHeartbeatCheck};

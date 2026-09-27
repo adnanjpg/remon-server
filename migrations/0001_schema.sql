@@ -21,9 +21,17 @@ CREATE TABLE devices (
     name              TEXT NOT NULL,
     token_hash        TEXT NOT NULL,
     fcm_token         TEXT,
-    web_push_endpoint TEXT,
-    web_push_p256dh   TEXT,
-    web_push_auth     TEXT,
+    -- A browser's Web Push subscription, set or cleared as a whole. The
+    -- browser brings its own VAPID key (PKCS#8 PEM), so the one subscription
+    -- it may hold can be shared by every server it pairs with.
+    web_push_endpoint     TEXT,
+    web_push_p256dh       TEXT,
+    web_push_auth         TEXT,
+    web_push_vapid_key    TEXT,
+    -- Opaque client handle echoed in each payload; the web app's profile id.
+    web_push_ref          TEXT,
+    -- NULL takes both.
+    web_push_min_severity TEXT CHECK (web_push_min_severity IN ('warn', 'crit')),
     last_ip           TEXT,
     last_seen         INTEGER NOT NULL DEFAULT (unixepoch()),
     created_at        INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -41,20 +49,9 @@ CREATE INDEX idx_sessions_device  ON sessions(device_id);
 CREATE INDEX idx_sessions_expires ON sessions(expires_at);
 CREATE INDEX idx_devices_active_fcm ON devices(is_active, fcm_token);
 
--- VAPID identifies the server to the push relay. Same keypair across all
--- subscribers, generated once on first boot if missing. Stored as PEM —
--- private for signing the push JWT, public also kept here so we can serve
--- it to clients without re-deriving every time.
-CREATE TABLE vapid_keys (
-    id          INTEGER PRIMARY KEY CHECK (id = 1),
-    public_key  TEXT    NOT NULL,
-    private_key TEXT    NOT NULL,
-    created_at  INTEGER NOT NULL DEFAULT (unixepoch())
-);
-
 -- The JWT signing secret. An operator-provided strong secret (config/env)
 -- takes precedence; otherwise a per-install secret is generated on first boot
--- and persisted here — same generate-or-load contract as vapid_keys above.
+-- and persisted here.
 CREATE TABLE server_secrets (
     id         INTEGER PRIMARY KEY CHECK (id = 1),
     jwt_secret TEXT    NOT NULL,
@@ -940,12 +937,13 @@ CREATE TABLE runtime_state (
 --   telegram: {"chat_id": "-1001234..."}
 --   ntfy:     {"server": "https://ntfy.sh", "topic": "my-alerts"}
 --   webhook:  {"url": "https://hooks.example.com/..."}
---   web-push: {}   (targets come from devices.web_push_*)
+-- Web Push is not a channel: it is built in, and each subscribed browser on
+-- `devices` is its own opt-in.
 -- `min_severity` NULL = all severities; 'warn' = warn+crit; 'crit' = crit only.
 CREATE TABLE notification_channels (
     id           INTEGER PRIMARY KEY,
     name         TEXT    NOT NULL,
-    type         TEXT    NOT NULL CHECK (type IN ('fcm', 'telegram', 'ntfy', 'webhook', 'web-push')),
+    type         TEXT    NOT NULL CHECK (type IN ('fcm', 'telegram', 'ntfy', 'webhook')),
     enabled      INTEGER NOT NULL DEFAULT 1,
     config       TEXT    NOT NULL DEFAULT '{}',
     min_severity TEXT    CHECK (min_severity IN ('warn', 'crit')),

@@ -206,8 +206,7 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
             "/me/sessions/{id}",
             axum::routing::patch(me::rename_session).delete(me::revoke_session),
         )
-        // Web Push — public VAPID key + per-device subscription register.
-        .route("/push/vapid-public-key", get(push::vapid_public_key))
+        // Web Push: per-browser subscription register.
         .route(
             "/me/push-subscription",
             post(push::subscribe_push).delete(push::unsubscribe_push),

@@ -3,9 +3,32 @@ use sqlx::{SqliteConnection, SqlitePool};
 use crate::auth::service::CreatedTokens;
 use crate::error::{AppError, AppResult};
 use crate::models::auth::StoredDevice;
+use crate::notify::Severity;
 
 pub struct DeviceRepository {
     pool: SqlitePool,
+}
+
+/// A browser's Web Push registration as stored on its device row.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct WebPushSubscription {
+    pub endpoint: String,
+    pub p256dh: String,
+    pub auth: String,
+    /// The browser's own VAPID key (PKCS#8 PEM), which its pushes are signed with.
+    pub vapid_key: String,
+    /// Client handle echoed back in each payload.
+    pub reference: Option<String>,
+    /// `warn` or `crit`; `None` takes both.
+    pub min_severity: Option<String>,
+}
+
+/// A subscribed device, ready to send to.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct WebPushTarget {
+    pub device_id: String,
+    #[sqlx(flatten)]
+    pub subscription: WebPushSubscription,
 }
 
 impl DeviceRepository {
@@ -229,25 +252,37 @@ impl DeviceRepository {
         Ok(rows)
     }
 
-    /// All active devices with a complete Web Push subscription triplet.
-    /// `(device_id, endpoint, p256dh, auth)`. Devices that opted out (or
-    /// never opted in) read as IS NULL on at least one of the columns
-    /// and are filtered here so the channel doesn't even try to encrypt
-    /// with missing keys.
-    pub async fn list_active_web_push_targets(
-        &self,
-    ) -> AppResult<Vec<(String, String, String, String)>> {
-        let rows = sqlx::query_as::<_, (String, String, String, String)>(
-            r#"SELECT id, web_push_endpoint, web_push_p256dh, web_push_auth
+    /// All active devices with a Web Push subscription. The columns are set
+    /// together or cleared together; the endpoint stands for all of them.
+    pub async fn list_active_web_push_targets(&self) -> AppResult<Vec<WebPushTarget>> {
+        let rows = sqlx::query_as::<_, WebPushTarget>(
+            r#"SELECT id AS device_id,
+                      web_push_endpoint     AS endpoint,
+                      web_push_p256dh       AS p256dh,
+                      web_push_auth         AS auth,
+                      web_push_vapid_key    AS vapid_key,
+                      web_push_ref          AS reference,
+                      web_push_min_severity AS min_severity
                  FROM devices
-                WHERE is_active = 1
-                  AND web_push_endpoint IS NOT NULL AND web_push_endpoint != ''
-                  AND web_push_p256dh   IS NOT NULL AND web_push_p256dh   != ''
-                  AND web_push_auth     IS NOT NULL AND web_push_auth     != ''"#,
+                WHERE is_active = 1 AND web_push_endpoint IS NOT NULL"#,
         )
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
+    }
+
+    /// Whether any subscribed browser takes notifications of this severity.
+    pub async fn has_web_push_target(&self, severity: Severity) -> AppResult<bool> {
+        let found: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM devices
+                            WHERE is_active = 1 AND web_push_endpoint IS NOT NULL
+                              AND (web_push_min_severity IS NULL OR web_push_min_severity = 'warn'
+                                   OR ? = 'crit'))",
+        )
+        .bind(severity.as_str())
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(found)
     }
 
     pub async fn set_fcm_token(&self, device_id: &str, fcm_token: Option<&str>) -> AppResult<()> {
@@ -264,25 +299,26 @@ impl DeviceRepository {
         Ok(())
     }
 
-    /// Persist (or clear) the calling browser's Web Push subscription
-    /// triplet on its device row. All-three-or-none semantics: passing
-    /// any field as `None` while the others are `Some` would leave the
-    /// row in an unsendable mixed state, so callers should pass `None`
-    /// everywhere to unsubscribe.
+    /// Persist the calling browser's Web Push subscription on its device row,
+    /// or clear every field of it with `None`.
     pub async fn set_web_push_subscription(
         &self,
         device_id: &str,
-        endpoint: Option<&str>,
-        p256dh: Option<&str>,
-        auth: Option<&str>,
+        sub: Option<&WebPushSubscription>,
     ) -> AppResult<()> {
-        let result = sqlx::query!(
-            "UPDATE devices SET web_push_endpoint = ?, web_push_p256dh = ?, web_push_auth = ? WHERE id = ?",
-            endpoint,
-            p256dh,
-            auth,
-            device_id,
+        let result = sqlx::query(
+            "UPDATE devices
+                SET web_push_endpoint = ?, web_push_p256dh = ?, web_push_auth = ?,
+                    web_push_vapid_key = ?, web_push_ref = ?, web_push_min_severity = ?
+              WHERE id = ?",
         )
+        .bind(sub.map(|s| &s.endpoint))
+        .bind(sub.map(|s| &s.p256dh))
+        .bind(sub.map(|s| &s.auth))
+        .bind(sub.map(|s| &s.vapid_key))
+        .bind(sub.and_then(|s| s.reference.as_ref()))
+        .bind(sub.and_then(|s| s.min_severity.as_ref()))
+        .bind(device_id)
         .execute(&self.pool)
         .await?;
         if result.rows_affected() == 0 {

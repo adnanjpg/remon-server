@@ -180,12 +180,6 @@ pub struct AppState {
     /// audit row from dying with the process. See `services::events`.
     pub ledger: crate::services::events::LedgerQueue,
 
-    /// VAPID keypair for Web Push. Generated on first boot and persisted
-    /// in `vapid_keys`. The public half is served to clients via
-    /// `GET /push/vapid-public-key`; the private half signs the JWT we
-    /// send to push relays in phase 3.
-    pub vapid_keys: Arc<crate::services::webpush::VapidKeyPair>,
-
     /// Flips to `true` once shutdown has started. The infinite SSE streams
     /// (live stats, container logs, service log follow) race their next
     /// item against this so they end promptly instead of blocking axum's
@@ -223,7 +217,6 @@ impl AppState {
         notify: Arc<NotificationManager>,
         notify_queue: crate::notify::NotifyQueue,
         ledger: crate::services::events::LedgerQueue,
-        vapid_keys: Arc<crate::services::webpush::VapidKeyPair>,
     ) -> Self {
         let (stats_tx, _) = broadcast::channel(64);
         let (processes_tx, _) = broadcast::channel(16);
@@ -265,7 +258,6 @@ impl AppState {
             notify,
             notify_queue,
             ledger,
-            vapid_keys,
             shutdown,
             exit_intent,
         }

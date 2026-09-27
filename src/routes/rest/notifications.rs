@@ -18,7 +18,7 @@ use crate::storage::repositories::NotificationChannelRepository;
 /// SSRF validation for channels with an operator-supplied outbound URL
 /// (webhook + ntfy). Run before DB insert / update so a channel that would be
 /// blocked at send time never gets persisted. Channels with no operator URL
-/// (fcm, web-push, telegram) are a no-op here.
+/// (fcm, telegram) are a no-op here.
 async fn validate_channel_url(
     state: &AppState,
     channel_type: &str,

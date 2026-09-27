@@ -16,9 +16,9 @@ use tokio::sync::RwLock;
 
 use crate::config::NotificationsConfig;
 use crate::notify::channel::NotificationChannel;
+use crate::notify::channels::webpush::WebPushChannel;
 use crate::notify::url_policy::{WebhookPolicy, channel_check_url, check_url};
-use crate::services::webpush::VapidKeyPair;
-use crate::storage::repositories::NotificationChannelRepository;
+use crate::storage::repositories::{DeviceRepository, NotificationChannelRepository};
 
 struct ChannelSlot {
     id: i64,
@@ -31,15 +31,16 @@ pub struct NotificationManager {
     pool: SqlitePool,
     http: reqwest::Client,
     credentials: Arc<NotificationsConfig>,
-    vapid: Arc<VapidKeyPair>,
     channels: RwLock<Vec<ChannelSlot>>,
+    /// Built in rather than configured: each subscribed browser is its own
+    /// opt-in, with its own severity floor, on its `devices` row.
+    web_push: Arc<WebPushChannel>,
 }
 
 impl NotificationManager {
     pub async fn new(
         pool: SqlitePool,
         credentials: NotificationsConfig,
-        vapid: Arc<VapidKeyPair>,
     ) -> anyhow::Result<Arc<Self>> {
         // No redirect following. `check_url` vets the URL we were *configured*
         // with, but reqwest's default policy follows up to 10 hops and those
@@ -55,12 +56,17 @@ impl NotificationManager {
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
 
+        let web_push = Arc::new(WebPushChannel::new(
+            pool.clone(),
+            http.clone(),
+            Arc::new(WebhookPolicy::from_credentials(&credentials.webhook)),
+        ));
         let manager = Arc::new(Self {
             pool,
             http,
             credentials: Arc::new(credentials),
-            vapid,
             channels: RwLock::new(Vec::new()),
+            web_push,
         });
 
         manager.reload().await;
@@ -113,7 +119,6 @@ impl NotificationManager {
                 &self.credentials,
                 self.http.clone(),
                 self.pool.clone(),
-                &self.vapid,
                 &webhook_policy,
             )
             .await
@@ -137,7 +142,7 @@ impl NotificationManager {
     /// Returns the total number of successful deliveries.
     pub async fn fanout(&self, notification: &Notification) -> usize {
         // Collect Arc clones while holding the read lock (fast — just pointer bumps).
-        let targets: Vec<(String, Arc<dyn NotificationChannel>)> = {
+        let mut targets: Vec<(String, Arc<dyn NotificationChannel>)> = {
             let slots = self.channels.read().await;
             slots
                 .iter()
@@ -148,14 +153,8 @@ impl NotificationManager {
                 .map(|s| (s.name.clone(), Arc::clone(&s.inner)))
                 .collect()
         };
-
-        if targets.is_empty() {
-            debug!(
-                "fanout: no channels for severity {:?}",
-                notification.severity
-            );
-            return 0;
-        }
+        // Filters per device itself, and sends nothing when no browser subscribed.
+        targets.push(("web push".to_string(), Arc::clone(&self.web_push) as _));
 
         let mut join_set = tokio::task::JoinSet::new();
         let notif = Arc::new(notification.clone());
@@ -176,11 +175,17 @@ impl NotificationManager {
     /// this severity. Lets the alert evaluator avoid arming a rule's cooldown
     /// on a fire that has nowhere to go (no channels configured).
     pub async fn has_channel_for(&self, severity: Severity) -> bool {
-        self.channels
+        let configured = self
+            .channels
             .read()
             .await
             .iter()
-            .any(|s| s.min_severity.is_none_or(|min| severity_gte(severity, min)))
+            .any(|s| s.min_severity.is_none_or(|min| severity_gte(severity, min)));
+        configured
+            || DeviceRepository::new(self.pool.clone())
+                .has_web_push_target(severity)
+                .await
+                .unwrap_or(false)
     }
 
     /// Snapshot of the current webhook SSRF policy, derived from server

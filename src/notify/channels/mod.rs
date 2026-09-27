@@ -13,17 +13,16 @@ use sqlx::SqlitePool;
 use crate::config::NotificationsConfig;
 use crate::notify::channel::{ChannelError, NotificationChannel};
 use crate::notify::url_policy::WebhookPolicy;
-use crate::services::webpush::VapidKeyPair;
 
 use fcm::FcmChannel;
 use ntfy::NtfyChannel;
 use telegram::TelegramChannel;
 use webhook::WebhookChannel;
-use webpush::WebPushChannel;
 
 /// Build a channel instance from a DB row.
 ///
-/// `channel_type`   — one of "fcm" | "telegram" | "ntfy" | "webhook" | "web-push".
+/// `channel_type`   — one of "fcm" | "telegram" | "ntfy" | "webhook". Web Push
+///                    is not a channel: it is built in and driven by device rows.
 /// `config`         — parsed JSON from `notification_channels.config`.
 /// `credentials`    — server-side secrets loaded from config files / env vars.
 /// `webhook_policy` — SSRF / private-range gate applied to webhook URLs at
@@ -39,7 +38,6 @@ pub async fn build_channel(
     credentials: &NotificationsConfig,
     http: Client,
     pool: SqlitePool,
-    vapid: &Arc<VapidKeyPair>,
     webhook_policy: &Arc<WebhookPolicy>,
 ) -> Result<Box<dyn NotificationChannel>, ChannelError> {
     match channel_type {
@@ -51,19 +49,6 @@ pub async fn build_channel(
                 ));
             }
             Ok(Box::new(FcmChannel::new(path, http, pool).await?))
-        }
-
-        "web-push" => {
-            // No per-channel config — VAPID is server-wide; subscribers
-            // are tracked on `devices` rows. Operator just toggles the
-            // channel on; the rest is automatic.
-            let _ = config; // suppress unused-var lint at this branch
-            Ok(Box::new(WebPushChannel::new(
-                Arc::clone(vapid),
-                pool,
-                http,
-                Arc::clone(webhook_policy),
-            )?))
         }
 
         "telegram" => {

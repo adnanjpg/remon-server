@@ -11,15 +11,15 @@ use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use log::{debug, warn};
-use ring::{aead, agreement, hkdf, rand};
+use ring::{aead, agreement, digest, hkdf, rand};
 use serde::Serialize;
 use sqlx::SqlitePool;
 
 use crate::notify::channel::{ChannelError, NotificationChannel};
 use crate::notify::types::{Notification, NotificationEvent, Severity};
 use crate::notify::url_policy::{WebhookPolicy, check_url};
-use crate::services::webpush::VapidKeyPair;
-use crate::storage::repositories::DeviceRepository;
+use crate::services::webpush::client_public_key;
+use crate::storage::repositories::{DeviceRepository, WebPushTarget};
 
 const VAPID_SUB: &str = "mailto:noreply@remon.local";
 
@@ -39,7 +39,6 @@ impl hkdf::KeyType for OkmLen {
 
 #[derive(Clone)]
 pub struct WebPushChannel {
-    vapid: Arc<VapidKeyPair>,
     pool: SqlitePool,
     client: reqwest::Client,
     /// SSRF policy applied to each subscriber's relay endpoint at send time.
@@ -50,28 +49,26 @@ pub struct WebPushChannel {
 }
 
 impl WebPushChannel {
-    pub fn new(
-        vapid: Arc<VapidKeyPair>,
-        pool: SqlitePool,
-        client: reqwest::Client,
-        policy: Arc<WebhookPolicy>,
-    ) -> Result<Self, ChannelError> {
-        Ok(Self {
-            vapid,
+    pub fn new(pool: SqlitePool, client: reqwest::Client, policy: Arc<WebhookPolicy>) -> Self {
+        Self {
             pool,
             client,
             policy,
-        })
+        }
     }
 
     async fn send_to_subscriber(
         &self,
-        device_id: &str,
-        endpoint: &str,
-        p256dh: &str,
-        auth: &str,
+        target: &WebPushTarget,
         notification: &Notification,
     ) -> Result<(), ChannelError> {
+        let device_id = target.device_id.as_str();
+        let sub = &target.subscription;
+        let (endpoint, p256dh, auth) = (
+            sub.endpoint.as_str(),
+            sub.p256dh.as_str(),
+            sub.auth.as_str(),
+        );
         // SSRF guard: re-resolve the relay endpoint on every send. Real push
         // relays (Mozilla/Google/Apple) are public HTTPS, so legitimate
         // subscriptions pass; an endpoint pointed at loopback/RFC1918/link-
@@ -80,16 +77,15 @@ impl WebPushChannel {
             .await
             .map_err(|e| ChannelError::Send(format!("endpoint blocked ({}): {}", device_id, e)))?;
 
-        let payload = format_payload(notification);
+        let payload = format_payload(notification, sub.reference.as_deref());
 
         let ciphertext = encrypt_payload(p256dh, auth, payload.as_bytes())
             .map_err(|e| ChannelError::Send(format!("encrypt ({}): {}", device_id, e)))?;
 
-        let token = vapid_jwt(&self.vapid.private_key_pem, endpoint)
+        let signing_pem = sub.vapid_key.as_str();
+        let token = vapid_jwt(signing_pem, endpoint)
             .map_err(|e| ChannelError::Send(format!("VAPID JWT ({}): {}", device_id, e)))?;
-        let pubkey = self
-            .vapid
-            .public_key_for_client()
+        let pubkey = client_public_key(signing_pem)
             .map_err(|e| ChannelError::Send(format!("VAPID pubkey ({}): {}", device_id, e)))?;
 
         let authorization = format!("vapid t={},k={}", token, pubkey);
@@ -101,6 +97,9 @@ impl WebPushChannel {
             .header("Content-Type", "application/octet-stream")
             .header("Authorization", &authorization)
             .header("TTL", "43200")
+            .header("Urgency", urgency(notification))
+            // A newer message for the same alert replaces one still waiting at the relay.
+            .header("Topic", topic(&notification.target.key))
             .body(ciphertext)
             .send()
             .await
@@ -115,7 +114,7 @@ impl WebPushChannel {
             200..=299 => Ok(()),
             404 | 410 => {
                 if let Err(db_err) = DeviceRepository::new(self.pool.clone())
-                    .set_web_push_subscription(device_id, None, None, None)
+                    .set_web_push_subscription(device_id, None)
                     .await
                 {
                     warn!(
@@ -152,7 +151,13 @@ impl NotificationChannel for WebPushChannel {
         }
 
         let mut join_set = tokio::task::JoinSet::new();
-        for (device_id, endpoint, p256dh, auth) in targets {
+        for target in targets {
+            if !wants(
+                target.subscription.min_severity.as_deref(),
+                notification.severity,
+            ) {
+                continue;
+            }
             let chan = self.clone();
             let notif = notification.clone();
             join_set.spawn(async move {
@@ -166,7 +171,7 @@ impl NotificationChannel for WebPushChannel {
                     }
                     match tokio::time::timeout(
                         PER_DEVICE_TIMEOUT,
-                        chan.send_to_subscriber(&device_id, &endpoint, &p256dh, &auth, &notif),
+                        chan.send_to_subscriber(&target, &notif),
                     )
                     .await
                     {
@@ -175,7 +180,10 @@ impl NotificationChannel for WebPushChannel {
                         Err(_) => last = format!("timed out after {:?}", PER_DEVICE_TIMEOUT),
                     }
                 }
-                warn!("web-push device {} failed after retry: {}", device_id, last);
+                warn!(
+                    "web-push device {} failed after retry: {}",
+                    target.device_id, last
+                );
                 false
             });
         }
@@ -326,18 +334,8 @@ fn parse_origin(url: &str) -> anyhow::Result<String> {
     Ok(format!("{}://{}", scheme, host))
 }
 
-fn format_payload(n: &Notification) -> String {
-    let title = match n.event {
-        NotificationEvent::Fired | NotificationEvent::HostEvent => {
-            format!("{}{}", n.severity.label(), n.title)
-        }
-        NotificationEvent::ActionRequired => format!("[Confirm] {}", n.title),
-        NotificationEvent::Resolved => format!("[Resolved] {}", n.title),
-    };
-    let severity = match n.severity {
-        Severity::Crit => "crit",
-        Severity::Warn => "warn",
-    };
+/// Structured, so the browser renders it in its own language and routes a tap.
+fn format_payload(n: &Notification, reference: Option<&str>) -> String {
     let event = match n.event {
         NotificationEvent::Fired => "fired",
         NotificationEvent::Resolved => "resolved",
@@ -345,12 +343,37 @@ fn format_payload(n: &Notification) -> String {
         NotificationEvent::ActionRequired => "action_required",
     };
     serde_json::json!({
-        "title": title,
-        "body": n.body,
-        "severity": severity,
+        "server": n.target.server,
+        "key": n.target.key,
+        "subject": n.target.subject,
+        "detail": n.body,
+        "severity": n.severity.as_str(),
         "event": event,
+        "path": n.target.path,
+        "ref": reference,
     })
     .to_string()
+}
+
+/// RFC 8030 urgency: a critical fire or a pending question should wake a
+/// dozing phone; the rest can wait for its next window.
+fn urgency(n: &Notification) -> &'static str {
+    match (n.event, n.severity) {
+        (NotificationEvent::ActionRequired, _) => "high",
+        (NotificationEvent::Fired | NotificationEvent::HostEvent, Severity::Crit) => "high",
+        _ => "normal",
+    }
+}
+
+/// RFC 8030 topics are at most 32 URL-safe base64 characters, so the key is hashed.
+fn topic(key: &str) -> String {
+    let hash = digest::digest(&digest::SHA256, key.as_bytes());
+    URL_SAFE_NO_PAD.encode(&hash.as_ref()[..24])
+}
+
+/// Whether a device asking for `min` and above takes this severity.
+fn wants(min: Option<&str>, severity: Severity) -> bool {
+    !(min == Some("crit") && severity == Severity::Warn)
 }
 
 #[cfg(test)]
@@ -443,8 +466,8 @@ mod tests {
     #[test]
     fn vapid_jwt_is_well_formed() {
         // Also exercises that jsonwebtoken accepts our PKCS#8 EC PEM.
-        let pair = crate::services::webpush::VapidKeyPair::generate().unwrap();
-        let token = vapid_jwt(&pair.private_key_pem, "https://push.example.com/a/b/c").unwrap();
+        let key = crate::services::webpush::test_key();
+        let token = vapid_jwt(&key, "https://push.example.com/a/b/c").unwrap();
         assert_eq!(token.split('.').count(), 3, "header.payload.signature");
     }
 
@@ -459,5 +482,86 @@ mod tests {
             "http://localhost:8080"
         );
         assert!(parse_origin("ftp://nope").is_err());
+    }
+
+    fn notif(event: NotificationEvent, severity: Severity) -> Notification {
+        Notification {
+            title: "[web-01] high cpu".to_string(),
+            body: "cpu.usage_percent = 93".to_string(),
+            severity,
+            event,
+            target: crate::notify::Target {
+                server: "web-01".to_string(),
+                key: "alert:7:{}".to_string(),
+                subject: "high cpu".to_string(),
+                path: "/alerts",
+            },
+        }
+    }
+
+    #[test]
+    fn payload_says_what_where_and_how_bad() {
+        let n = notif(NotificationEvent::Resolved, Severity::Warn);
+        let v: serde_json::Value =
+            serde_json::from_str(&format_payload(&n, Some("profile-1"))).unwrap();
+        assert_eq!(v["detail"], "cpu.usage_percent = 93");
+        assert_eq!(v["event"], "resolved");
+        assert_eq!(v["severity"], "warn");
+        assert_eq!(v["server"], "web-01");
+        assert_eq!(v["key"], "alert:7:{}");
+        assert_eq!(v["subject"], "high cpu");
+        assert_eq!(v["path"], "/alerts");
+        assert_eq!(v["ref"], "profile-1");
+    }
+
+    #[test]
+    fn topic_is_a_valid_rfc8030_topic_and_stable() {
+        let t = topic("alert:7:{\"mount\":\"/\"}");
+        assert_eq!(t.len(), 32);
+        assert!(
+            t.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        );
+        assert_eq!(t, topic("alert:7:{\"mount\":\"/\"}"));
+        assert_ne!(t, topic("alert:8:{\"mount\":\"/\"}"));
+    }
+
+    #[test]
+    fn critical_fires_and_questions_are_urgent() {
+        assert_eq!(
+            urgency(&notif(NotificationEvent::Fired, Severity::Crit)),
+            "high"
+        );
+        assert_eq!(
+            urgency(&notif(NotificationEvent::ActionRequired, Severity::Warn)),
+            "high"
+        );
+        assert_eq!(
+            urgency(&notif(NotificationEvent::Fired, Severity::Warn)),
+            "normal"
+        );
+        assert_eq!(
+            urgency(&notif(NotificationEvent::Resolved, Severity::Crit)),
+            "normal"
+        );
+    }
+
+    #[test]
+    fn min_severity_filters_warnings_only() {
+        assert!(wants(None, Severity::Warn));
+        assert!(wants(Some("warn"), Severity::Warn));
+        assert!(!wants(Some("crit"), Severity::Warn));
+        assert!(wants(Some("crit"), Severity::Crit));
+    }
+
+    #[test]
+    fn a_browser_key_signs_and_names_itself() {
+        let key = crate::services::webpush::test_key();
+        let token = vapid_jwt(&key, "https://push.example.com/x").unwrap();
+        assert_eq!(token.split('.').count(), 3);
+        // 65-byte uncompressed point: 87 base64url characters, leading 0x04.
+        let public = client_public_key(&key).unwrap();
+        assert_eq!(public.len(), 87);
+        assert!(public.starts_with('B'));
     }
 }
