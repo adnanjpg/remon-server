@@ -189,7 +189,8 @@ async fn cpu_chart_retention_boundary_never_reads_a_partial_source_bucket() {
         .execute(&app.state.db)
         .await
         .unwrap();
-    sqlx::query("UPDATE rollup_state SET processed_from = NULL WHERE resolution = '1m'")
+    // 1h too: when `base` falls on the hour it covers the expired head.
+    sqlx::query("UPDATE rollup_state SET processed_from = NULL WHERE resolution IN ('1m', '1h')")
         .execute(&app.state.db)
         .await
         .unwrap();
