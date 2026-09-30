@@ -124,12 +124,20 @@ impl DeviceRepository {
     }
 
     // Session management
-    pub async fn create_session_pair(
+
+    /// Replace all of this device's sessions with a fresh pair, as rotation
+    /// does. A device is one client, so a login supersedes its earlier ones;
+    /// otherwise every cold start leaves a refresh row alive for its full TTL.
+    pub async fn replace_session_pair(
         &self,
         device_id: &str,
         tokens: &CreatedTokens,
     ) -> AppResult<()> {
         let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM sessions WHERE device_id = ?")
+            .bind(device_id)
+            .execute(&mut *tx)
+            .await?;
         Self::insert_session_pair(&mut tx, device_id, tokens).await?;
         tx.commit().await?;
         Ok(())

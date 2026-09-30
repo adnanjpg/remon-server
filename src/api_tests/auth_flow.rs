@@ -276,11 +276,11 @@ async fn inactive_device_cannot_rotate_or_change_its_sessions() {
 }
 
 #[tokio::test]
-async fn session_count_counts_token_rows_not_open_browsers() {
+async fn relogin_supersedes_the_devices_earlier_sessions() {
     let app = TestApp::spawn().await;
-    let (credentials, mut tokens) = login_fixture(&app).await;
+    let (credentials, first) = login_fixture(&app).await;
     // Reopening the client logs in again with its persisted device credential.
-    // Each login adds an access AND a refresh row, even for the same device.
+    let mut tokens = first.clone();
     for _ in 0..2 {
         let (status, next) = app
             .request("POST", "/auth/login", None, Some(credentials.clone()))
@@ -292,7 +292,23 @@ async fn session_count_counts_token_rows_not_open_browsers() {
         .request("GET", "/me/sessions", tokens["access_token"].as_str(), None)
         .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(listing["sessions"][0]["active_sessions"], 6);
+    assert_eq!(listing["sessions"][0]["active_sessions"], 2);
+
+    // The first login's pair no longer works.
+    let (status, _) = app
+        .request("GET", "/me/sessions", first["access_token"].as_str(), None)
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = app
+        .request(
+            "POST",
+            "/auth/refresh",
+            None,
+            Some(json!({ "refresh_token": first["refresh_token"] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
     let (status, rotated) = app
         .request(
             "POST",

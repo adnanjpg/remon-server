@@ -17,6 +17,8 @@ use crate::state::AppState;
 use crate::storage::repositories::DeviceRepository;
 
 /// POST /auth/login — login with device credentials (device_id + device_token).
+///
+/// Supersedes the device's earlier sessions, like `/auth/refresh`.
 pub async fn login(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -46,8 +48,10 @@ pub async fn login(
     let tokens = auth_service.create_tokens(&req.device_id)?;
 
     device_repo
-        .create_session_pair(&req.device_id, &tokens)
+        .replace_session_pair(&req.device_id, &tokens)
         .await?;
+    // The device's earlier jti's were just deleted.
+    state.session_cache.clear();
 
     info!("device {} logged in from {}", req.device_id, client_ip);
 
