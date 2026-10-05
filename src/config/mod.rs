@@ -201,19 +201,35 @@ pub struct ControlConfig {
 pub struct ServerConfig {
     pub port: u16,
     pub host: String,
-    /// True when the server runs behind a reverse proxy that strips
-    /// client-controlled `X-Forwarded-For` and appends the real client IP
-    /// itself. When set:
-    ///   - audit log writes (`devices.last_ip`) use the forwarded address
-    ///   - per-IP rate limiting keys by the forwarded address
+    /// True when the server runs behind a reverse proxy that appends the
+    /// client address to `X-Forwarded-For`. When set, audit IPs, pairing
+    /// attempts and per-IP rate limits use that address instead of the peer.
     ///
     /// Leave false for direct exposure; otherwise an attacker can spoof
     /// XFF and either pollute audit data or bypass rate limits.
     #[serde(default)]
     pub trusted_proxy: bool,
+    /// How many proxies are in front of the server, counted from the right
+    /// of `X-Forwarded-For`. 1 for a single nginx, Caddy or Traefik; 2 for,
+    /// say, Cloudflare in front of nginx. Ignored unless `trusted_proxy`.
+    #[serde(default = "default_trusted_proxy_hops")]
+    pub trusted_proxy_hops: usize,
+}
+
+fn default_trusted_proxy_hops() -> usize {
+    1
 }
 
 impl ServerConfig {
+    /// Trusted proxies in front of the server; 0 when there are none.
+    pub fn proxy_hops(&self) -> usize {
+        if self.trusted_proxy {
+            self.trusted_proxy_hops.max(1)
+        } else {
+            0
+        }
+    }
+
     /// Bind address from `host`/`port`. `host` must be an IP literal —
     /// hostnames never worked here (the old code fell back to 0.0.0.0 on
     /// any parse failure, so "localhost" silently bound all interfaces).

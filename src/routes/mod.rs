@@ -1,3 +1,4 @@
+pub mod client_ip;
 pub mod dtos;
 pub mod extractors;
 pub mod rest;

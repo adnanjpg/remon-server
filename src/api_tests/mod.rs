@@ -168,7 +168,7 @@ impl TestApp {
             db.pool().clone(),
             auth_config,
             assistant_config,
-            false,
+            0,
             effective_config,
             2000,
             5000,
@@ -218,7 +218,7 @@ impl TestApp {
     /// JSON body (`Value::Null` when the body is empty or not JSON).
     ///
     /// A stable loopback `ConnectInfo` is always attached: both the auth
-    /// rate-limiter (`PeerIpKeyExtractor`) and the login handler read the
+    /// rate-limiter (`ClientIpKeyExtractor`) and the login handler read the
     /// client IP from it, and a missing extension would 500 those routes.
     pub async fn request(
         &self,

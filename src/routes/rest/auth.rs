@@ -39,7 +39,7 @@ pub async fn login(
         return Err(AppError::InvalidToken);
     }
 
-    let client_ip = extract_client_ip(&headers, &addr, state.trusted_proxy);
+    let client_ip = extract_client_ip(&headers, &addr, state.proxy_hops);
     let _ = device_repo
         .update_last_seen(&req.device_id, Some(&client_ip))
         .await;
@@ -108,26 +108,12 @@ pub async fn logout(State(state): State<Arc<AppState>>, claims: Claims) -> AppRe
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Resolve the client IP to record in audit. When `trust_proxy` is false we
-/// only trust the TCP peer — XFF can be forged by any direct caller. When
-/// true (deployer has opted in), prefer the leftmost XFF entry, which is the
-/// real client under any proxy that strips incoming XFF before adding its
-/// own. Falls back to the peer if XFF is absent or malformed.
+/// The client IP to record in audit; see [`crate::routes::client_ip`].
 /// `pub(crate)`: the heartbeat ping log records the same audit IP.
 pub(crate) fn extract_client_ip(
     headers: &HeaderMap,
     addr: &SocketAddr,
-    trust_proxy: bool,
+    proxy_hops: usize,
 ) -> String {
-    if trust_proxy
-        && let Some(v) = headers
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.split(',').next())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-    {
-        return v.to_string();
-    }
-    addr.ip().to_string()
+    crate::routes::client_ip::client_ip(headers, addr.ip(), proxy_hops).to_string()
 }

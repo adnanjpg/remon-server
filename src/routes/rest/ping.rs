@@ -192,7 +192,7 @@ pub async fn ping_success(
     Path(slug): Path<String>,
 ) -> AppResult<Json<serde_json::Value>> {
     let check = resolve_check(&state, &slug).await?;
-    let ip = super::auth::extract_client_ip(&headers, &addr, state.trusted_proxy);
+    let ip = super::auth::extract_client_ip(&headers, &addr, state.proxy_hops);
     apply_success(&state, &check, ip, &headers).await?;
     Ok(Json(serde_json::json!({ "status": "ok" })))
 }
@@ -206,7 +206,7 @@ pub async fn ping_fail(
     body: Body,
 ) -> AppResult<Json<serde_json::Value>> {
     let check = resolve_check(&state, &slug).await?;
-    let ip = super::auth::extract_client_ip(&headers, &addr, state.trusted_proxy);
+    let ip = super::auth::extract_client_ip(&headers, &addr, state.proxy_hops);
     let captured = capture_body(body).await;
     apply_fail(&state, &check, None, ip, &headers, captured).await?;
     Ok(Json(serde_json::json!({ "status": "ok" })))
@@ -226,7 +226,7 @@ pub async fn ping_exit_code(
     // arbitrary junk after the slug.
     let code: u8 = code.parse().map_err(|_| not_found())?;
     let check = resolve_check(&state, &slug).await?;
-    let ip = super::auth::extract_client_ip(&headers, &addr, state.trusted_proxy);
+    let ip = super::auth::extract_client_ip(&headers, &addr, state.proxy_hops);
     if code == 0 {
         apply_success(&state, &check, ip, &headers).await?;
     } else {
@@ -302,7 +302,7 @@ pub async fn ping_pause(
             )),
         };
     }
-    let ip = super::auth::extract_client_ip(&headers, &addr, state.trusted_proxy);
+    let ip = super::auth::extract_client_ip(&headers, &addr, state.proxy_hops);
     log_ping(
         &repo,
         &log_row(check.id, now, PingKind::Pause, None, ip, &headers, None),
@@ -339,7 +339,7 @@ pub async fn ping_resume(
             ));
         }
     } else {
-        let ip = super::auth::extract_client_ip(&headers, &addr, state.trusted_proxy);
+        let ip = super::auth::extract_client_ip(&headers, &addr, state.proxy_hops);
         log_ping(
             &repo,
             &log_row(check.id, now, PingKind::Resume, None, ip, &headers, None),

@@ -30,9 +30,9 @@ use axum::{
 };
 use std::sync::Arc;
 use std::time::Duration;
-use tower_governor::{
-    GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
-};
+use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
+
+use crate::routes::client_ip::ClientIpKeyExtractor;
 use tower_http::limit::RequestBodyLimitLayer;
 
 /// Bodies on anonymous auth endpoints are tiny: device_id + device_token +
@@ -86,109 +86,59 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
     // 8-digit pairing code + 3-attempts cap this puts online
     // brute-force well out of reach.
     //
-    // Key extraction depends on deployment: behind a reverse proxy the TCP
-    // peer is always 127.0.0.1, so the default `PeerIpKeyExtractor` would
-    // collapse the entire internet into one rate-limit bucket. When
-    // `trusted_proxy` is set the smart extractor honours `X-Forwarded-For`
-    // / `X-Real-IP` instead.
-    // Background reaper to evict idle IP entries so memory stays bounded
-    // under abuse. Spawned once per limiter; duplicated inside each branch
-    // because the limiter's concrete type depends on the key extractor and
-    // a generic helper would mean importing `governor`'s internals.
-    let (rate_limited_auth, rate_limited_ping) = if state.trusted_proxy {
-        let conf = Arc::new(
-            GovernorConfigBuilder::default()
-                .per_second(12)
-                .burst_size(5)
-                .key_extractor(SmartIpKeyExtractor)
-                .finish()
-                .expect("valid governor config"),
-        );
-        let limiter = conf.limiter().clone();
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(60));
-            tick.tick().await;
-            loop {
-                tick.tick().await;
-                limiter.retain_recent();
-            }
-        });
-        let auth_router = Router::new()
-            .route("/auth/pair/initiate", post(pairing::initiate_pairing))
-            .route("/auth/pair/complete", post(pairing::complete_pairing))
-            .route("/auth/login", post(auth::login))
-            .route("/auth/refresh", post(auth::refresh))
-            .layer(GovernorLayer::new(conf))
-            .layer(RequestBodyLimitLayer::new(ANON_AUTH_BODY_LIMIT));
-
-        let ping_conf = Arc::new(
-            GovernorConfigBuilder::default()
-                .per_second(1)
-                .burst_size(60)
-                .key_extractor(SmartIpKeyExtractor)
-                .finish()
-                .expect("valid governor config"),
-        );
-        let ping_limiter = ping_conf.limiter().clone();
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(60));
-            tick.tick().await;
-            loop {
-                tick.tick().await;
-                ping_limiter.retain_recent();
-            }
-        });
-        // No per-route body limit: fail bodies are read capped (4 KiB)
-        // inside the handlers so an oversized trace truncates instead of
-        // 413-ing away the fail signal; the app-wide 64 KiB limit stays.
-        let ping_router = ping_routes().layer(GovernorLayer::new(ping_conf));
-
-        (auth_router, ping_router)
-    } else {
-        let conf = Arc::new(
-            GovernorConfigBuilder::default()
-                .per_second(12)
-                .burst_size(5)
-                .finish()
-                .expect("valid governor config"),
-        );
-        let limiter = conf.limiter().clone();
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(60));
-            tick.tick().await;
-            loop {
-                tick.tick().await;
-                limiter.retain_recent();
-            }
-        });
-        let auth_router = Router::new()
-            .route("/auth/pair/initiate", post(pairing::initiate_pairing))
-            .route("/auth/pair/complete", post(pairing::complete_pairing))
-            .route("/auth/login", post(auth::login))
-            .route("/auth/refresh", post(auth::refresh))
-            .layer(GovernorLayer::new(conf))
-            .layer(RequestBodyLimitLayer::new(ANON_AUTH_BODY_LIMIT));
-
-        let ping_conf = Arc::new(
-            GovernorConfigBuilder::default()
-                .per_second(1)
-                .burst_size(60)
-                .finish()
-                .expect("valid governor config"),
-        );
-        let ping_limiter = ping_conf.limiter().clone();
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(60));
-            tick.tick().await;
-            loop {
-                tick.tick().await;
-                ping_limiter.retain_recent();
-            }
-        });
-        let ping_router = ping_routes().layer(GovernorLayer::new(ping_conf));
-
-        (auth_router, ping_router)
+    // Keyed by the client address behind `proxy_hops` trusted proxies, the
+    // same one handlers see. Without that, every client behind a proxy shares
+    // the proxy's bucket.
+    let key = ClientIpKeyExtractor {
+        hops: state.proxy_hops,
     };
+    let conf = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(12)
+            .burst_size(5)
+            .key_extractor(key)
+            .finish()
+            .expect("valid governor config"),
+    );
+    // Evict idle addresses so memory stays bounded under abuse.
+    let limiter = conf.limiter().clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(60));
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            limiter.retain_recent();
+        }
+    });
+    let rate_limited_auth = Router::new()
+        .route("/auth/pair/initiate", post(pairing::initiate_pairing))
+        .route("/auth/pair/complete", post(pairing::complete_pairing))
+        .route("/auth/login", post(auth::login))
+        .route("/auth/refresh", post(auth::refresh))
+        .layer(GovernorLayer::new(conf))
+        .layer(RequestBodyLimitLayer::new(ANON_AUTH_BODY_LIMIT));
+
+    let ping_conf = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(1)
+            .burst_size(60)
+            .key_extractor(key)
+            .finish()
+            .expect("valid governor config"),
+    );
+    let ping_limiter = ping_conf.limiter().clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(60));
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            ping_limiter.retain_recent();
+        }
+    });
+    // No per-route body limit: fail bodies are read capped (4 KiB)
+    // inside the handlers so an oversized trace truncates instead of
+    // 413-ing away the fail signal; the app-wide 64 KiB limit stays.
+    let rate_limited_ping = ping_routes().layer(GovernorLayer::new(ping_conf));
 
     let public_routes = Router::new()
         .route("/health", get(misc::healthcheck))

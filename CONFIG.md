@@ -38,7 +38,8 @@ privileges and host tooling.
 ### `[server]`
 - `port` — HTTP listen port (default: 8080)
 - `host` — Bind address (default: `"0.0.0.0"`, use `"127.0.0.1"` to restrict to loopback)
-- `trusted_proxy` — set `true` only when behind a reverse proxy that controls `X-Forwarded-For` (Caddy/nginx with the standard forwarded-for directive). When `true`, per-IP rate limiting and the `devices.last_ip` audit field read from `X-Forwarded-For` / `X-Real-IP`; when `false`, they use the TCP peer. Leaving this `false` while behind a proxy works but collapses every client into the proxy's IP — the auth-endpoint rate limit then applies globally instead of per-client. Setting it `true` while exposed directly lets any caller spoof the header.
+- `trusted_proxy` — set `true` only when behind a reverse proxy that appends to `X-Forwarded-For` (Caddy, Traefik, nginx with `proxy_add_x_forwarded_for`). When `true`, per-IP rate limiting, pairing attempts and the `devices.last_ip` audit field use the `X-Forwarded-For` entry `trusted_proxy_hops` from the right; entries left of it came from the client and are ignored, and `X-Real-IP` is never read. When `false`, they use the TCP peer.
+- `trusted_proxy_hops` — how many proxies are in front of the server (default `1`). Use `2` for, say, Cloudflare in front of nginx. Leaving this `false` while behind a proxy works but collapses every client into the proxy's IP — the auth-endpoint rate limit then applies globally instead of per-client. Setting it `true` while exposed directly lets any caller spoof the header.
 
 ### `[database]`
 - `path` — SQLite file path. Relative paths resolve against the data directory; absolute ones are used as given.

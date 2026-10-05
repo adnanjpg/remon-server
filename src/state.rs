@@ -55,11 +55,10 @@ pub struct AppState {
     /// api_key stays server-side and is never handed to a client.
     pub assistant_config: AssistantConfig,
 
-    /// When true, audit and rate-limit code reads the client IP from
-    /// `X-Forwarded-For` instead of the TCP peer. Mirrors
-    /// `[server] trusted_proxy` from config; see ServerConfig for the
-    /// trust contract.
-    pub trusted_proxy: bool,
+    /// Trusted proxies in front of the server (0 = none). Audit, pairing and
+    /// rate-limit code count this far from the right of `X-Forwarded-For`;
+    /// see `ServerConfig::proxy_hops`.
+    pub proxy_hops: usize,
 
     /// Active pairing window (only one at a time; see PAIRING_MAX_ATTEMPTS).
     pub pairing_state: RwLock<Option<PairingState>>,
@@ -202,7 +201,7 @@ impl AppState {
         db: SqlitePool,
         auth_config: AuthConfig,
         assistant_config: AssistantConfig,
-        trusted_proxy: bool,
+        proxy_hops: usize,
         effective_config: EffectiveConfig,
         collector_stats_interval_ms: u64,
         processes_cache_ttl_ms: u64,
@@ -228,7 +227,7 @@ impl AppState {
             db,
             auth_config,
             assistant_config,
-            trusted_proxy,
+            proxy_hops,
             pairing_state: RwLock::new(None),
             session_cache: SessionCache::new(),
             stats_tx,

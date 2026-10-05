@@ -10,6 +10,9 @@ host = "0.0.0.0"
 # Leaving false while behind a proxy is safe but collapses all clients to
 # the proxy IP. Setting true while exposed directly allows header spoofing.
 trusted_proxy = false
+# Proxies in front of the server, counted from the right of X-Forwarded-For:
+# 1 for a single nginx/Caddy/Traefik, 2 for e.g. Cloudflare in front of nginx.
+trusted_proxy_hops = 1
 
 [database]
 path = "./db/monitor.sqlite3"

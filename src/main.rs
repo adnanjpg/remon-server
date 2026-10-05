@@ -319,7 +319,7 @@ async fn run(
         db.pool().clone(),
         config.auth.clone(),
         config.assistant.clone(),
-        config.server.trusted_proxy,
+        config.server.proxy_hops(),
         effective_config,
         overrides.collector_stats_interval_ms,
         overrides.processes_cache_ttl_ms,
