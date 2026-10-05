@@ -54,6 +54,9 @@ impl NotificationManager {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
             .redirect(reqwest::redirect::Policy::none())
+            .dns_resolver(Arc::new(url_policy::GuardedResolver::new(
+                WebhookPolicy::from_credentials(&credentials.webhook),
+            )))
             .build()?;
 
         let web_push = Arc::new(WebPushChannel::new(

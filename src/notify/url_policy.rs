@@ -1,16 +1,20 @@
 //! SSRF / private-range guard for webhook channel URLs.
 //!
-//! Two checkpoints use this:
+//! Three checkpoints use this:
 //! - REST create / update handlers (`routes/rest/notifications.rs`) — early
 //!   fail-fast at 400 before the row hits the DB.
-//! - Channel send (`channels/webhook.rs::send`) — re-resolve each invocation
-//!   as a DNS-rebinding defense.
+//! - Channel send (`channels/webhook.rs::send`) — re-checked each send, for a
+//!   readable error.
+//! - [`GuardedResolver`], the notification client's DNS. It checks the
+//!   addresses the connection actually uses, so a name that answers
+//!   differently by the time reqwest resolves it (DNS rebinding) is still
+//!   stopped. The two checks above resolve separately from reqwest.
 //!
 //! Default-deny: any IP in a private / loopback / link-local / ULA range is
 //! rejected unless either the master switch is on or the hostname appears in
 //! the allow-list.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use reqwest::Url;
 use tokio::net::lookup_host;
@@ -116,6 +120,37 @@ pub async fn check_url(url: &str, policy: &WebhookPolicy) -> Result<(), String> 
     Ok(())
 }
 
+/// DNS resolver for the notification HTTP client that refuses names
+/// resolving into a blocked range, under the same policy as [`check_url`].
+/// IP-literal URLs never reach a resolver; `check_url` covers those.
+pub struct GuardedResolver {
+    policy: WebhookPolicy,
+}
+
+impl GuardedResolver {
+    pub fn new(policy: WebhookPolicy) -> Self {
+        Self { policy }
+    }
+}
+
+impl reqwest::dns::Resolve for GuardedResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        let open = self.policy.allow_private_targets || self.policy.host_allow_listed(&host);
+        Box::pin(async move {
+            let addrs: Vec<SocketAddr> = lookup_host((host.as_str(), 0)).await?.collect();
+            if !open && let Some(bad) = addrs.iter().find(|a| is_blocked_ip(&a.ip())) {
+                return Err(format!(
+                    "'{host}' resolves to {} which is in a blocked private/loopback range",
+                    bad.ip()
+                )
+                .into());
+            }
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
 /// The outbound base URL a channel will connect to, for SSRF policy checks.
 /// Returns `None` for channel types whose destination is fixed server-side
 /// (FCM → Google) or validated per-subscriber elsewhere (web-push relay
@@ -149,25 +184,37 @@ pub fn is_blocked_ip(ip: &IpAddr) -> bool {
 }
 
 fn is_blocked_ipv4(ip: &Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
     ip.is_loopback()              // 127.0.0.0/8
         || ip.is_private()        // 10/8, 172.16/12, 192.168/16
         || ip.is_link_local()     // 169.254/16 — incl. cloud metadata
-        || ip.is_unspecified()    // 0.0.0.0
-        || ip.is_broadcast()      // 255.255.255.255
         || ip.is_multicast()      // 224/4
         || ip.is_documentation() // 192.0.2 / 198.51.100 / 203.0.113
+        || a == 0                 // 0/8, "this network"
+        || (a == 100 && (b & 0xc0) == 64) // 100.64/10, CGNAT and Tailscale
+        || (a == 192 && b == 0 && c == 0) // 192.0.0/24, IETF protocol assignments
+        || (a == 198 && (b & 0xfe) == 18) // 198.18/15, benchmarking
+        || a >= 240 // 240/4 reserved, incl. 255.255.255.255
 }
 
 fn is_blocked_ipv6(ip: &Ipv6Addr) -> bool {
     if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
         return true;
     }
-    // IPv4-mapped IPv6 (`::ffff:x.x.x.x`) — defer to the v4 check to catch
-    // `::ffff:127.0.0.1`-style attempts to slip past v4 logic.
-    if let Some(v4) = ip.to_ipv4_mapped() {
+    // An IPv4 address carried inside IPv6 gets the v4 check, so
+    // `::ffff:127.0.0.1` or `64:ff9b::a00:1` cannot slip past it.
+    if let Some(v4) = embedded_ipv4(ip) {
         return is_blocked_ipv4(&v4);
     }
     let seg = ip.segments();
+    // Local-use NAT64 64:ff9b:1::/48, deprecated site-local fec0::/10 and
+    // documentation 2001:db8::/32.
+    if (seg[0] == 0x64 && seg[1] == 0xff9b && seg[2] == 1)
+        || (seg[0] & 0xffc0) == 0xfec0
+        || (seg[0] == 0x2001 && seg[1] == 0x0db8)
+    {
+        return true;
+    }
     // Link-local fe80::/10 — first 10 bits 1111111010
     if (seg[0] & 0xffc0) == 0xfe80 {
         return true;
@@ -177,6 +224,24 @@ fn is_blocked_ipv6(ip: &Ipv6Addr) -> bool {
         return true;
     }
     false
+}
+
+/// The IPv4 address inside an IPv4-mapped (`::ffff:0:0/96`),
+/// IPv4-compatible (`::/96`), NAT64 (`64:ff9b::/96`) or 6to4 (`2002::/16`)
+/// address.
+fn embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        return Some(v4);
+    }
+    let seg = ip.segments();
+    let v4 = |hi: u16, lo: u16| Ipv4Addr::from(((hi as u32) << 16) | lo as u32);
+    if seg[..6] == [0; 6] || seg[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+        return Some(v4(seg[6], seg[7]));
+    }
+    if seg[0] == 0x2002 {
+        return Some(v4(seg[1], seg[2]));
+    }
+    None
 }
 
 #[cfg(test)]
@@ -222,6 +287,43 @@ mod tests {
         assert!(is_blocked_ip(&ip("::ffff:127.0.0.1")));
         assert!(is_blocked_ip(&ip("::ffff:10.0.0.1")));
         assert!(!is_blocked_ip(&ip("::ffff:8.8.8.8")));
+    }
+
+    #[test]
+    fn blocks_shared_and_reserved_v4() {
+        assert!(is_blocked_ip(&ip("100.64.0.1"))); // CGNAT
+        assert!(is_blocked_ip(&ip("100.100.100.100"))); // Tailscale
+        assert!(is_blocked_ip(&ip("100.127.255.255")));
+        assert!(!is_blocked_ip(&ip("100.128.0.1")));
+        assert!(is_blocked_ip(&ip("0.1.2.3")));
+        assert!(is_blocked_ip(&ip("192.0.0.8")));
+        assert!(is_blocked_ip(&ip("198.18.0.1")));
+        assert!(is_blocked_ip(&ip("198.19.255.255")));
+        assert!(!is_blocked_ip(&ip("198.20.0.1")));
+        assert!(is_blocked_ip(&ip("240.0.0.1")));
+    }
+
+    #[test]
+    fn blocks_v4_carried_in_v6() {
+        assert!(is_blocked_ip(&ip("64:ff9b::7f00:1"))); // NAT64 127.0.0.1
+        assert!(is_blocked_ip(&ip("64:ff9b::a9fe:a9fe"))); // NAT64 metadata
+        assert!(!is_blocked_ip(&ip("64:ff9b::808:808"))); // NAT64 8.8.8.8
+        assert!(is_blocked_ip(&ip("64:ff9b:1::1")));
+        assert!(is_blocked_ip(&ip("2002:a00:1::1"))); // 6to4 10.0.0.1
+        assert!(!is_blocked_ip(&ip("2002:808:808::1"))); // 6to4 8.8.8.8
+        assert!(is_blocked_ip(&ip("::a00:1"))); // v4-compatible 10.0.0.1
+        assert!(is_blocked_ip(&ip("fec0::1")));
+        assert!(is_blocked_ip(&ip("2001:db8::1")));
+    }
+
+    #[tokio::test]
+    async fn the_resolver_refuses_blocked_answers() {
+        use reqwest::dns::Resolve;
+        let guarded = GuardedResolver::new(policy(false, &[]));
+        assert!(guarded.resolve("localhost".parse().unwrap()).await.is_err());
+
+        let listed = GuardedResolver::new(policy(false, &["localhost"]));
+        assert!(listed.resolve("localhost".parse().unwrap()).await.is_ok());
     }
 
     #[test]
