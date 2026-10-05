@@ -8,7 +8,8 @@ use axum::routing::get;
 use axum::{Router, middleware};
 use std::sync::Arc;
 
-/// WebSocket routes. All require authentication.
+/// WebSocket routes. All require authentication, which may come in the query
+/// string since browsers cannot set headers on a WebSocket.
 pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
     let router = Router::new();
 
@@ -17,6 +18,6 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
 
     router.layer(middleware::from_fn_with_state(
         state,
-        crate::middleware::auth_middleware,
+        crate::middleware::auth_middleware_with_query,
     ))
 }

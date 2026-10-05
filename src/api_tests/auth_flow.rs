@@ -208,6 +208,18 @@ async fn an_expired_window_is_rejected() {
 }
 
 #[tokio::test]
+async fn a_token_in_the_query_only_works_for_websockets() {
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    for uri in ["/system/info", "/sse/stats"] {
+        let (st, _) = app
+            .request("GET", &format!("{uri}?access_token={token}"), None, None)
+            .await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED, "{uri}");
+    }
+}
+
+#[tokio::test]
 async fn logout_revokes_the_session() {
     let app = TestApp::spawn().await;
     let token = app.pair_and_login().await;

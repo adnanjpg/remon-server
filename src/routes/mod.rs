@@ -73,7 +73,7 @@ pub fn build_app(app_state: Arc<AppState>, config: &Config) -> anyhow::Result<Ro
         .layer(compression)
         // Inside trace and CORS so its 500 is logged and a browser can read it.
         .layer(CatchPanicLayer::custom(panic_to_500))
-        // SSE/WS browser clients authenticate via query string and
+        // WebSocket browser clients authenticate via query string and
         // heartbeat pings carry their capability slug in the path, so
         // scrub both before the URI reaches stdout or DB-backed logs.
         .layer(

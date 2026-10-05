@@ -17,19 +17,35 @@ use crate::storage::repositories::DeviceRepository;
 /// `sessions` table (not revoked via logout or refresh-rotation), and
 /// injects `Claims` into request extensions.
 ///
-/// Token sources, in order of preference:
-/// 1. `Authorization: Bearer <jwt>` — the canonical path; used by every
-///    non-browser client (mobile app, curl).
-/// 2. `?access_token=<jwt>` — fallback for browser-driven SSE/WS, since
-///    `EventSource` and `new WebSocket(...)` cannot send custom headers.
-///    The token is redacted from request span URIs by the trace layer
-///    in `main.rs` so it doesn't bleed into stdout/journald logs.
+/// Only `Authorization: Bearer <jwt>` is read here. A token in the URL
+/// ends up in proxy access logs, so it is accepted on WebSocket routes alone;
+/// see [`auth_middleware_with_query`].
 pub async fn auth_middleware(
     State(state): State<Arc<AppState>>,
-    mut req: Request,
+    req: Request,
     next: Next,
 ) -> Result<Response, AppError> {
-    let token = extract_token(&req).ok_or(AppError::Unauthorized)?;
+    authenticate(&state, req, next, false).await
+}
+
+/// [`auth_middleware`] that also takes `?access_token=<jwt>`, for
+/// `new WebSocket(...)`, which cannot send headers. The trace layer in
+/// `main.rs` redacts it from logged URIs.
+pub async fn auth_middleware_with_query(
+    State(state): State<Arc<AppState>>,
+    req: Request,
+    next: Next,
+) -> Result<Response, AppError> {
+    authenticate(&state, req, next, true).await
+}
+
+async fn authenticate(
+    state: &AppState,
+    mut req: Request,
+    next: Next,
+    allow_query: bool,
+) -> Result<Response, AppError> {
+    let token = extract_token(&req, allow_query).ok_or(AppError::Unauthorized)?;
 
     let auth_service = AuthService::new(state.auth_config.clone());
     let claims = auth_service
@@ -55,7 +71,7 @@ pub async fn auth_middleware(
     Ok(next.run(req).await)
 }
 
-fn extract_token(req: &Request) -> Option<String> {
+fn extract_token(req: &Request, allow_query: bool) -> Option<String> {
     if let Some(token) = req
         .headers()
         .get("authorization")
@@ -65,7 +81,9 @@ fn extract_token(req: &Request) -> Option<String> {
         return Some(token.to_string());
     }
 
-    // Fallback: ?access_token=<jwt> — only browsers should rely on this.
+    if !allow_query {
+        return None;
+    }
     req.uri().query().and_then(|q| {
         q.split('&').find_map(|pair| {
             let (k, v) = pair.split_once('=')?;
