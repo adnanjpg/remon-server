@@ -6,8 +6,8 @@
 use super::TestApp;
 use serde_json::{Value, json};
 
-use crate::assistant::ProposedAction;
 use crate::assistant::tools::{dispatch, dispatch_collecting};
+use crate::assistant::{ProposedAction, ProposedView};
 
 /// Parse a tool's JSON string result. Tools never return non-JSON.
 fn call(result: String) -> Value {
@@ -17,8 +17,14 @@ fn call(result: String) -> Value {
 /// Run a tool, returning both its JSON result and any drafted proposals.
 async fn propose(app: &TestApp, name: &str, args: Value) -> (Value, Vec<ProposedAction>) {
     let mut proposals = Vec::new();
-    let out = dispatch_collecting(&app.state, name, &args, &mut proposals).await;
+    let out = dispatch_collecting(&app.state, name, &args, &mut proposals, &mut Vec::new()).await;
     (call(out), proposals)
+}
+
+/// Run `propose_view` against an accumulator, so tests can chain calls.
+async fn view(app: &TestApp, views: &mut Vec<ProposedView>, args: Value) -> Value {
+    let out = dispatch_collecting(&app.state, "propose_view", &args, &mut Vec::new(), views).await;
+    call(out)
 }
 
 #[tokio::test]
@@ -452,4 +458,206 @@ async fn metric_history_covers_process_namespace() {
     assert_eq!(series.len(), 1, "got: {out}");
     assert_eq!(series[0]["max"], 90.0);
     assert_eq!(series[0]["min"], 10.0);
+}
+
+#[tokio::test]
+async fn propose_view_emits_the_web_widget_config() {
+    let app = TestApp::spawn().await;
+    let mut views = Vec::new();
+
+    let out = view(
+        &app,
+        &mut views,
+        json!({ "title": "CPU, last 6h",
+                "config": { "kind": "history-chart", "resource": "cpu", "range": "6h" } }),
+    )
+    .await;
+    assert_eq!(out["id"], "v1", "got: {out}");
+    view(
+        &app,
+        &mut views,
+        json!({ "title": "Memory", "config": { "kind": "memory-detail" } }),
+    )
+    .await;
+
+    assert_eq!(views.len(), 2);
+    assert_eq!(views[0].title, "CPU, last 6h");
+    assert_eq!(
+        views[0].config,
+        json!({ "kind": "history-chart", "resource": "cpu", "range": "6h" })
+    );
+    assert_eq!(views[1].id, "v2");
+    assert_eq!(views[1].config, json!({ "kind": "memory-detail" }));
+}
+
+#[tokio::test]
+async fn propose_view_rejects_bad_configs_with_a_fix() {
+    let app = TestApp::spawn().await;
+    let mut views = Vec::new();
+
+    for (config, hint) in [
+        (json!({ "kind": "compare-chart" }), "Valid kinds"),
+        (
+            json!({ "kind": "history-chart", "resource": "cpu", "range": "2h" }),
+            "30m, 1h, 6h",
+        ),
+        (
+            json!({ "kind": "history-chart", "range": "1h" }),
+            "missing 'resource'",
+        ),
+        (
+            json!({ "kind": "live-kpi", "source": "gpu" }),
+            "invalid source",
+        ),
+        (json!({ "kind": "status-summary" }), "missing 'summary'"),
+        (
+            json!({ "kind": "cpu-detail", "range": "1h" }),
+            "no other fields",
+        ),
+        (json!({ "resource": "cpu" }), "missing 'kind'"),
+    ] {
+        let out = view(&app, &mut views, json!({ "title": "x", "config": config })).await;
+        let err = out["error"].as_str().unwrap_or_default();
+        assert!(err.contains(hint), "config {config} gave: {out}");
+    }
+    let out = view(
+        &app,
+        &mut views,
+        json!({ "config": { "kind": "pressure" } }),
+    )
+    .await;
+    assert!(
+        out["error"].as_str().is_some(),
+        "untitled view accepted: {out}"
+    );
+    assert!(views.is_empty(), "a rejected config was still queued");
+}
+
+#[tokio::test]
+async fn propose_view_dedupes_and_caps() {
+    let app = TestApp::spawn().await;
+    let mut views = Vec::new();
+    let pressure = json!({ "title": "PSI", "config": { "kind": "pressure" } });
+
+    view(&app, &mut views, pressure.clone()).await;
+    let again = view(&app, &mut views, pressure).await;
+    assert_eq!(
+        again["id"], "v1",
+        "duplicate should point at the first: {again}"
+    );
+    assert_eq!(views.len(), 1);
+
+    for range in ["30m", "1h", "6h", "24h", "7d"] {
+        view(
+            &app,
+            &mut views,
+            json!({ "title": range,
+                    "config": { "kind": "history-chart", "resource": "disk", "range": range } }),
+        )
+        .await;
+    }
+    assert_eq!(views.len(), crate::assistant::views::MAX_VIEWS);
+    let over = view(
+        &app,
+        &mut views,
+        json!({ "title": "one too many",
+                "config": { "kind": "history-chart", "resource": "disk", "range": "30d" } }),
+    )
+    .await;
+    assert!(over["error"].as_str().is_some(), "cap not enforced: {over}");
+    assert_eq!(views.len(), crate::assistant::views::MAX_VIEWS);
+}
+
+/// Register a probe that has already reported, without running it.
+async fn seed_probe(app: &TestApp, name: &str, metrics: Vec<crate::models::probe::ProbeMetric>) {
+    let dir = std::env::temp_dir().join(format!("remon-view-probe-{}-{name}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp probes dir");
+    let path = dir.join(format!("{name}.yaml"));
+    std::fs::write(
+        &path,
+        format!("name: {name}\nenabled: true\ninterval: \"1h\"\ncommand: [\"true\"]\n"),
+    )
+    .expect("write manifest");
+    let manifest = crate::probes::manifest::Manifest::load(&path)
+        .await
+        .expect("manifest");
+    let _ = std::fs::remove_dir_all(&dir);
+    app.state.probe_registry.write().await.probes.insert(
+        name.to_string(),
+        crate::probes::registry::ProbeEntry {
+            manifest,
+            last_run: None,
+            last_metrics: metrics,
+            task: None,
+        },
+    );
+}
+
+#[tokio::test]
+async fn propose_view_checks_probe_metrics_exist() {
+    use crate::models::probe::ProbeMetric;
+
+    let app = TestApp::spawn().await;
+    let metric = |name: &str, site: &str| ProbeMetric {
+        name: name.to_string(),
+        value: 1.0,
+        unit: Some("ms".to_string()),
+        labels: [("site".to_string(), site.to_string())].into(),
+    };
+    seed_probe(
+        &app,
+        "latency",
+        vec![
+            metric("rtt", "eu"),
+            metric("rtt", "us"),
+            metric("loss", "eu"),
+        ],
+    )
+    .await;
+    seed_probe(&app, "fresh", vec![]).await;
+    let mut views = Vec::new();
+
+    let out = view(
+        &app,
+        &mut views,
+        json!({ "title": "RTT us",
+                "config": { "kind": "probe-metric", "probe": "latency", "metric": "rtt",
+                            "labels": { "site": "us" } } }),
+    )
+    .await;
+    assert_eq!(out["id"], "v1", "got: {out}");
+    assert_eq!(
+        views[0].config,
+        json!({ "kind": "probe-metric", "probe": "latency", "metric": "rtt", "viz": "chart",
+                "unit": "ms", "labelKey": r#"{"site":"us"}"# })
+    );
+
+    for (config, hint) in [
+        (
+            json!({ "kind": "probe-metric", "probe": "nope", "metric": "rtt" }),
+            "fresh, latency",
+        ),
+        (
+            json!({ "kind": "probe-metric", "probe": "latency", "metric": "jitter" }),
+            "loss, rtt",
+        ),
+        (
+            json!({ "kind": "probe-metric", "probe": "fresh", "metric": "rtt" }),
+            "not reported",
+        ),
+        (
+            json!({ "kind": "probe-metric", "probe": "latency", "metric": "rtt",
+                    "labels": { "site": "ap" } }),
+            r#"{"site":"eu"}"#,
+        ),
+        (
+            json!({ "kind": "probe-metric", "probe": "latency", "metric": "rtt", "viz": "gauge" }),
+            "chart, scalar",
+        ),
+    ] {
+        let out = view(&app, &mut views, json!({ "title": "x", "config": config })).await;
+        let err = out["error"].as_str().unwrap_or_default();
+        assert!(err.contains(hint), "config {config} gave: {out}");
+    }
+    assert_eq!(views.len(), 1);
 }

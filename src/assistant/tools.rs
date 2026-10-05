@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::ProposedAction;
+use super::{ProposedAction, ProposedView, views};
 use crate::models::process::ProcessState;
 use crate::platform::services::{ServiceFilter, ServiceState};
 use crate::services::alerting::expression::{self, MetricRef};
@@ -493,6 +493,8 @@ operator to confirm.",
         }));
     }
 
+    tools.push(views::definition());
+
     Value::Array(tools)
 }
 
@@ -505,6 +507,7 @@ pub async fn dispatch_collecting(
     name: &str,
     args: &Value,
     proposals: &mut Vec<ProposedAction>,
+    views: &mut Vec<ProposedView>,
 ) -> String {
     let outcome = match name {
         // ----- read-only -----
@@ -537,6 +540,8 @@ pub async fn dispatch_collecting(
         "propose_kill_process" => propose_kill_process(args, proposals),
         #[cfg(feature = "docker")]
         "propose_container_action" => propose_container_action(args, proposals),
+        // ----- display-only (the client renders it from its own data) -----
+        "propose_view" => views::propose_view(state, args, views).await,
         other => Err(format!("unknown tool '{other}'")),
     };
     match outcome {
@@ -545,11 +550,11 @@ pub async fn dispatch_collecting(
     }
 }
 
-/// Read-only convenience: run a tool and discard any proposal. Used by tests
+/// Read-only convenience: run a tool and discard any proposal or view. Used by tests
 /// that only exercise read tools; the agent loop uses [`dispatch_collecting`].
 #[cfg(test)]
 pub async fn dispatch(state: &Arc<AppState>, name: &str, args: &Value) -> String {
-    dispatch_collecting(state, name, args, &mut Vec::new()).await
+    dispatch_collecting(state, name, args, &mut Vec::new(), &mut Vec::new()).await
 }
 
 /// Mirrors `GET /summary` (routes/rest/system.rs): the fullest mount wins the
