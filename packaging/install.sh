@@ -182,9 +182,10 @@ install -d -m 0700 "$DATA_DIR"
 
 # The binary carries its own defaults, so this file exists to be edited, not
 # to be required. Never overwrite an operator's copy on upgrade.
+# Owner-only: API keys, bot tokens and webhook secrets end up in it.
 if [ ! -f "$CONFIG_DIR/config.toml" ]; then
     if [ -f "$TMP/config.toml.sample" ]; then
-        install -m 0644 "$TMP/config.toml.sample" "$CONFIG_DIR/config.toml"
+        install -m 0600 "$TMP/config.toml.sample" "$CONFIG_DIR/config.toml"
     else
         cat > "$CONFIG_DIR/config.toml" <<'SAMPLE'
 # remon-server configuration. Every key is optional — defaults are compiled
@@ -208,11 +209,16 @@ format = "compact"
 allow_any_origin = false
 allowed_origins = []
 SAMPLE
-        chmod 0644 "$CONFIG_DIR/config.toml"
+        chmod 0600 "$CONFIG_DIR/config.toml"
     fi
     say "  ${DIM}wrote $CONFIG_DIR/config.toml${RESET}"
 else
     say "  ${DIM}kept existing $CONFIG_DIR/config.toml${RESET}"
+    # Earlier installers wrote it 0644. Contents stay as they are.
+    if [ "$(ls -ld "$CONFIG_DIR/config.toml" | cut -c5-10)" != "------" ]; then
+        chmod go-rwx "$CONFIG_DIR/config.toml"
+        say "  ${DIM}made $CONFIG_DIR/config.toml readable by its owner only${RESET}"
+    fi
 fi
 
 # Checked with the build about to be installed, and before the running service

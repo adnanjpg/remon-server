@@ -517,3 +517,75 @@ impl Config {
         Ok(cfg)
     }
 }
+
+impl Config {
+    /// Whether any credential is configured, from whichever source.
+    pub fn holds_secrets(&self) -> bool {
+        let set = |v: &Option<String>| v.as_deref().is_some_and(|s| !s.trim().is_empty());
+        // Shorter than 32 is the placeholder, which the DB secret replaces.
+        self.auth.jwt_secret.trim().len() >= 32
+            || !self.assistant.api_key.trim().is_empty()
+            || !self.notifications.telegram.bot_token.trim().is_empty()
+            || set(&self.notifications.ntfy.token)
+            || set(&self.notifications.webhook.secret)
+    }
+}
+
+/// Config files in `config_dir` that users other than the owner can read or
+/// write, with their mode. Only the stems [`Config::load`] reads are checked.
+#[cfg(unix)]
+pub fn exposed_files(config_dir: &std::path::Path) -> Vec<(std::path::PathBuf, u32)> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let run_env = env::var("RUN_ENV").unwrap_or_else(|_| "development".into());
+    let stems = ["default", "config", run_env.as_str()];
+    let Ok(entries) = std::fs::read_dir(config_dir) else {
+        return Vec::new();
+    };
+    let mut found: Vec<_> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_stem()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| stems.contains(&s))
+        })
+        .filter_map(|p| {
+            let meta = std::fs::metadata(&p).ok()?;
+            let mode = meta.permissions().mode() & 0o777;
+            (meta.is_file() && mode & 0o077 != 0).then_some((p, mode))
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+#[cfg(not(unix))]
+pub fn exposed_files(_config_dir: &std::path::Path) -> Vec<(std::path::PathBuf, u32)> {
+    Vec::new()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn exposed_files_lists_only_loaded_stems_open_to_others() {
+        let dir = env::temp_dir().join(format!("remon-config-perm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, mode: u32| {
+            let p = dir.join(name);
+            std::fs::write(&p, "").unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        write("config.toml", 0o644);
+        write("default.toml", 0o600);
+        write("notes.toml", 0o644);
+
+        let found = exposed_files(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(found, vec![(dir.join("config.toml"), 0o644)]);
+    }
+}

@@ -192,6 +192,8 @@ fn check_config(report: &mut Report, cfg: &Config, paths: &Paths) {
         );
     }
 
+    check_config_permissions(report, cfg, paths);
+
     if cfg.cors.allow_any_origin {
         report.line(
             Verdict::Warn,
@@ -217,6 +219,33 @@ fn check_config(report: &mut Report, cfg: &Config, paths: &Paths) {
         "logging",
         format!("{} / {}", cfg.logging.level, cfg.logging.format),
     );
+}
+
+/// API keys and bot tokens sit in the config file, so others must not read it.
+fn check_config_permissions(report: &mut Report, cfg: &Config, paths: &Paths) {
+    let exposed = crate::config::exposed_files(&paths.config_dir);
+    if exposed.is_empty() {
+        report.line(Verdict::Ok, "config permissions", "owner-only");
+        return;
+    }
+    if !cfg.holds_secrets() {
+        report.line(
+            Verdict::Ok,
+            "config permissions",
+            "readable by others, but no secrets are set",
+        );
+        return;
+    }
+    for (file, mode) in exposed {
+        report.line(
+            Verdict::Warn,
+            "config permissions",
+            format!(
+                "{} is mode {mode:o} and holds secrets; chmod 600 it",
+                file.display()
+            ),
+        );
+    }
 }
 
 #[cfg(unix)]

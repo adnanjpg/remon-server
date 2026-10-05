@@ -110,9 +110,11 @@ esac
 S
 
 # NTFS cannot take `install -m 0700`, which is a property of this sandbox and
-# not of the installer. Keep the copy semantics, drop the mode.
+# not of the installer. Keep the copy semantics, drop the mode, log the call so
+# the modes asked for can still be checked.
 cat > "$STUB/install" <<'S'
 #!/bin/sh
+echo "install $*" >> "$HOME/state/modes.log"
 dir_mode=0
 args=""
 while [ $# -gt 0 ]; do
@@ -132,6 +134,12 @@ else
   cp "$src" "$1"
   chmod +x "$1" 2>/dev/null || true
 fi
+S
+
+cat > "$STUB/chmod" <<'S'
+#!/bin/sh
+echo "chmod $*" >> "$HOME/state/modes.log"
+PATH=/usr/bin:/bin chmod "$@" 2>/dev/null || true
 S
 
 cat > "$STUB/systemctl" <<S
@@ -206,6 +214,7 @@ check "installed the binary"            '[ -x "$ROOT/target/usr/local/bin/remon-
 # noexec. That copy must not survive the install.
 check "left no staged binary behind"    '! ls "$ROOT/target/usr/local/bin/".remon-server.staged >/dev/null 2>&1'
 check "wrote a config"                  '[ -f "$ROOT/target/etc/remon/config.toml" ]'
+check "wrote it owner-only"             'grep -q -- "-m 0600 .*/etc/remon/config.toml$" "$ROOT/state/modes.log"'
 check "reported journalctl for logs"    'grep -q "journalctl -fu remon-server" <<<"$out"'
 check "reported success"                'grep -q "is running" <<<"$out"'
 
@@ -232,10 +241,22 @@ check "reported success"                'grep -q "is running" <<<"$out"'
 printf '\n\033[1mupgrade re-run\033[0m\n'
 run_install systemd >/dev/null || true
 echo "# operator edit" >> "$ROOT/target/etc/remon/config.toml"
+# What installers before 0600 left behind.
+chmod 0644 "$ROOT/target/etc/remon/config.toml"
+: > "$ROOT/state/modes.log"
 out=$(rerun_install) || true
 check "kept the edited config"          'grep -q "operator edit" "$ROOT/target/etc/remon/config.toml"'
 check "said it kept it"                 'grep -q "kept existing" <<<"$out"'
 check "reported an in-place upgrade"    'grep -q "upgraded in place" <<<"$out"'
+check "tightened a 0644 config"         'grep -q "chmod go-rwx .*/etc/remon/config.toml$" "$ROOT/state/modes.log"'
+check "said it tightened it"            'grep -q "readable by its owner only" <<<"$out"'
+# Needs a filesystem that keeps modes, so not from a Windows checkout.
+chmod 0600 "$ROOT/target/etc/remon/config.toml"
+if [ "$(ls -ld "$ROOT/target/etc/remon/config.toml" | cut -c5-10)" = "------" ]; then
+    : > "$ROOT/state/modes.log"
+    out=$(rerun_install) || true
+    check "left a 0600 config alone"    '! grep -q "chmod go-rwx" "$ROOT/state/modes.log"'
+fi
 
 # ── a bad checksum must stop the install ──────────────────────────────────
 printf '\n\033[1mchecksum gate\033[0m\n'
@@ -307,6 +328,7 @@ check "generated unit has real paths"   'grep -q "ExecStart=$ROOT/target/usr/loc
 check "generated unit is complete"      'grep -q "WantedBy=multi-user.target" "$UNIT"'
 check "generated unit restarts always"  'grep -q "^Restart=always" "$UNIT"'
 check "wrote a config from scratch"     'grep -q "allow_any_origin" "$ROOT/target/etc/remon/config.toml"'
+check "wrote that one owner-only too"   'grep -q "chmod 0600 .*/etc/remon/config.toml$" "$ROOT/state/modes.log"'
 check "still reported success"          'grep -q "is running" <<<"$out"'
 
 out=$(run_install openrc) || true

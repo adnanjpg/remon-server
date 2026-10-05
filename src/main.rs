@@ -248,6 +248,15 @@ async fn run(
         paths.actions_dir.display()
     );
 
+    if config.holds_secrets() {
+        for (file, mode) in config::exposed_files(&paths.config_dir) {
+            warn!(
+                "{} is mode {mode:o} and holds secrets other users can read; chmod 600 it",
+                file.display()
+            );
+        }
+    }
+
     let db_folder = paths.resolve_data(&config.database.folder_path);
     tokio::fs::create_dir_all(&db_folder)
         .await
