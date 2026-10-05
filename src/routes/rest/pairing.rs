@@ -1,132 +1,119 @@
 //! Device pairing endpoints
 
-use axum::{Json, extract::State};
-use colored::Colorize;
+use axum::{
+    Json,
+    extract::{ConnectInfo, State},
+    http::HeaderMap,
+};
 use log::{info, warn};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use subtle::ConstantTimeEq;
 
+use crate::auth::pairing::{self, MAX_ATTEMPTS, MAX_ATTEMPTS_PER_IP};
 use crate::auth::service::AuthService;
 use crate::error::{AppError, AppResult};
 use crate::models::auth::StoredDevice;
 use crate::routes::dtos::auth::{
-    PairCompleteRequest, PairCompleteResponse, PairingInitiateResponse,
+    PairCompleteRequest, PairCompleteResponse, PairingInitiateResponse, PairingOpenResponse,
 };
-use crate::state::{AppState, PAIRING_MAX_ATTEMPTS, PairingState};
+use crate::routes::extractors::Claims;
+use crate::routes::rest::auth::extract_client_ip;
+use crate::state::AppState;
 use crate::storage::repositories::DeviceRepository;
 
-/// POST /auth/pair/initiate — generate a pairing code (printed to terminal only).
+/// POST /auth/pair/initiate — opens nothing.
 ///
-/// Refuses with 409 if an unexpired pairing window is already active. This
-/// prevents an anonymous attacker from wiping a legitimate user's code by
-/// repeatedly hitting this endpoint.
+/// Anyone could call it, so it no longer opens a window: `remon-server pair`
+/// on the host or `POST /auth/pair/open` from a paired device does. Kept so
+/// older clients still move on to their code entry step.
 pub async fn initiate_pairing(
     State(state): State<Arc<AppState>>,
 ) -> AppResult<Json<PairingInitiateResponse>> {
-    let now = chrono::Utc::now().timestamp();
-    let code = AuthService::generate_pairing_code();
-    let expires_at = now + state.auth_config.pairing_code_ttl_secs as i64;
-
-    {
-        let mut pairing = state.pairing_state.write().await;
-        if let Some(existing) = pairing.as_ref()
-            && existing.expires_at > now
-        {
-            return Err(AppError::AlreadyExists);
-        }
-        *pairing = Some(PairingState {
-            code: code.clone(),
-            expires_at,
-            attempts_remaining: PAIRING_MAX_ATTEMPTS,
-        });
-    }
-
-    let ttl = state.auth_config.pairing_code_ttl_secs;
-
-    // Audit trail: log that a window opened, but never the code itself —
-    // logs may be shipped to centralized sinks that aren't trust-equivalent
-    // to the host terminal.
-    info!("pairing window opened (ttl_secs={})", ttl);
-
-    // Terminal-only display (stdout, not the log pipeline). Possession of the
-    // code requires physical/SSH access to the host running the server.
-    let ttl_human = if ttl % 60 == 0 {
-        format!("{}m", ttl / 60)
-    } else {
-        format!("{}s", ttl)
-    };
-    println!();
-    println!("  {}", "Device pairing".bold().cyan());
-    println!("  {} {}", "code   ".dimmed(), code.bold().yellow());
-    println!("  {} {}", "expires".dimmed(), ttl_human.dimmed());
-    println!("  {}", "enter this code in your client to pair".dimmed());
-    println!();
-
-    // Security: do NOT return the code in the API response — it stays in
-    // the server terminal so that a successful complete_pairing call requires
-    // physical access to the host.
+    let expires_at =
+        chrono::Utc::now().timestamp() + state.auth_config.pairing_code_ttl_secs as i64;
     Ok(Json(PairingInitiateResponse {
-        message: "Pairing code displayed in server terminal".to_string(),
+        message: "Run `remon-server pair` on the server, or open pairing from a paired device"
+            .to_string(),
         expires_at,
+    }))
+}
+
+/// POST /auth/pair/open — a paired device opens a window for another one.
+///
+/// The code goes back to the caller, who is already trusted; any open window
+/// is replaced.
+pub async fn open_pairing(
+    claims: Claims,
+    State(state): State<Arc<AppState>>,
+) -> AppResult<Json<PairingOpenResponse>> {
+    let window = pairing::open(&state.db, state.auth_config.pairing_code_ttl_secs).await?;
+    info!("pairing window opened by device {}", claims.device_id);
+    crate::services::events::record_operator(
+        &state,
+        &claims.device_id,
+        "pairing_opened",
+        "Pairing window opened".to_string(),
+        None,
+        None,
+        None,
+    );
+    Ok(Json(PairingOpenResponse {
+        pairing_code: window.code,
+        expires_at: window.expires_at,
     }))
 }
 
 /// POST /auth/pair/complete — exchange pairing code for device credentials.
 ///
-/// Code validation runs under a single write lock so initiate/complete are
-/// atomic. Wrong-code attempts decrement an attempts counter; once exhausted
-/// (or on success / on TTL expiry) the pairing state is cleared.
+/// Each address gets `MAX_ATTEMPTS_PER_IP` wrong codes, so one client cannot
+/// burn a window someone else is using; the window closes after
+/// `MAX_ATTEMPTS` in total, on success, or at expiry.
 pub async fn complete_pairing(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<PairCompleteRequest>,
 ) -> AppResult<Json<PairCompleteResponse>> {
     let now = chrono::Utc::now().timestamp();
+    let client_ip = extract_client_ip(&headers, &addr, state.proxy_hops);
 
-    let outcome = {
-        let mut pairing = state.pairing_state.write().await;
-        match pairing.as_mut() {
-            None => PairingOutcome::NoActiveCode,
-            Some(p) if p.expires_at <= now => {
-                *pairing = None;
-                PairingOutcome::Expired
-            }
-            Some(p) => {
-                let matches: bool = p.code.as_bytes().ct_eq(req.pairing_code.as_bytes()).into();
-                if matches {
-                    *pairing = None;
-                    PairingOutcome::Success
-                } else {
-                    p.attempts_remaining = p.attempts_remaining.saturating_sub(1);
-                    if p.attempts_remaining == 0 {
-                        *pairing = None;
-                        PairingOutcome::AttemptsExhausted
-                    } else {
-                        PairingOutcome::WrongCode {
-                            remaining: p.attempts_remaining,
-                        }
-                    }
-                }
-            }
-        }
-    };
+    {
+        let mut attempts = state.pairing_attempts.lock().await;
+        let Some(window) = pairing::current(&state.db).await? else {
+            return Err(AppError::PairingExpired);
+        };
+        attempts.track(&window);
 
-    match outcome {
-        PairingOutcome::Success => {}
-        PairingOutcome::WrongCode { remaining } => {
-            warn!(
-                "pairing complete failed: wrong code ({} attempts remaining)",
-                remaining
-            );
+        let used = attempts.per_ip.get(&client_ip).copied().unwrap_or(0);
+        if used >= MAX_ATTEMPTS_PER_IP {
+            warn!("pairing complete refused: {client_ip} has used its attempts");
             return Err(AppError::PairingExpired);
         }
-        PairingOutcome::AttemptsExhausted => {
-            warn!("pairing complete failed: attempts exhausted, code invalidated");
+
+        let matches: bool = window
+            .code
+            .as_bytes()
+            .ct_eq(req.pairing_code.as_bytes())
+            .into();
+        if !matches {
+            attempts.per_ip.insert(client_ip.clone(), used + 1);
+            attempts.total += 1;
+            if attempts.total >= MAX_ATTEMPTS {
+                pairing::close(&state.db).await?;
+                warn!("pairing complete failed: window took {MAX_ATTEMPTS} wrong codes, closed");
+            } else {
+                warn!(
+                    "pairing complete failed: wrong code from {client_ip} ({} left for it)",
+                    MAX_ATTEMPTS_PER_IP - used - 1
+                );
+            }
             return Err(AppError::PairingExpired);
         }
-        PairingOutcome::NoActiveCode | PairingOutcome::Expired => {
-            return Err(AppError::PairingExpired);
-        }
+
+        pairing::close(&state.db).await?;
+        *attempts = Default::default();
     }
 
     let device_id = uuid::Uuid::new_v4().to_string();
@@ -187,15 +174,4 @@ pub async fn complete_pairing(
         device_id,
         device_token,
     }))
-}
-
-/// Internal outcome from the atomic pairing-state critical section.
-/// Defined inside the handler so the lock is dropped before any work that
-/// shouldn't hold it (DB writes, hashing, logging the bad-attempt warning).
-enum PairingOutcome {
-    Success,
-    WrongCode { remaining: u8 },
-    AttemptsExhausted,
-    Expired,
-    NoActiveCode,
 }

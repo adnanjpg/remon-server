@@ -19,6 +19,9 @@ pub enum Command {
     ConfigCheck,
     /// Report on the whole installation: paths, config, port, host tooling.
     Doctor,
+    /// Open a pairing window and print its code. The only way to pair the
+    /// first device, so the code never leaves the host.
+    Pair,
 }
 
 /// Parsed invocation.
@@ -46,6 +49,7 @@ COMMANDS:
     (none)                   Run the server
     config check             Validate configuration and exit
     doctor                   Report paths, config, port and host tooling
+    pair                     Print a code to pair a device with (needs the server's database)
 
 OPTIONS:
     -c, --config-dir <DIR>   Directory holding config.toml    [env: REMON_CONFIG_DIR]
@@ -82,6 +86,7 @@ fn parse_from<I: Iterator<Item = String>>(args: I) -> Parsed {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "doctor" => command = Command::Doctor,
+            "pair" => command = Command::Pair,
             "config" => match args.next().as_deref() {
                 Some("check") => command = Command::ConfigCheck,
                 Some(other) => {
@@ -216,6 +221,7 @@ mod tests {
     #[test]
     fn subcommands_are_recognized() {
         assert_eq!(expect_run(&["doctor"]).command, Command::Doctor);
+        assert_eq!(expect_run(&["pair"]).command, Command::Pair);
         assert_eq!(
             expect_run(&["config", "check"]).command,
             Command::ConfigCheck

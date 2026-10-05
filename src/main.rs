@@ -61,6 +61,7 @@ async fn main() -> std::process::ExitCode {
             };
         }
         cli::Command::ConfigCheck => return config_check(),
+        cli::Command::Pair => return pair().await,
         cli::Command::Run => {}
     }
 
@@ -166,6 +167,54 @@ fn config_check() -> std::process::ExitCode {
             std::process::ExitCode::FAILURE
         }
     }
+}
+
+/// `pair` — open a pairing window in the server's database and print the code.
+///
+/// Refuses to create a database: a missing one means the wrong `--data-dir`
+/// or user, and a code written there would never reach the running server.
+async fn pair() -> std::process::ExitCode {
+    let paths = paths::get();
+    let cfg = match config::Config::new() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("configuration invalid: {e}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let db_path = paths.resolve_data(&cfg.database.path);
+    if !db_path.exists() {
+        eprintln!(
+            "no database at {}; start the server first, then run this as the same user with the same --data-dir",
+            db_path.display()
+        );
+        return std::process::ExitCode::FAILURE;
+    }
+    let db = match storage::Database::connect(&format!("sqlite:{}", db_path.display()), 1).await {
+        Ok(db) => db,
+        Err(e) => {
+            eprintln!("cannot open {}: {e:#}", db_path.display());
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let window = match auth::pairing::open(db.pool(), cfg.auth.pairing_code_ttl_secs).await {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("cannot open a pairing window: {e}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let _ = storage::repositories::HostEventRepository::new(db.pool().clone())
+        .insert(&storage::repositories::NewHostEvent {
+            source: "operator",
+            kind: "pairing_opened",
+            severity: "info",
+            message: "Pairing window opened from the host".to_string(),
+            ..Default::default()
+        })
+        .await;
+    auth::pairing::print(&window);
+    std::process::ExitCode::SUCCESS
 }
 
 /// Install the tracing subscriber and return the receiver half of the

@@ -262,25 +262,14 @@ impl TestApp {
 
     /// Run the full pairing → login flow and return a valid access token.
     ///
-    /// Three calls hit the rate-limited anonymous subrouter (burst 5), so a
+    /// Two calls hit the rate-limited anonymous subrouter (burst 5), so a
     /// single `pair_and_login` per test stays well within budget.
     pub async fn pair_and_login(&self) -> String {
-        let (st, _) = self
-            .request("POST", "/auth/pair/initiate", None, None)
-            .await;
-        assert_eq!(st, StatusCode::OK, "pair/initiate should succeed");
-
-        // The code is only printed to the server terminal; as the trusted
-        // host, the test reads it straight from shared state.
-        let code = self
-            .state
-            .pairing_state
-            .read()
+        // What `remon-server pair` does on the host.
+        let code = crate::auth::pairing::open(&self.state.db, 300)
             .await
-            .as_ref()
-            .expect("pairing window active")
-            .code
-            .clone();
+            .expect("open pairing window")
+            .code;
 
         let (st, body) = self
             .request(

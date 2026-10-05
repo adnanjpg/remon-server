@@ -34,9 +34,6 @@ pub enum AppError {
     #[error("{0} not found")]
     NotFound(String),
 
-    #[error("Resource already exists")]
-    AlreadyExists,
-
     #[error("{0}")]
     Conflict(String),
 
@@ -131,11 +128,6 @@ impl IntoResponse for AppError {
             ),
 
             // 409 Conflict
-            AppError::AlreadyExists => (
-                StatusCode::CONFLICT,
-                "ALREADY_EXISTS",
-                "Resource already exists".to_string(),
-            ),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, "CONFLICT", msg.clone()),
 
             // 410 Gone

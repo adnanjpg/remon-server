@@ -14,21 +14,6 @@ use crate::notify::NotificationManager;
 use crate::platform::services::ServiceManager;
 use crate::probes::registry::ProbeRegistry;
 
-/// Active pairing code state.
-///
-/// `attempts_remaining` is decremented on each wrong-code attempt against
-/// `complete_pairing` and the state is wiped when it reaches zero — so the
-/// brute-force window is bounded even before TTL expiry.
-#[derive(Debug, Clone)]
-pub struct PairingState {
-    pub code: String,
-    pub expires_at: i64,
-    pub attempts_remaining: u8,
-}
-
-/// Maximum wrong-code attempts allowed against a single pairing window.
-pub const PAIRING_MAX_ATTEMPTS: u8 = 3;
-
 /// Effective server-side runtime configuration: TOML defaults overridden by
 /// values read from the `server_config` table at boot. Held under `RwLock`
 /// so PATCH /config can swap it without a restart; background tasks re-read
@@ -60,8 +45,9 @@ pub struct AppState {
     /// see `ServerConfig::proxy_hops`.
     pub proxy_hops: usize,
 
-    /// Active pairing window (only one at a time; see PAIRING_MAX_ATTEMPTS).
-    pub pairing_state: RwLock<Option<PairingState>>,
+    /// Wrong-code counts for the open pairing window, which lives in the DB.
+    /// Held across the check so two completions cannot both use one code.
+    pub pairing_attempts: Mutex<crate::auth::pairing::Attempts>,
 
     /// Positive cache over `sessions` consulted by the auth middleware
     /// before falling back to the DB. Revocation paths must evict —
@@ -228,7 +214,7 @@ impl AppState {
             auth_config,
             assistant_config,
             proxy_hops,
-            pairing_state: RwLock::new(None),
+            pairing_attempts: Mutex::new(Default::default()),
             session_cache: SessionCache::new(),
             stats_tx,
             processes_tx,

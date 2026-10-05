@@ -416,8 +416,7 @@ host_addr=$(hostname -I 2>/dev/null | awk '{print $1}')
 [ -n "$host_addr" ] || host_addr=$(ip -4 route get 1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p')
 [ -n "$host_addr" ] || host_addr="127.0.0.1"
 
-# Where the pairing code will show up, and how to look at the service — both
-# differ per init, and both are the next thing the operator needs.
+# How to look at the service, which differs per init.
 if [ "$INIT" = "openrc" ]; then
     log_cmd="tail -f /var/log/$SERVICE_NAME.log"
     status_cmd="rc-service $SERVICE_NAME status"
@@ -437,12 +436,13 @@ if [ "$ok" -eq 1 ]; then
     if [ "$was_running" -eq 1 ]; then
         say "  ${DIM}upgraded in place; configuration and database untouched${RESET}"
     else
-        say "  ${DIM}add the address above in the Remon app, then start pairing${RESET}"
-        say "  ${DIM}the 8-digit code appears in: $log_cmd${RESET}"
+        say "  ${DIM}add the address above in the Remon app, then get a pairing code:${RESET}"
+        say "  ${BOLD}remon-server --config-dir $CONFIG_DIR --data-dir $DATA_DIR pair${RESET}"
     fi
     say ""
     say "  ${DIM}config   $CONFIG_DIR/config.toml${RESET}"
     say "  ${DIM}data     $DATA_DIR${RESET}"
+    say "  ${DIM}logs     $log_cmd${RESET}"
     say "  ${DIM}diagnose remon-server --config-dir $CONFIG_DIR --data-dir $DATA_DIR doctor${RESET}"
 else
     warn "the service did not answer on http://127.0.0.1:$port/health"

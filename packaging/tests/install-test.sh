@@ -216,6 +216,7 @@ check "left no staged binary behind"    '! ls "$ROOT/target/usr/local/bin/".remo
 check "wrote a config"                  '[ -f "$ROOT/target/etc/remon/config.toml" ]'
 check "wrote it owner-only"             'grep -q -- "-m 0600 .*/etc/remon/config.toml$" "$ROOT/state/modes.log"'
 check "reported journalctl for logs"    'grep -q "journalctl -fu remon-server" <<<"$out"'
+check "said how to pair"                'grep -q -- "--data-dir $ROOT/target/var/lib/remon pair" <<<"$out"'
 check "reported success"                'grep -q "is running" <<<"$out"'
 
 # ── OpenRC ────────────────────────────────────────────────────────────────

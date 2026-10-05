@@ -246,4 +246,4 @@ Removes all `/docker/*` endpoints and the bollard dependency.
 
 ## API Reference
 
-The route table in `src/routes/{rest,sse,ws}/mod.rs` is the authoritative endpoint list; request/response shapes live in `src/routes/dtos/` and behaviour notes in the handler doc comments. Bootstrap flow: `POST /auth/pair/initiate` → read the 8-digit code from the server terminal → `POST /auth/pair/complete` → `POST /auth/login`.
+The route table in `src/routes/{rest,sse,ws}/mod.rs` is the authoritative endpoint list; request/response shapes live in `src/routes/dtos/` and behaviour notes in the handler doc comments. Bootstrap flow: `remon-server pair` on the host (or `POST /auth/pair/open` from a paired device) gives the 8-digit code → `POST /auth/pair/complete` → `POST /auth/login`.

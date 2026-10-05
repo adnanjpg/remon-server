@@ -32,11 +32,16 @@ async fn full_pairing_login_grants_access() {
     assert_eq!(status, StatusCode::OK);
 }
 
+fn complete_body(code: &str) -> Value {
+    json!({ "pairing_code": code, "device_name": "test" })
+}
+
 #[tokio::test]
 async fn wrong_pairing_code_is_rejected() {
     let app = TestApp::spawn().await;
-    let (st, _) = app.request("POST", "/auth/pair/initiate", None, None).await;
-    assert_eq!(st, StatusCode::OK);
+    crate::auth::pairing::open(&app.state.db, 300)
+        .await
+        .unwrap();
 
     let (st, _) = app
         .request(
@@ -65,6 +70,138 @@ async fn complete_without_active_window_is_rejected() {
                 "pairing_code": "12345678",
                 "device_name": "x",
             })),
+        )
+        .await;
+    assert_eq!(st, StatusCode::GONE);
+}
+
+#[tokio::test]
+async fn anonymous_initiate_opens_no_window() {
+    let app = TestApp::spawn().await;
+    let (st, body) = app.request("POST", "/auth/pair/initiate", None, None).await;
+    assert_eq!(
+        st,
+        StatusCode::OK,
+        "older clients still get through: {body}"
+    );
+    assert!(
+        crate::auth::pairing::current(&app.state.db)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn opening_a_window_needs_a_paired_device() {
+    let app = TestApp::spawn().await;
+    let (st, _) = app.request("POST", "/auth/pair/open", None, None).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+
+    let token = app.pair_and_login().await;
+    let (st, body) = app
+        .request("POST", "/auth/pair/open", Some(&token), None)
+        .await;
+    assert_eq!(st, StatusCode::OK, "{body}");
+    let code = body["pairing_code"].as_str().expect("pairing_code");
+    assert_eq!(code.len(), 8);
+
+    let (st, body) = app
+        .request(
+            "POST",
+            "/auth/pair/complete",
+            None,
+            Some(complete_body(code)),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn one_address_cannot_burn_the_window() {
+    let app = TestApp::spawn().await;
+    let window = crate::auth::pairing::open(&app.state.db, 300)
+        .await
+        .unwrap();
+    let wrong = if window.code == "00000000" {
+        "11111111"
+    } else {
+        "00000000"
+    };
+
+    for _ in 0..crate::auth::pairing::MAX_ATTEMPTS_PER_IP {
+        let (st, _) = app
+            .request(
+                "POST",
+                "/auth/pair/complete",
+                None,
+                Some(complete_body(wrong)),
+            )
+            .await;
+        assert_eq!(st, StatusCode::GONE);
+    }
+    // Out of attempts, even with the right code.
+    let (st, _) = app
+        .request(
+            "POST",
+            "/auth/pair/complete",
+            None,
+            Some(complete_body(&window.code)),
+        )
+        .await;
+    assert_eq!(st, StatusCode::GONE);
+    // The window is still there for everyone else.
+    assert!(
+        crate::auth::pairing::current(&app.state.db)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn window_closes_after_the_total_cap() {
+    let app = TestApp::spawn().await;
+    let window = crate::auth::pairing::open(&app.state.db, 300)
+        .await
+        .unwrap();
+    {
+        let mut attempts = app.state.pairing_attempts.lock().await;
+        attempts.track(&window);
+        attempts.total = crate::auth::pairing::MAX_ATTEMPTS - 1;
+    }
+    let wrong = if window.code == "00000000" {
+        "11111111"
+    } else {
+        "00000000"
+    };
+    let (st, _) = app
+        .request(
+            "POST",
+            "/auth/pair/complete",
+            None,
+            Some(complete_body(wrong)),
+        )
+        .await;
+    assert_eq!(st, StatusCode::GONE);
+    assert!(
+        crate::auth::pairing::current(&app.state.db)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn an_expired_window_is_rejected() {
+    let app = TestApp::spawn().await;
+    let window = crate::auth::pairing::open(&app.state.db, 0).await.unwrap();
+    let (st, _) = app
+        .request(
+            "POST",
+            "/auth/pair/complete",
+            None,
+            Some(complete_body(&window.code)),
         )
         .await;
     assert_eq!(st, StatusCode::GONE);

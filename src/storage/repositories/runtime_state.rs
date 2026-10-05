@@ -35,4 +35,12 @@ impl RuntimeStateRepository {
         .await?;
         Ok(())
     }
+
+    pub async fn delete(&self, key: &str) -> AppResult<()> {
+        sqlx::query("DELETE FROM runtime_state WHERE key = ?")
+            .bind(key)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }

@@ -12,7 +12,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use colored::Colorize;
 use sqlx::SqlitePool;
 
-use crate::platform::init::InitSystem;
 use crate::storage::repositories::DeviceRepository;
 
 /// Print the getting-started block if no device has ever paired.
@@ -41,14 +40,28 @@ pub async fn print_if_unpaired(pool: &SqlitePool, bind_addr: SocketAddr) {
         println!("    {}", url.bold());
     }
     println!();
-    println!(
-        "  {}",
-        "pairing is started from the app; the 8-digit code appears here".dimmed()
-    );
-    if let Some(hint) = log_hint() {
-        println!("  {}", hint.dimmed());
-    }
+    println!("  {}", "then get a pairing code on this host:".dimmed());
+    println!("    {}", pair_command().bold());
     println!();
+}
+
+/// The `pair` invocation that reaches this server's database.
+fn pair_command() -> String {
+    let paths = crate::paths::get();
+    // SAFETY: geteuid takes no arguments and cannot fail.
+    #[cfg(unix)]
+    let sudo = if unsafe { libc::geteuid() } == 0 {
+        "sudo "
+    } else {
+        ""
+    };
+    #[cfg(not(unix))]
+    let sudo = "";
+    format!(
+        "{sudo}remon-server --config-dir {} --data-dir {} pair",
+        paths.config_dir.display(),
+        paths.data_dir.display()
+    )
 }
 
 /// Addresses worth showing an operator. Binding a wildcard says nothing about
@@ -83,15 +96,6 @@ fn primary_local_ip() -> Option<IpAddr> {
         None
     } else {
         Some(addr.ip())
-    }
-}
-
-/// Where the code will show up when stdout is not a terminal.
-fn log_hint() -> Option<&'static str> {
-    match crate::platform::init::detect() {
-        InitSystem::Systemd => Some("running as a service? journalctl -fu remon-server"),
-        InitSystem::OpenRc => Some("running as a service? tail -f /var/log/remon-server.log"),
-        _ => None,
     }
 }
 

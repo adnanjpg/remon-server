@@ -83,7 +83,7 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
     // Per-IP rate limit on unauthenticated auth endpoints. Replenishes one
     // token every 12 seconds with a burst of 5 — i.e. a single IP can fire
     // five quick attempts then settles to ~5 req/min. Combined with the
-    // 8-digit pairing code + 3-attempts cap this puts online
+    // 8-digit pairing code and the per-window attempt caps this puts online
     // brute-force well out of reach.
     //
     // Keyed by the client address behind `proxy_hops` trusted proxies, the
@@ -148,6 +148,7 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
 
     let protected_routes = Router::new()
         .route("/auth/logout", post(auth::logout))
+        .route("/auth/pair/open", post(pairing::open_pairing))
         // Self (calling device) endpoints
         .route("/me/fcm-token", axum::routing::patch(me::update_fcm_token))
         // Session/device management — list/rename/revoke any paired device.

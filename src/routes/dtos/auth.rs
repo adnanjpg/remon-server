@@ -28,6 +28,12 @@ pub struct PairingInitiateResponse {
     pub expires_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PairingOpenResponse {
+    pub pairing_code: String,
+    pub expires_at: i64,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PairCompleteRequest {
     pub pairing_code: String,
