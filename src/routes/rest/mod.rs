@@ -41,6 +41,16 @@ use tower_http::limit::RequestBodyLimitLayer;
 /// any handler code runs.
 const ANON_AUTH_BODY_LIMIT: usize = 8 * 1024;
 
+/// Every other REST body is a small JSON object; the largest are alert rules
+/// and notification channels, well under a few KiB.
+const REST_BODY_LIMIT: usize = 64 * 1024;
+
+/// An ask carries up to `MAX_HISTORY_TURNS` replayed turns of question and
+/// answer, each clipped server-side but only after the body is read: 12 turns
+/// of 2000 + 4000 bytes is ~72 KiB raw and can roughly double under JSON
+/// escaping, plus a dev-mode system prompt. Sized with headroom for that.
+const ASSISTANT_BODY_LIMIT: usize = 256 * 1024;
+
 /// The heartbeat ping router. Anonymous — the slug is the credential —
 /// so it gets its own per-IP governor, sized for the legitimate case of
 /// many cron jobs behind one NAT (burst 60, then ~1 req/s sustained)
@@ -74,6 +84,7 @@ pub fn create_assistant_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/assistant", post(assistant::ask))
         .route("/assistant/stream", post(assistant::ask_stream))
+        .layer(RequestBodyLimitLayer::new(ASSISTANT_BODY_LIMIT))
 }
 
 /// Build the REST router. Public routes are merged with protected routes; the
@@ -359,5 +370,7 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         crate::middleware::auth_middleware,
     ));
 
-    public_routes.merge(protected_routes)
+    public_routes
+        .merge(protected_routes)
+        .layer(RequestBodyLimitLayer::new(REST_BODY_LIMIT))
 }

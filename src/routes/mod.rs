@@ -17,7 +17,6 @@ use tower_http::compression::{
     CompressionLayer,
     predicate::{DefaultPredicate, NotForContentType, Predicate},
 };
-use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Level;
@@ -69,7 +68,6 @@ pub fn build_app(app_state: Arc<AppState>, config: &Config) -> anyhow::Result<Ro
         .nest("/sse", sse::create_routes(app_state.clone()))
         .nest("/ws", ws::create_routes(app_state.clone()))
         .with_state(app_state)
-        .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(compression)
         // Inside trace and CORS so its 500 is logged and a browser can read it.
         .layer(CatchPanicLayer::custom(panic_to_500))

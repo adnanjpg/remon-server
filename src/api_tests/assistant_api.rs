@@ -213,3 +213,43 @@ async fn assistant_unconfigured_returns_503() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body: {body}");
     assert_eq!(body["error"]["code"], "SERVICE_UNAVAILABLE");
 }
+
+/// A long conversation is well past the ordinary REST body limit; it must
+/// reach the handler (503 here, no key) rather than bounce off a 413.
+#[tokio::test]
+async fn a_long_history_fits_the_assistant_limit() {
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let turn = json!({ "question": "q".repeat(2000), "answer": "a".repeat(8000) });
+    let history: Vec<_> = std::iter::repeat_n(turn, 12).collect();
+    let body = json!({ "question": "and now?", "history": history });
+    assert!(body.to_string().len() > 64 * 1024);
+
+    let (st, _) = app
+        .request("POST", "/assistant", Some(&token), Some(body))
+        .await;
+    assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn an_oversized_ask_is_refused() {
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let body = json!({ "question": "q", "history": [{ "question": "q", "answer": "a".repeat(300 * 1024) }] });
+    let (st, _) = app
+        .request("POST", "/assistant", Some(&token), Some(body))
+        .await;
+    assert_eq!(st, StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+/// The assistant's larger limit is its own; ordinary routes keep theirs.
+#[tokio::test]
+async fn other_routes_keep_the_smaller_limit() {
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let body = json!({ "server_name": "x".repeat(80 * 1024) });
+    let (st, _) = app
+        .request("PATCH", "/config", Some(&token), Some(body))
+        .await;
+    assert_eq!(st, StatusCode::PAYLOAD_TOO_LARGE);
+}

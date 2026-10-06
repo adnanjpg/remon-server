@@ -177,8 +177,22 @@ pub struct AskParams {
 /// Replayed history is bounded so a chatty client can't grow the prompt
 /// without limit: at most this many most-recent turns...
 const MAX_HISTORY_TURNS: usize = 12;
-/// ...and each replayed answer is clipped to this many chars.
+/// ...each replayed answer is clipped to this many bytes...
 const MAX_HISTORY_ANSWER_CHARS: usize = 4000;
+/// ...and each replayed question to the length a new one may have.
+const MAX_HISTORY_QUESTION_CHARS: usize = 2000;
+
+/// `s` cut to at most `max` bytes, on a char boundary.
+fn clip(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
 
 /// Dev mode can raise limits, but never unbounded.
 const DEV_MAX_STEPS_CEILING: usize = 50;
@@ -304,15 +318,9 @@ impl Assistant {
         let mut messages = vec![json!({ "role": "system", "content": system })];
         let skip = params.history.len().saturating_sub(MAX_HISTORY_TURNS);
         for turn in params.history.iter().skip(skip) {
-            let mut answer = turn.answer.as_str();
-            if answer.len() > MAX_HISTORY_ANSWER_CHARS {
-                let mut end = MAX_HISTORY_ANSWER_CHARS;
-                while !answer.is_char_boundary(end) {
-                    end -= 1;
-                }
-                answer = &answer[..end];
-            }
-            messages.push(json!({ "role": "user", "content": turn.question }));
+            let question = clip(&turn.question, MAX_HISTORY_QUESTION_CHARS);
+            let answer = clip(&turn.answer, MAX_HISTORY_ANSWER_CHARS);
+            messages.push(json!({ "role": "user", "content": question }));
             messages.push(json!({ "role": "assistant", "content": answer }));
         }
         messages.push(json!({ "role": "user", "content": params.question }));
@@ -591,6 +599,14 @@ impl Assistant {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clip_stops_on_a_char_boundary() {
+        assert_eq!(clip("kısa", 10), "kısa");
+        // "ı" is two bytes; a cut through it backs off to before it.
+        assert_eq!(clip("kısa", 2), "k");
+        assert_eq!(clip("kısa", 3), "kı");
+    }
 
     /// The REST layer's 503 mapping depends on downcasting the typed marker
     /// out of an anyhow chain — verify context wrapping doesn't bury it.
