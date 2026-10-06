@@ -1,6 +1,7 @@
 pub mod actions;
 pub mod alerting;
 pub mod alerts;
+pub mod backup;
 pub mod docker;
 pub mod events;
 pub mod forecast;

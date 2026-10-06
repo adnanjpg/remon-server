@@ -193,6 +193,7 @@ fn check_config(report: &mut Report, cfg: &Config, paths: &Paths) {
     }
 
     check_config_permissions(report, cfg, paths);
+    check_backup(report, cfg);
 
     if cfg.cors.allow_any_origin {
         report.line(
@@ -245,6 +246,46 @@ fn check_config_permissions(report: &mut Report, cfg: &Config, paths: &Paths) {
                 file.display()
             ),
         );
+    }
+}
+
+/// Off is a choice, not a problem; on, the newest copy should be recent.
+fn check_backup(report: &mut Report, cfg: &Config) {
+    let b = &cfg.backup;
+    if !b.enabled {
+        report.line(
+            Verdict::Ok,
+            "backup",
+            "off ([backup] enabled = false); `remon-server backup` copies by hand",
+        );
+        return;
+    }
+    let dir = b.resolved_dir();
+    let newest = crate::services::backup::list(&dir).pop();
+    let age_h = newest
+        .as_ref()
+        .and_then(|p| std::fs::metadata(p).ok()?.modified().ok()?.elapsed().ok())
+        .map(|d| d.as_secs() / 3600);
+    match (newest, age_h) {
+        (Some(p), Some(h)) if h <= b.interval_hours * 2 => report.line(
+            Verdict::Ok,
+            "backup",
+            format!("last copy {h}h ago: {}", p.display()),
+        ),
+        (Some(p), Some(h)) => report.line(
+            Verdict::Warn,
+            "backup",
+            format!(
+                "last copy {h}h ago, every {}h expected: {}",
+                b.interval_hours,
+                p.display()
+            ),
+        ),
+        _ => report.line(
+            Verdict::Ok,
+            "backup",
+            format!("on, no copy in {} yet", dir.display()),
+        ),
     }
 }
 

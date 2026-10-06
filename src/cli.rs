@@ -22,6 +22,8 @@ pub enum Command {
     /// Open a pairing window and print its code. The only way to pair the
     /// first device, so the code never leaves the host.
     Pair,
+    /// Copy the database now, into the `[backup]` directory.
+    Backup,
 }
 
 /// Parsed invocation.
@@ -50,6 +52,7 @@ COMMANDS:
     config check             Validate configuration and exit
     doctor                   Report paths, config, port and host tooling
     pair                     Print a code to pair a device with (needs the server's database)
+    backup                   Copy the database now, into the [backup] directory
 
 OPTIONS:
     -c, --config-dir <DIR>   Directory holding config.toml    [env: REMON_CONFIG_DIR]
@@ -87,6 +90,7 @@ fn parse_from<I: Iterator<Item = String>>(args: I) -> Parsed {
         match arg.as_str() {
             "doctor" => command = Command::Doctor,
             "pair" => command = Command::Pair,
+            "backup" => command = Command::Backup,
             "config" => match args.next().as_deref() {
                 Some("check") => command = Command::ConfigCheck,
                 Some(other) => {
@@ -222,6 +226,7 @@ mod tests {
     fn subcommands_are_recognized() {
         assert_eq!(expect_run(&["doctor"]).command, Command::Doctor);
         assert_eq!(expect_run(&["pair"]).command, Command::Pair);
+        assert_eq!(expect_run(&["backup"]).command, Command::Backup);
         assert_eq!(
             expect_run(&["config", "check"]).command,
             Command::ConfigCheck

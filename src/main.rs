@@ -62,6 +62,7 @@ async fn main() -> std::process::ExitCode {
         }
         cli::Command::ConfigCheck => return config_check(),
         cli::Command::Pair => return pair().await,
+        cli::Command::Backup => return backup().await,
         cli::Command::Run => {}
     }
 
@@ -169,33 +170,57 @@ fn config_check() -> std::process::ExitCode {
     }
 }
 
-/// `pair` — open a pairing window in the server's database and print the code.
+/// Config and the running server's database, for subcommands that act on it.
 ///
 /// Refuses to create a database: a missing one means the wrong `--data-dir`
-/// or user, and a code written there would never reach the running server.
-async fn pair() -> std::process::ExitCode {
-    let paths = paths::get();
-    let cfg = match config::Config::new() {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            eprintln!("configuration invalid: {e}");
-            return std::process::ExitCode::FAILURE;
-        }
-    };
-    let db_path = paths.resolve_data(&cfg.database.path);
+/// or user, and anything written there would never reach the running server.
+async fn open_server_db()
+-> Result<(config::Config, std::path::PathBuf, storage::Database), std::process::ExitCode> {
+    let cfg = config::Config::new().map_err(|e| {
+        eprintln!("configuration invalid: {e}");
+        std::process::ExitCode::FAILURE
+    })?;
+    let db_path = paths::get().resolve_data(&cfg.database.path);
     if !db_path.exists() {
         eprintln!(
             "no database at {}; start the server first, then run this as the same user with the same --data-dir",
             db_path.display()
         );
-        return std::process::ExitCode::FAILURE;
+        return Err(std::process::ExitCode::FAILURE);
     }
-    let db = match storage::Database::connect(&format!("sqlite:{}", db_path.display()), 1).await {
-        Ok(db) => db,
-        Err(e) => {
+    let db = storage::Database::connect(&format!("sqlite:{}", db_path.display()), 1)
+        .await
+        .map_err(|e| {
             eprintln!("cannot open {}: {e:#}", db_path.display());
-            return std::process::ExitCode::FAILURE;
+            std::process::ExitCode::FAILURE
+        })?;
+    Ok((cfg, db_path, db))
+}
+
+/// `backup` — one copy now, whether or not scheduled backups are on.
+async fn backup() -> std::process::ExitCode {
+    let (cfg, db_path, db) = match open_server_db().await {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let dir = cfg.backup.resolved_dir();
+    match services::backup::run_once(db.pool(), &db_path, &dir, cfg.backup.keep).await {
+        Ok(copy) => {
+            println!("wrote {} ({} MiB)", copy.path.display(), copy.bytes >> 20);
+            std::process::ExitCode::SUCCESS
         }
+        Err(e) => {
+            eprintln!("backup failed: {e:#}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// `pair` — open a pairing window in the server's database and print the code.
+async fn pair() -> std::process::ExitCode {
+    let (cfg, _, db) = match open_server_db().await {
+        Ok(v) => v,
+        Err(code) => return code,
     };
     let window = match auth::pairing::open(db.pool(), cfg.auth.pairing_code_ttl_secs).await {
         Ok(w) => w,
@@ -422,6 +447,7 @@ async fn run(
 
     services::rollup::spawn(app_state.clone());
     services::retention::spawn(app_state.clone());
+    services::backup::spawn(app_state.clone(), config.backup.clone(), db_path.clone());
     services::alerts::spawn(app_state.clone());
     services::sessions::spawn(app_state.clone());
     services::liveness::spawn(app_state.clone(), config.liveness.clone());

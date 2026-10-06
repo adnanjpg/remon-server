@@ -37,6 +37,67 @@ pub struct Config {
     pub liveness: LivenessConfig,
     #[serde(default)]
     pub actions: ActionsConfig,
+    #[serde(default)]
+    pub backup: BackupConfig,
+}
+
+/// Scheduled database copies — see `[backup]` in `config/default.toml`.
+/// Off unless an operator turns it on.
+#[derive(Debug, Deserialize, Clone)]
+pub struct BackupConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Where copies go. Empty means `backups` under the data directory;
+    /// relative paths resolve against it too.
+    #[serde(default)]
+    pub dir: String,
+    /// Copies kept; older ones are deleted after each new one.
+    #[serde(default = "default_backup_keep")]
+    pub keep: usize,
+    #[serde(default = "default_backup_interval_hours")]
+    pub interval_hours: u64,
+}
+
+fn default_backup_keep() -> usize {
+    3
+}
+fn default_backup_interval_hours() -> u64 {
+    24
+}
+
+impl Default for BackupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dir: String::new(),
+            keep: default_backup_keep(),
+            interval_hours: default_backup_interval_hours(),
+        }
+    }
+}
+
+impl BackupConfig {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if !(1..=100).contains(&self.keep) {
+            return Err(ConfigError::Message(format!(
+                "backup.keep {} out of range [1..100]",
+                self.keep
+            )));
+        }
+        if !(1..=720).contains(&self.interval_hours) {
+            return Err(ConfigError::Message(format!(
+                "backup.interval_hours {} out of range [1..720]",
+                self.interval_hours
+            )));
+        }
+        Ok(())
+    }
+
+    /// The directory copies go to.
+    pub fn resolved_dir(&self) -> std::path::PathBuf {
+        let dir = self.dir.trim();
+        crate::paths::get().resolve_data(if dir.is_empty() { "backups" } else { dir })
+    }
 }
 
 /// Alert-action engine — see `[actions]` in `config/default.toml`.
@@ -530,6 +591,7 @@ impl Config {
         cfg.server.bind_addr()?;
         cfg.liveness.validate()?;
         cfg.actions.validate()?;
+        cfg.backup.validate()?;
         Ok(cfg)
     }
 }

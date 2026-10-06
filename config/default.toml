@@ -19,6 +19,22 @@ path = "./db/monitor.sqlite3"
 folder_path = "./db"
 max_connections = 5
 
+[backup]
+# Scheduled copies of the database: alert rules, notification channels,
+# heartbeats, incident history and paired devices. Off by default; turn it on
+# here, or take one copy by hand with `remon-server backup`.
+# A copy holds the JWT secret and device token hashes, so it is written
+# readable by its owner only. One on the same disk does not survive that disk;
+# ship copies elsewhere if that matters.
+# Env: REMON__BACKUP__ENABLED
+enabled = false
+# Empty means "backups" under the data directory; relative paths resolve there.
+dir = ""
+# Copies kept; the oldest goes once a new one is written.
+keep = 3
+# Hours between copies. Restarts do not reset the clock.
+interval_hours = 24
+
 [auth]
 # Optional. Left at this placeholder, the server generates a strong secret on
 # first boot and persists it (server_secrets table). Set an explicit value

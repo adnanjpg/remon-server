@@ -46,6 +46,17 @@ privileges and host tooling.
 - `folder_path` — created at boot if missing, resolved the same way
 - `max_connections` — pool size (default: 5). WAL serialises writes but reads run concurrently, so keep this above 1 — with a single connection every short query queues behind long metrics-history scans.
 
+### `[backup]`
+Scheduled copies of the database, off by default. A copy is everything the server knows: alert rules, notification channels, heartbeats, incident history, paired devices and the JWT secret, so a restored copy brings every device back without re-pairing.
+- `enabled` — `true` to copy on a schedule. `remon-server backup` takes one copy now either way.
+- `dir` — where copies go (default: `backups` under the data directory; relative paths resolve there). Created owner-only; each copy is written `0600`, since it holds the JWT secret and token hashes.
+- `keep` — copies kept, oldest deleted first (default: 3, range 1–100)
+- `interval_hours` — hours between copies (default: 24, range 1–720). The time of the last copy is stored, so restarts do not reset the clock; the first copy after boot waits at least 10 minutes.
+
+A copy is skipped, and logged as a `backup_failed` event, when the target filesystem has less than twice the database's size free. `remon-server doctor` shows the age of the newest copy. Copies on the same disk do not survive that disk; ship them elsewhere if that matters.
+
+To restore: stop the service, replace the database file (`[database] path`) with a copy, delete any `-wal` and `-shm` files next to it, and start the service.
+
 ### `[auth]`
 - `jwt_secret` — **change in production** (min 32 chars enforced)
 - `access_token_ttl_secs` — default 3600 (1 hour)
