@@ -19,6 +19,7 @@ pub mod ping;
 pub mod probes;
 pub mod process;
 pub mod push;
+pub mod query;
 pub mod services;
 pub mod system;
 
@@ -261,6 +262,8 @@ pub fn create_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
         )
         .route("/metrics/components", get(metrics::components_history))
         .route("/metrics/batch", get(metrics::batch_history))
+        // Composed screens: any chartable or resolvable metric, many at once.
+        .route("/query", post(query::query))
         .route("/logs", get(logs::list_logs))
         .route("/processes", get(process::get_processes))
         .route("/processes/{pid}", delete(process::delete_process))

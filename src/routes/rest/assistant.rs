@@ -15,7 +15,7 @@ use std::{convert::Infallible, sync::Arc, time::Duration};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::assistant::{
-    AskParams, Assistant, DevOverrides, HistoryTurn, ProposedAction, ProposedView, StreamEvent,
+    AskParams, Assistant, DevOverrides, HistoryTurn, ProposedAction, ProposedScreen, StreamEvent,
 };
 use crate::error::{AppError, AppResult};
 use crate::routes::extractors::Claims;
@@ -46,10 +46,9 @@ pub struct AskResponse {
     /// client renders each for confirmation and only then calls its `method`
     /// `path`; the daemon performs nothing here.
     pub proposals: Vec<ProposedAction>,
-    /// Widgets the assistant chose to show (`WidgetConfig` + title), rendered
-    /// by the client from its own data. Always present; `[]` when none.
-    /// Contract: docs/assistant-views.md.
-    pub views: Vec<ProposedView>,
+    /// Screens the assistant composed, drawn by the client from its own data.
+    /// Always present; `[]` when none. Contract: docs/screens.md.
+    pub screens: Vec<ProposedScreen>,
     /// Loop trace (model turns + tool calls) — present only when dev mode
     /// requested it.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -118,7 +117,7 @@ pub async fn ask(
     Ok(Json(AskResponse {
         answer: outcome.answer,
         proposals: outcome.proposals,
-        views: outcome.views,
+        screens: outcome.screens,
         trace: outcome.trace,
     }))
 }
@@ -147,7 +146,7 @@ pub async fn ask_stream(
             Ok(outcome) => StreamEvent::Done {
                 answer: outcome.answer,
                 proposals: outcome.proposals,
-                views: outcome.views,
+                screens: outcome.screens,
                 trace: outcome.trace,
             },
             Err(e) => {

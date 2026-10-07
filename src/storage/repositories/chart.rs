@@ -79,6 +79,9 @@ struct Spec {
     fields: &'static [&'static str],
     /// Constant columns a row mapper expects but the table lacks.
     pad: &'static str,
+    /// Rollup rows carry per-field `_sum`/`_valid_count`/`_min`/`_max`
+    /// summaries. Without them a tier holds only `sample_count`-weighted means.
+    summaries: bool,
 }
 const CPU: Spec = Spec {
     table: "metrics_cpu",
@@ -86,6 +89,7 @@ const CPU: Spec = Spec {
     key: None,
     fields: CPU_FIELDS,
     pad: "",
+    summaries: true,
 };
 const MEMORY: Spec = Spec {
     table: "metrics_memory",
@@ -93,6 +97,7 @@ const MEMORY: Spec = Spec {
     key: None,
     fields: MEMORY_FIELDS,
     pad: "",
+    summaries: true,
 };
 const DISK: Spec = Spec {
     table: "metrics_disk",
@@ -100,6 +105,7 @@ const DISK: Spec = Spec {
     key: Some("mount_point"),
     fields: DISK_FIELDS,
     pad: "",
+    summaries: true,
 };
 const NETWORK: Spec = Spec {
     table: "metrics_network",
@@ -107,6 +113,7 @@ const NETWORK: Spec = Spec {
     key: Some("interface_name"),
     fields: NETWORK_FIELDS,
     pad: "",
+    summaries: true,
 };
 // Shares network's rollup cursor and retention policy.
 const NETWORK_TOTAL: Spec = Spec {
@@ -115,6 +122,55 @@ const NETWORK_TOTAL: Spec = Spec {
     key: None,
     fields: NETWORK_FIELDS,
     pad: "'' AS interface_name,",
+    summaries: true,
+};
+// Keyed and unbounded; read only through `read_field_series`.
+const PROCESS: Spec = Spec {
+    table: "metrics_process",
+    resource: "process",
+    key: Some("name"),
+    fields: &[
+        "cpu_percent",
+        "memory_bytes",
+        "pid_count",
+        "disk_read_bps",
+        "disk_write_bps",
+    ],
+    pad: "",
+    summaries: false,
+};
+const DOCKER: Spec = Spec {
+    table: "metrics_docker",
+    resource: "docker",
+    key: Some("container_id"),
+    fields: &[
+        "cpu_percent",
+        "memory_used_bytes",
+        "memory_limit_bytes",
+        "memory_percent",
+        "network_rx_bytes",
+        "network_tx_bytes",
+        "block_read_bytes",
+        "block_write_bytes",
+        "pids",
+    ],
+    pad: "",
+    summaries: false,
+};
+const PRESSURE: Spec = Spec {
+    table: "metrics_pressure",
+    resource: "pressure",
+    key: Some("resource"),
+    fields: &[
+        "some_avg10",
+        "some_avg60",
+        "some_avg300",
+        "full_avg10",
+        "full_avg60",
+        "full_avg300",
+    ],
+    pad: "",
+    summaries: false,
 };
 
 /// Raw rows store only the inputs of a derived percentage (same as rollup).
@@ -124,8 +180,47 @@ fn raw_expr(table: &str, field: &'static str) -> &'static str {
             "100.0 * MAX(total_bytes - available_bytes, 0) / NULLIF(total_bytes, 0)"
         }
         ("metrics_disk", "used_percent") => "100.0 * used_bytes / NULLIF(total_bytes, 0)",
+        // Never stored at any tier; the alert resolver derives it the same way.
+        ("metrics_docker", "memory_percent") => {
+            "CAST(memory_used_bytes AS REAL) * 100.0 / NULLIF(memory_limit_bytes, 0)"
+        }
         _ => field,
     }
+}
+
+/// Bucket aggregates of one field over a mix of raw and rollup rows:
+/// `(sum, valid_count, mean)`. The mean prefers the exact summaries and falls
+/// back to the `sample_count`-weighted mean where a bucket predates them.
+fn summary_exprs(table: &str, field: &'static str) -> (String, String, String) {
+    let raw = raw_expr(table, field);
+    let complete = "MIN(CASE WHEN resolution = 'raw' OR summary_version = 1 THEN 1 ELSE 0 END) = 1";
+    let sum = format!(
+        "SUM(CASE WHEN resolution = 'raw' THEN COALESCE(1.0 * ({raw}), 0.0) ELSE {field}_sum END)"
+    );
+    let count = format!(
+        "SUM(CASE WHEN resolution = 'raw' THEN CASE WHEN ({raw}) IS NULL THEN 0 ELSE 1 END ELSE {field}_valid_count END)"
+    );
+    let value = format!("(CASE WHEN resolution = 'raw' THEN ({raw}) ELSE {field} END)");
+    let legacy = format!(
+        "SUM(1.0 * {value} * COALESCE(sample_count, 1)) / NULLIF(SUM(CASE WHEN {value} IS NULL THEN 0 ELSE COALESCE(sample_count, 1) END), 0)"
+    );
+    let mean =
+        format!("CASE WHEN {complete} THEN 1.0 * {sum} / NULLIF({count}, 0) ELSE {legacy} END");
+    (sum, count, mean)
+}
+
+/// Bucket mean of one field, for any spec.
+fn mean_expr(spec: &Spec, field: &'static str) -> String {
+    if spec.summaries {
+        return summary_exprs(spec.table, field).2;
+    }
+    // Same weighting as rollup.rs folds children with. The raw expression
+    // applies at every tier: a derived field is never stored, so it is
+    // recomputed from the bucket means of its inputs.
+    let raw = raw_expr(spec.table, field);
+    format!(
+        "SUM(1.0 * ({raw}) * COALESCE(sample_count, 1)) / NULLIF(SUM(CASE WHEN ({raw}) IS NULL THEN 0 ELSE COALESCE(sample_count, 1) END), 0)"
+    )
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -468,18 +563,7 @@ async fn chart_rows(
     let mut values = Vec::new();
     for &field in spec.fields {
         let raw = raw_expr(table, field);
-        let sum = format!(
-            "SUM(CASE WHEN resolution = 'raw' THEN COALESCE(1.0 * ({raw}), 0.0) ELSE {field}_sum END)"
-        );
-        let count = format!(
-            "SUM(CASE WHEN resolution = 'raw' THEN CASE WHEN ({raw}) IS NULL THEN 0 ELSE 1 END ELSE {field}_valid_count END)"
-        );
-        let value = format!("(CASE WHEN resolution = 'raw' THEN ({raw}) ELSE {field} END)");
-        let legacy = format!(
-            "SUM(1.0 * {value} * COALESCE(sample_count, 1)) / NULLIF(SUM(CASE WHEN {value} IS NULL THEN 0 ELSE COALESCE(sample_count, 1) END), 0)"
-        );
-        let mean =
-            format!("CASE WHEN {complete} THEN 1.0 * {sum} / NULLIF({count}, 0) ELSE {legacy} END");
+        let (sum, count, mean) = summary_exprs(table, field);
         let mean = if REAL_FIELDS.contains(&field) {
             mean
         } else {
@@ -608,6 +692,169 @@ pub async fn read_network_chart(
             .collect::<AppResult<Vec<_>>>()
     };
     Ok((map(rows)?, map(totals)?, meta))
+}
+
+/// Namespaces `read_field_series` reads, by the alert resolver's names, so a
+/// `namespace.field{label}` that charts is the same one a rule can watch.
+fn series_spec(namespace: &str) -> Option<&'static Spec> {
+    Some(match namespace {
+        "cpu" => &CPU,
+        "memory" => &MEMORY,
+        "disk" => &DISK,
+        "network" => &NETWORK,
+        "network_total" => &NETWORK_TOTAL,
+        "process" => &PROCESS,
+        "docker" => &DOCKER,
+        "pressure" => &PRESSURE,
+        _ => return None,
+    })
+}
+
+/// Every chartable namespace with its fields and its one label, if keyed.
+pub fn series_catalog() -> Vec<(&'static str, &'static [&'static str], Option<&'static str>)> {
+    [
+        "cpu",
+        "memory",
+        "disk",
+        "network",
+        "network_total",
+        "process",
+        "docker",
+        "pressure",
+    ]
+    .into_iter()
+    .filter_map(|ns| series_spec(ns).map(|s| (ns, s.fields, s.key)))
+    .collect()
+}
+
+/// One natural key's values for a single field. `key` is `None` for the
+/// unkeyed namespaces; a point's value is `None` where its bucket held none.
+#[derive(Debug, Clone)]
+pub struct FieldSeries {
+    pub key: Option<String>,
+    pub points: Vec<(i64, Option<f64>)>,
+}
+
+/// One field over `[start, end)` on the same plan the resource charts use
+/// (tier stitching, point budget, coverage), one series per natural key.
+/// `key_filter` narrows a keyed namespace to one key. Unknown namespaces and
+/// fields are a `BadRequest` naming what is valid.
+pub async fn read_field_series(
+    pool: &SqlitePool,
+    namespace: &str,
+    field: &str,
+    key_filter: Option<&str>,
+    start: i64,
+    end: i64,
+    max_points: u32,
+) -> AppResult<(Vec<FieldSeries>, ChartMetadata)> {
+    let spec = series_spec(namespace).ok_or_else(|| {
+        let known: Vec<&str> = series_catalog().into_iter().map(|(ns, ..)| ns).collect();
+        AppError::BadRequest(format!(
+            "no history for namespace '{namespace}'; charted namespaces: {}",
+            known.join(", ")
+        ))
+    })?;
+    // The column name only ever comes from the whitelist, never the request.
+    let field: &'static str = spec
+        .fields
+        .iter()
+        .copied()
+        .find(|f| *f == field)
+        .ok_or_else(|| {
+            AppError::BadRequest(format!(
+                "unknown field '{field}' for '{namespace}'; fields: {}",
+                spec.fields.join(", ")
+            ))
+        })?;
+    if key_filter.is_some() && spec.key.is_none() {
+        return Err(AppError::BadRequest(format!(
+            "namespace '{namespace}' has no label dimensions"
+        )));
+    }
+
+    let table = spec.table;
+    let key_sel = spec.key.unwrap_or("NULL");
+    // Qualified: the rollup read joins `resolutions`, which has its own `name`.
+    let key_where = match (spec.key, key_filter) {
+        (Some(k), Some(_)) => format!(" AND c.{k} = ?"),
+        _ => String::new(),
+    };
+
+    let mut tx = pool.begin().await?;
+    let mut meta = chart_plan(&mut tx, spec, start, end, max_points).await?;
+    let rows: Vec<SqliteRow> = if meta.bucket_seconds == 0 {
+        let raw = raw_expr(table, field);
+        let sql = format!(
+            "SELECT timestamp AS ts, {key_sel} AS k, 1.0 * ({raw}) AS v FROM {table} c
+            WHERE resolution = 'raw' AND timestamp >= ? AND timestamp < ?{key_where}
+            ORDER BY timestamp"
+        );
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(meta.requested.start)
+            .bind(meta.requested.end);
+        if let Some(k) = key_filter {
+            q = q.bind(k);
+        }
+        let rows = q.fetch_all(&mut *tx).await?;
+        meta.data_through = rows.last().map(|r| r.try_get("ts")).transpose()?;
+        rows
+    } else if meta.sources.is_empty() {
+        vec![]
+    } else {
+        let step = meta.bucket_seconds;
+        let mean = mean_expr(spec, field);
+        let select = format!(
+            "SELECT c.*, CASE WHEN c.resolution = 'raw' THEN 0 ELSE r.interval_seconds END AS source_width
+            FROM {table} c JOIN resolutions r ON r.name = c.resolution
+            WHERE c.resolution = ? AND c.timestamp >= ? AND c.timestamp < ?{key_where}"
+        );
+        let group_key = if spec.key.is_some() {
+            format!(", {key_sel}")
+        } else {
+            String::new()
+        };
+        let sql = format!(
+            "WITH input AS ({}) SELECT (timestamp / {step}) * {step} AS ts, {key_sel} AS k,
+            MAX(timestamp + source_width) AS data_through, {mean} AS v FROM input
+            GROUP BY (timestamp / {step}){group_key} ORDER BY ts{group_key}",
+            vec![select; meta.sources.len()].join(" UNION ALL ")
+        );
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for source in &meta.sources {
+            q = q.bind(&source.resolution).bind(source.from).bind(source.to);
+            if let Some(k) = key_filter {
+                q = q.bind(k);
+            }
+        }
+        let rows = q.fetch_all(&mut *tx).await?;
+        for row in &rows {
+            let through: i64 = row.try_get("data_through")?;
+            meta.data_through = Some(meta.data_through.unwrap_or(0).max(through));
+        }
+        rows
+    };
+    tx.commit().await?;
+
+    // Keys in order of first appearance; the client picks colours by position.
+    let mut series: Vec<FieldSeries> = Vec::new();
+    let mut index: std::collections::HashMap<Option<String>, usize> = Default::default();
+    for row in rows {
+        let key: Option<String> = row.try_get("k")?;
+        let point = (
+            row.try_get::<i64, _>("ts")?,
+            row.try_get::<Option<f64>, _>("v")?,
+        );
+        let at = *index.entry(key.clone()).or_insert_with(|| {
+            series.push(FieldSeries {
+                key,
+                points: Vec::new(),
+            });
+            series.len() - 1
+        });
+        series[at].points.push(point);
+    }
+    Ok((series, meta))
 }
 
 #[cfg(test)]

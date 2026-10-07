@@ -1,26 +1,17 @@
-//! `propose_view`: the assistant answers "show me" questions with a dashboard
-//! widget instead of prose. The model only picks a widget and its parameters;
-//! the client renders it with its own widget catalog and fetches the data
-//! itself, so no number in a view ever passes through the model.
+//! The `widget` node: one of remon-web's built-in cards (`WidgetConfig` in
+//! src/lib/types/dashboard.ts), for the rich ones a few primitives cannot
+//! rebuild — per-core CPU bars, the alert feed, live detail cards.
 //!
-//! The emitted `config` is exactly remon-web's `WidgetConfig`
-//! (src/lib/types/dashboard.ts) — see docs/assistant-views.md. Validation here
-//! mirrors the web's `normalizeConfig` but is strict: a bad config comes back
-//! to the model as a tool error naming the fix, instead of being dropped.
+//! Strict on purpose: a bad config comes back to the model naming the fix,
+//! instead of the client dropping it.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 
-use super::ProposedView;
+use super::RANGES;
 use crate::state::AppState;
 
-/// Views per answer. A reply is a message, not a dashboard.
-pub const MAX_VIEWS: usize = 6;
-const MAX_TITLE_CHARS: usize = 80;
-
-const RANGES: &[&str] = &["30m", "1h", "6h", "24h", "7d", "30d"];
 const HISTORY_RESOURCES: &[&str] = &["cpu", "memory", "disk", "network"];
 const LIVE_KPI_SOURCES: &[&str] = &["cpu", "memory", "disk-io", "network"];
 const STATUS_SUMMARIES: &[&str] = &["host", "services", "containers", "alerts"];
@@ -36,7 +27,7 @@ const BARE_KINDS: &[&str] = &[
     "alert-timeline",
 ];
 
-/// Every kind `propose_view` accepts, in the order the tool schema lists them.
+/// Every widget kind, in the order the tool description lists them.
 pub fn kinds() -> Vec<&'static str> {
     let mut all = vec![
         "history-chart",
@@ -48,113 +39,21 @@ pub fn kinds() -> Vec<&'static str> {
     all
 }
 
-/// Tool definition, in the same OpenAI function shape as the rest.
-pub fn definition() -> Value {
-    json!({
-        "type": "function",
-        "function": {
-            "name": "propose_view",
-            "description": "Show the operator a live widget inline under your answer, \
-    rendered by the app from its own data. Use it whenever the operator wants to see, \
-    chart, watch or compare something, instead of describing the numbers in text. \
-    Kinds and their fields:\n\
-    - history-chart: resource (cpu|memory|disk|network), range (30m|1h|6h|24h|7d|30d) — \
-    a host metric over a past window.\n\
-    - probe-metric: probe, metric (names from list_probes), viz (chart|scalar, default \
-    chart), optional labels (one label set of that metric, as an object).\n\
-    - live-kpi: source (cpu|memory|disk-io|network) — one live number with a sparkline.\n\
-    - status-summary: summary (host|services|containers|alerts).\n\
-    - live-vitals, cpu-detail, memory-detail, pressure, network-detail, disk-detail, \
-    alert-timeline: no other fields; live detail cards and the recent alert feed.\n\
-    Call it once per widget. The app renders the data, so do not repeat its values in \
-    your answer.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {
-                        "type": "string",
-                        "description": "Short caption for the widget, e.g. 'CPU, last 6h'."
-                    },
-                    "config": {
-                        "type": "object",
-                        "properties": {
-                            "kind": { "type": "string", "enum": kinds() },
-                            "resource": { "type": "string", "enum": HISTORY_RESOURCES },
-                            "range": { "type": "string", "enum": RANGES },
-                            "source": { "type": "string", "enum": LIVE_KPI_SOURCES },
-                            "summary": { "type": "string", "enum": STATUS_SUMMARIES },
-                            "probe": { "type": "string" },
-                            "metric": { "type": "string" },
-                            "viz": { "type": "string", "enum": PROBE_VIZ },
-                            "labels": {
-                                "type": "object",
-                                "description": "probe-metric only: the label set to plot."
-                            }
-                        },
-                        "required": ["kind"]
-                    }
-                },
-                "required": ["title", "config"]
-            }
-        }
-    })
-}
-
-/// Validate one `propose_view` call and queue the view for the client.
-pub async fn propose_view(
-    state: &Arc<AppState>,
-    args: &Value,
-    views: &mut Vec<ProposedView>,
-) -> Result<Value, String> {
-    let title = args
-        .get("title")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .ok_or("missing 'title'")?;
-    let title: String = title.chars().take(MAX_TITLE_CHARS).collect();
-    let input = args
-        .get("config")
-        .and_then(Value::as_object)
-        .ok_or("missing 'config' object")?;
-    let config = normalize(state, input).await?;
-
-    // The same widget twice adds nothing; hand back the one already shown.
-    if let Some(existing) = views.iter().find(|v| v.config == config) {
-        return Ok(shown(&existing.id, &existing.title));
-    }
-    if views.len() >= MAX_VIEWS {
-        return Err(format!(
-            "at most {MAX_VIEWS} views per answer; this one was not added"
-        ));
-    }
-    let id = format!("v{}", views.len() + 1);
-    let out = shown(&id, &title);
-    views.push(ProposedView { id, title, config });
-    Ok(out)
-}
-
-fn shown(id: &str, title: &str) -> Value {
-    json!({
-        "shown": title,
-        "id": id,
-        "status": "rendered under your answer from live data; refer to it, do not restate its numbers",
-    })
-}
-
-/// Turn the model's config into the exact `WidgetConfig` the web renders.
-async fn normalize(state: &Arc<AppState>, input: &Map<String, Value>) -> Result<Value, String> {
+/// Turn a model-written config into the exact `WidgetConfig` the web renders.
+pub async fn normalize(state: &AppState, input: &Value) -> Result<Value, String> {
+    let input = input.as_object().ok_or("widget config must be an object")?;
     let kind = input
         .get("kind")
         .and_then(Value::as_str)
-        .ok_or("config is missing 'kind'")?;
+        .ok_or("widget config is missing 'kind'")?;
     match kind {
         "history-chart" => {
             only_fields(input, kind, &["resource", "range"])?;
+            let ranges: Vec<&str> = RANGES.iter().map(|(n, _)| *n).collect();
             Ok(json!({
                 "kind": kind,
                 "resource": one_of(input, "resource", HISTORY_RESOURCES)?,
-                "range": one_of(input, "range", RANGES)?,
+                "range": one_of(input, "range", &ranges)?,
             }))
         }
         "live-kpi" => {
@@ -174,7 +73,7 @@ async fn normalize(state: &Arc<AppState>, input: &Map<String, Value>) -> Result<
             Ok(json!({ "kind": kind }))
         }
         other => Err(format!(
-            "unknown view kind '{other}'. Valid kinds: {}",
+            "unknown widget kind '{other}'. Valid kinds: {}",
             kinds().join(", ")
         )),
     }
@@ -218,7 +117,7 @@ fn one_of(input: &Map<String, Value>, field: &str, allowed: &[&str]) -> Result<S
 /// `labels` becomes the web's `labelKey` (canonical sorted-key JSON, the same
 /// encoding as `ProbeMetric::labels_canonical`); `unit` is filled from the
 /// probe's own report.
-async fn probe_metric(state: &Arc<AppState>, input: &Map<String, Value>) -> Result<Value, String> {
+async fn probe_metric(state: &AppState, input: &Map<String, Value>) -> Result<Value, String> {
     let field = |name: &str| {
         input
             .get(name)

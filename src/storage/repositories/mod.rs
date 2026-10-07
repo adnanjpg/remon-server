@@ -1,6 +1,7 @@
 mod chart;
 pub use chart::{
-    ChartMetadata, read_cpu_chart, read_disk_chart, read_memory_chart, read_network_chart,
+    ChartMetadata, FieldSeries, read_cpu_chart, read_disk_chart, read_field_series,
+    read_memory_chart, read_network_chart, series_catalog,
 };
 mod actions;
 mod alerts;

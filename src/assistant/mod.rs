@@ -27,8 +27,8 @@ use crate::config::AssistantConfig;
 use crate::state::AppState;
 
 mod anthropic;
+pub(crate) mod screens;
 pub(crate) mod tools;
-pub(crate) mod views;
 
 /// A write-action the assistant drafted but did **not** perform. The daemon
 /// never mutates state from the assistant loop; a proposal is handed to the
@@ -49,27 +49,27 @@ pub struct ProposedAction {
     pub body: Option<Value>,
 }
 
-/// A widget the assistant chose to show instead of describing numbers in
-/// prose. `config` is remon-web's `WidgetConfig` verbatim (validated in
-/// `views.rs`); the client renders it and fetches the data itself, so the
-/// model never relays a value. Contract: docs/assistant-views.md.
+/// A screen the assistant composed instead of describing numbers in prose.
+/// `screen` is a validated spec (`crate::screen`); the client draws it and
+/// fetches the data itself, so the model never relays a value.
+/// Contract: docs/screens.md.
 #[derive(Debug, Clone, Serialize)]
-pub struct ProposedView {
-    /// Unique within one answer: "v1", "v2", ...
+pub struct ProposedScreen {
+    /// Unique within one answer: "s1", "s2", ...
     pub id: String,
-    pub title: String,
-    pub config: Value,
+    pub screen: Value,
 }
 
-/// Result of one `ask`: the natural-language answer plus any actions the model
-/// drafted for operator confirmation and any views it chose to show. `trace` is populated only when dev mode
-/// asked for it: one entry per model turn (usage, latency) and per tool call
-/// (args, result preview, latency), for iterating on prompts and tools.
+/// Result of one `ask`: the natural-language answer, any actions the model
+/// drafted for operator confirmation and any screens it composed. `trace` is
+/// populated only when dev mode asked for it: one entry per model turn (usage,
+/// latency) and per tool call (args, result preview, latency), for iterating
+/// on prompts and tools.
 #[derive(Debug, Clone)]
 pub struct AskOutcome {
     pub answer: String,
     pub proposals: Vec<ProposedAction>,
-    pub views: Vec<ProposedView>,
+    pub screens: Vec<ProposedScreen>,
     pub trace: Option<Vec<Value>>,
 }
 
@@ -103,7 +103,7 @@ pub enum StreamEvent {
     Done {
         answer: String,
         proposals: Vec<ProposedAction>,
-        views: Vec<ProposedView>,
+        screens: Vec<ProposedScreen>,
         #[serde(skip_serializing_if = "Option::is_none")]
         trace: Option<Vec<Value>>,
     },
@@ -240,9 +240,9 @@ say whether it is the current value or a window average; they answer different \
 questions. If the tools do not cover something, say so plainly rather than \
 guessing. Keep answers short.\n\
 \n\
-When the operator wants to see, chart, watch or compare something, show it with \
-propose_view rather than describing it: the app renders the widget from live data \
-under your answer. Then keep the text to what the widget does not say (the cause, \
+When the operator wants to see, chart, watch or compare something, compose it with \
+propose_screen rather than describing it: the app draws the screen from live data \
+under your answer. Then keep the text to what the screen does not say (the cause, \
 what stands out, what to do) and do not repeat its numbers.\n\
 \n\
 Reading is free; changing anything is not. When the operator asks you to create \
@@ -328,7 +328,7 @@ impl Assistant {
         // Write-actions the model drafts via `propose_*` tools accumulate here
         // and ride back on the outcome; the loop itself never mutates state.
         let mut proposals: Vec<ProposedAction> = Vec::new();
-        let mut views: Vec<ProposedView> = Vec::new();
+        let mut screens: Vec<ProposedScreen> = Vec::new();
         let mut trace: Vec<Value> = Vec::new();
 
         for step in 0..max_steps {
@@ -381,7 +381,7 @@ impl Assistant {
                         name,
                         &args,
                         &mut proposals,
-                        &mut views,
+                        &mut screens,
                     )
                     .await;
                     if dev.trace {
@@ -419,7 +419,7 @@ impl Assistant {
             return Ok(AskOutcome {
                 answer,
                 proposals,
-                views,
+                screens,
                 trace: dev.trace.then_some(trace),
             });
         }

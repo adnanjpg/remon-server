@@ -10,6 +10,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 mod config;
 mod notify;
 mod routes;
+mod screen;
 mod state;
 
 mod assistant;

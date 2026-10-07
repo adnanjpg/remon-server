@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{ProposedAction, ProposedView, views};
+use super::{ProposedAction, ProposedScreen, screens};
 use crate::models::process::ProcessState;
 use crate::platform::services::{ServiceFilter, ServiceState};
 use crate::services::alerting::expression::{self, MetricRef};
@@ -493,7 +493,7 @@ operator to confirm.",
         }));
     }
 
-    tools.push(views::definition());
+    tools.push(screens::definition());
 
     Value::Array(tools)
 }
@@ -507,7 +507,7 @@ pub async fn dispatch_collecting(
     name: &str,
     args: &Value,
     proposals: &mut Vec<ProposedAction>,
-    views: &mut Vec<ProposedView>,
+    screens: &mut Vec<ProposedScreen>,
 ) -> String {
     let outcome = match name {
         // ----- read-only -----
@@ -541,7 +541,7 @@ pub async fn dispatch_collecting(
         #[cfg(feature = "docker")]
         "propose_container_action" => propose_container_action(args, proposals),
         // ----- display-only (the client renders it from its own data) -----
-        "propose_view" => views::propose_view(state, args, views).await,
+        "propose_screen" => screens::propose_screen(state, args, screens).await,
         other => Err(format!("unknown tool '{other}'")),
     };
     match outcome {
