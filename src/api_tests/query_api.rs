@@ -220,3 +220,58 @@ async fn malformed_requests_are_rejected_whole() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body} -> {resp}");
     }
 }
+
+#[tokio::test]
+async fn a_burst_does_not_outrank_steady_load() {
+    let app = TestApp::spawn().await;
+    let token = app.pair_and_login().await;
+    let now = chrono::Utc::now().timestamp();
+    // `db` holds 20% for ten ticks; `build` shows up in one at 150%.
+    for i in 0..10 {
+        seed_process(&app, "raw", now - 100 + i * 2, "db", 20.0, None).await;
+    }
+    seed_process(&app, "raw", now - 100, "build", 150.0, None).await;
+
+    let (status, body) = query(
+        &app,
+        &token,
+        json!({ "range": "1h", "queries": [
+            { "id": "top", "namespace": "process", "field": "cpu_percent", "limit": 1 },
+            { "id": "sum", "namespace": "process", "field": "cpu_percent", "mode": "summary" },
+            { "id": "one", "namespace": "process", "field": "cpu_percent", "mode": "summary",
+              "labels": { "name": "build" } }
+        ] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let top = &body["results"][0]["series"];
+    assert_eq!(top.as_array().unwrap().len(), 1);
+    assert_eq!(top[0]["labels"]["name"], "db", "{top}");
+    assert!(
+        top[0].get("stats").is_none(),
+        "series mode draws points only"
+    );
+
+    let sum = body["results"][1]["series"].as_array().unwrap();
+    let names: Vec<&str> = sum
+        .iter()
+        .map(|s| s["labels"]["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["db", "build"]);
+    assert_eq!(sum[0]["points"], json!([]));
+    assert_eq!(
+        sum[0]["stats"],
+        json!({ "avg": 20.0, "min": 20.0, "max": 20.0 })
+    );
+    // One tick of ten at 150 averages 15 over the window, not 150.
+    assert_eq!(
+        sum[1]["stats"],
+        json!({ "avg": 15.0, "min": 150.0, "max": 150.0 })
+    );
+
+    // A labelled summary still averages over the namespace's ticks.
+    let one = body["results"][2]["series"].as_array().unwrap();
+    assert_eq!(one.len(), 1);
+    assert_eq!(one[0]["stats"]["avg"], 15.0);
+}

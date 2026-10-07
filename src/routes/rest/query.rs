@@ -12,7 +12,7 @@
 //! resolver and so covers every namespace a rule can watch, not only the
 //! charted ones.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::{Json, extract::State};
@@ -57,8 +57,8 @@ pub struct SeriesQuery {
     pub labels: BTreeMap<String, String>,
     #[serde(default)]
     pub mode: QueryMode,
-    /// `series` on a keyed namespace without a label: how many series to
-    /// return, highest average first.
+    /// `series`/`summary` on a keyed namespace without a label: how many
+    /// series to return, busiest over the window first.
     #[serde(default)]
     pub limit: Option<usize>,
 }
@@ -66,9 +66,13 @@ pub struct SeriesQuery {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryMode {
+    /// History over the window.
     #[default]
     Series,
+    /// The current value, through the alert resolver.
     Latest,
+    /// One `stats` per series over the window instead of points.
+    Summary,
 }
 
 #[derive(Debug, Serialize)]
@@ -98,7 +102,23 @@ pub struct QueryResult {
 pub struct SeriesOut {
     pub labels: BTreeMap<String, String>,
     /// `[timestamp, value]`, oldest first; `value` is null for an empty bucket.
+    /// Empty in `summary` mode.
     pub points: Vec<(i64, Option<f64>)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stats: Option<Stats>,
+}
+
+/// A series over the window, from the same buckets `series` draws.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct Stats {
+    /// Over every tick the namespace reported in, a missing key counting as
+    /// zero: a process outside the top set or a stopped container used
+    /// (next to) nothing. A short burst cannot outrank steady load this way.
+    pub avg: f64,
+    /// Lowest and highest bucket where the key was present. Bucket means, so
+    /// a spike shorter than a bucket is flattened.
+    pub min: f64,
+    pub max: f64,
 }
 
 /// What a field measures, from the naming the collectors follow.
@@ -176,7 +196,8 @@ pub async fn query(
     let mut results = Vec::with_capacity(req.queries.len());
     for q in &req.queries {
         let outcome = match q.mode {
-            QueryMode::Series => series(&state, q, start, end, max_points).await,
+            QueryMode::Series => series(&state, q, start, end, max_points, false).await,
+            QueryMode::Summary => series(&state, q, start, end, max_points, true).await,
             QueryMode::Latest => latest(&state, q, now).await.map(|s| (s, None)),
         };
         let unit = unit_of(&q.namespace, &q.field);
@@ -213,6 +234,7 @@ async fn series(
     start: i64,
     end: i64,
     max_points: u32,
+    summarize: bool,
 ) -> AppResult<(Vec<SeriesOut>, Option<ChartMetadata>)> {
     let key_label = crate::storage::repositories::series_catalog()
         .into_iter()
@@ -237,47 +259,79 @@ async fn series(
         }
     }
 
+    // A summary reads every key even for one label: its average needs the
+    // ticks the whole namespace reported in.
+    let read_filter = if summarize { None } else { key_filter };
     let (rows, meta) = read_field_series(
         &state.db,
         &q.namespace,
         &q.field,
-        key_filter,
+        read_filter,
         start,
         end,
         max_points,
     )
     .await?;
-    let mut out: Vec<(f64, SeriesOut)> = rows
+    // Collector ticks in the window. A bucket holds as many as its most
+    // present key does: some key (the busiest process, a mount) is in every
+    // tick, while a quiet one shows up in only a few.
+    let mut per_bucket: HashMap<i64, i64> = HashMap::new();
+    for s in &rows {
+        for ((t, v), n) in s.points.iter().zip(&s.samples) {
+            if v.is_some() {
+                let seen = per_bucket.entry(*t).or_default();
+                *seen = (*seen).max(*n);
+            }
+        }
+    }
+    let ticks = per_bucket.values().sum::<i64>().max(1) as f64;
+
+    let mut out: Vec<SeriesOut> = rows
         .into_iter()
+        .filter(|s| !summarize || key_filter.is_none() || s.key.as_deref() == key_filter)
         .map(|s| {
             let values: Vec<f64> = s.points.iter().filter_map(|(_, v)| *v).collect();
-            let avg = if values.is_empty() {
-                f64::NEG_INFINITY
-            } else {
-                values.iter().sum::<f64>() / values.len() as f64
-            };
+            // Each bucket mean stands for the samples the key was present in.
+            let load: f64 = s
+                .points
+                .iter()
+                .zip(&s.samples)
+                .filter_map(|((_, v), n)| v.map(|v| v * *n as f64))
+                .sum();
+            let stats = (!values.is_empty()).then(|| Stats {
+                avg: load / ticks,
+                min: values.iter().copied().fold(f64::INFINITY, f64::min),
+                max: values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            });
             let labels = match (key_label, s.key) {
                 (Some(label), Some(key)) => BTreeMap::from([(label.to_string(), key)]),
                 _ => BTreeMap::new(),
             };
-            (
-                avg,
-                SeriesOut {
-                    labels,
-                    points: s.points,
-                },
-            )
+            SeriesOut {
+                labels,
+                points: if summarize { Vec::new() } else { s.points },
+                stats,
+            }
         })
         .collect();
     if key_filter.is_none() && key_label.is_some() {
-        out.sort_by(|a, b| b.0.total_cmp(&a.0));
+        // Busiest over the window: the same average a summary reports, so a
+        // burst seen in a handful of buckets ranks below steady load.
+        let load = |s: &SeriesOut| s.stats.map_or(f64::NEG_INFINITY, |st| st.avg);
+        out.sort_by(|a, b| load(b).total_cmp(&load(a)));
         out.truncate(
             q.limit
                 .unwrap_or(DEFAULT_SERIES_LIMIT)
                 .clamp(1, MAX_SERIES_LIMIT),
         );
     }
-    Ok((out.into_iter().map(|(_, s)| s).collect(), Some(meta)))
+    if !summarize {
+        // Ranking only; a drawn series carries its points, not a summary.
+        for s in &mut out {
+            s.stats = None;
+        }
+    }
+    Ok((out, Some(meta)))
 }
 
 async fn latest(state: &AppState, q: &SeriesQuery, now: i64) -> AppResult<Vec<SeriesOut>> {
@@ -294,6 +348,7 @@ async fn latest(state: &AppState, q: &SeriesQuery, now: i64) -> AppResult<Vec<Se
         .map(|s| SeriesOut {
             labels: serde_json::from_str(&s.label_set).unwrap_or_default(),
             points: vec![(now, s.value.is_finite().then_some(s.value))],
+            stats: None,
         })
         .collect())
 }

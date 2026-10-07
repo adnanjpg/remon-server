@@ -225,3 +225,56 @@ async fn probe_widgets_resolve_labels_and_units() {
     .await;
     assert!(err.contains(r#"{"site":"eu"}"#), "{err}");
 }
+
+#[tokio::test]
+async fn table_columns_aggregate_over_the_window() {
+    let app = TestApp::spawn().await;
+    seed_process(&app, "nginx", 12.0).await;
+
+    let table = |columns: Value| {
+        json!({ "title": "x", "root": { "type": "table", "title": "busiest today",
+                "range": "24h", "limit": 5, "columns": columns } })
+    };
+    let out = validate(
+        &app.state,
+        &table(json!([
+            { "label": "avg cpu", "agg": "avg", "query": { "namespace": "process", "field": "cpu_percent" } },
+            { "label": "peak", "agg": "max", "query": { "namespace": "process", "field": "cpu_percent" } },
+            { "label": "now", "agg": "current", "query": { "namespace": "process", "field": "memory_bytes" } }
+        ])),
+    )
+    .await
+    .expect("valid");
+    let columns = &out["root"]["columns"];
+    assert_eq!(columns[0]["agg"], "avg");
+    assert!(
+        columns[2].get("agg").is_none(),
+        "current is the default, left implicit"
+    );
+    assert_eq!(out["root"]["range"], "24h");
+
+    let err = errors(
+        &app,
+        table(json!([
+            { "label": "a", "agg": "avg", "query": { "namespace": "smart", "field": "temperature_c" } },
+            { "label": "b", "agg": "avg", "query": { "namespace": "process", "field": "cpu_percent", "limit": 3 } },
+            { "label": "c", "agg": "median", "query": { "namespace": "process", "field": "cpu_percent" } }
+        ])),
+    )
+    .await;
+    assert!(err.contains("median"), "{err}");
+    let err = errors(
+        &app,
+        table(json!([
+            { "label": "a", "agg": "avg", "query": { "namespace": "smart", "field": "temperature_c" } },
+            { "label": "b", "agg": "avg", "query": { "namespace": "process", "field": "cpu_percent", "limit": 3 } }
+        ])),
+    )
+    .await;
+    for want in [
+        "root.columns[0]: no history for namespace 'smart'",
+        "root.columns[1]: put limit on the table",
+    ] {
+        assert!(err.contains(want), "missing {want:?} in:\n{err}");
+    }
+}

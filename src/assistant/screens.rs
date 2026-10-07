@@ -27,7 +27,7 @@ pub fn definition() -> Value {
     let description = format!(
         "Compose a screen from live data, drawn under your answer. Use it whenever the \
 operator wants to see, chart, watch or compare something, instead of describing numbers. \
-The app fetches the data itself, so do not repeat its values in your answer.\n\
+The app fetches the data itself, so write no figures in your answer.\n\
 \n\
 A screen is {{title, range, root}}; range is one of {ranges} (default 1h). root is a node; \
 nodes by `type`:\n\
@@ -36,8 +36,11 @@ nodes by `type`:\n\
 - line {{title, series: [{{label?, query}}], range?}}: history, up to 8 series on one chart \
 (e.g. two processes compared).\n\
 - stat {{title, query}}: one current value; the query must match a single series.\n\
-- table {{title, columns: [{{label, query}}], limit?}}: current values, a row per label set, \
-ranked by the first column.\n\
+- table {{title, columns: [{{label, query, agg?}}], limit?, range?}}: a row per label set, \
+ranked by the first column. agg is current (default), or avg|max|min over the window \
+(table range, else the screen's), which needs a charted namespace. \"Busiest over the \
+day\" is agg avg: it counts the time a key was absent as zero, so steady load outranks \
+a short burst.\n\
 - widget {{title?, config}}: a built-in card. config.kind: {kinds}. history-chart takes \
 resource (cpu|memory|disk|network) and range; live-kpi takes source \
 (cpu|memory|disk-io|network); status-summary takes summary \
@@ -102,6 +105,6 @@ fn shown(id: &str, title: &str) -> Value {
     json!({
         "shown": title,
         "id": id,
-        "status": "drawn under your answer from live data; refer to it, do not restate its numbers",
+        "status": "drawn under your answer from live data; point to it, write no figures",
     })
 }

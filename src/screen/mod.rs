@@ -83,13 +83,17 @@ pub enum Node {
         title: String,
         query: Query,
     },
-    /// Current values, one row per label set, one column per query.
+    /// One row per label set, one column per query: current values, or each
+    /// column's `agg` over the window.
     Table {
         title: String,
         columns: Vec<Column>,
         /// Rows kept, ranked by the first column, highest first.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         limit: Option<usize>,
+        /// Window for `avg`/`min`/`max` columns; the screen's when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        range: Option<String>,
     },
     /// A built-in card (`WidgetConfig`), see [`widget`].
     Widget {
@@ -120,6 +124,28 @@ pub struct SeriesSpec {
 pub struct Column {
     pub label: String,
     pub query: Query,
+    #[serde(default, skip_serializing_if = "Agg::is_current")]
+    pub agg: Agg,
+}
+
+/// What a table column shows. Anything but `current` is over the window and
+/// needs a charted namespace, like a `line` series.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Agg {
+    #[default]
+    Current,
+    /// Over every tick in the window, a key's absence counting as zero, so
+    /// "busiest over the day" ranks steady load above a short burst.
+    Avg,
+    Min,
+    Max,
+}
+
+impl Agg {
+    fn is_current(&self) -> bool {
+        *self == Agg::Current
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -228,6 +254,27 @@ impl Ctx {
     }
 }
 
+/// A panel's own range if valid, else the screen's; `None` after reporting a
+/// bad one, since its queries cannot be checked against an unknown window.
+fn own_window<'a>(
+    own: Option<&'a str>,
+    screen: &'a str,
+    path: &str,
+    ctx: &mut Ctx,
+) -> Option<&'a str> {
+    match own {
+        Some(r) if range_secs(r).is_none() => {
+            ctx.err(
+                path,
+                format!("unknown range '{r}'; ranges: {}", range_names()),
+            );
+            None
+        }
+        Some(r) => Some(r),
+        None => Some(screen),
+    }
+}
+
 fn walk<'a>(
     state: &'a AppState,
     node: &'a mut Node,
@@ -279,16 +326,8 @@ fn walk<'a>(
             } => {
                 ctx.panels += 1;
                 *title = ctx.title(title, &path);
-                let window = match own.as_deref() {
-                    Some(r) if range_secs(r).is_none() => {
-                        ctx.err(
-                            &path,
-                            format!("unknown range '{r}'; ranges: {}", range_names()),
-                        );
-                        return;
-                    }
-                    Some(r) => r,
-                    None => range,
+                let Some(window) = own_window(own.as_deref(), range, &path, ctx) else {
+                    return;
                 };
                 if series.is_empty() || series.len() > MAX_LINE_SERIES {
                     ctx.err(&path, format!("a line holds 1-{MAX_LINE_SERIES} series"));
@@ -313,9 +352,13 @@ fn walk<'a>(
                 title,
                 columns,
                 limit,
+                range: own,
             } => {
                 ctx.panels += 1;
                 *title = ctx.title(title, &path);
+                let Some(window) = own_window(own.as_deref(), range, &path, ctx) else {
+                    return;
+                };
                 if columns.is_empty() || columns.len() > MAX_TABLE_COLUMNS {
                     ctx.err(
                         &path,
@@ -329,7 +372,15 @@ fn walk<'a>(
                     ctx.queries += 1;
                     let at = format!("{path}.columns[{i}]");
                     c.label = ctx.title(&c.label, &at);
-                    if let Err(e) = check_current(state, &c.query, false).await {
+                    if c.query.limit.is_some() {
+                        ctx.err(&at, "put limit on the table, not its queries".to_string());
+                        continue;
+                    }
+                    let checked = match c.agg {
+                        Agg::Current => check_current(state, &c.query, false).await,
+                        _ => check_history(state, &c.query, window).await,
+                    };
+                    if let Err(e) = checked {
                         ctx.err(&at, e);
                     }
                 }

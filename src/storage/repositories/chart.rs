@@ -733,6 +733,10 @@ pub fn series_catalog() -> Vec<(&'static str, &'static [&'static str], Option<&'
 pub struct FieldSeries {
     pub key: Option<String>,
     pub points: Vec<(i64, Option<f64>)>,
+    /// Raw samples behind each point, aligned with `points`. A bucket mean
+    /// covers only the samples the key was present in, so weighing load
+    /// across keys needs this count, not just the mean.
+    pub samples: Vec<i64>,
 }
 
 /// One field over `[start, end)` on the same plan the resource charts use
@@ -786,7 +790,7 @@ pub async fn read_field_series(
     let rows: Vec<SqliteRow> = if meta.bucket_seconds == 0 {
         let raw = raw_expr(table, field);
         let sql = format!(
-            "SELECT timestamp AS ts, {key_sel} AS k, 1.0 * ({raw}) AS v FROM {table} c
+            "SELECT timestamp AS ts, {key_sel} AS k, 1.0 * ({raw}) AS v, 1 AS n FROM {table} c
             WHERE resolution = 'raw' AND timestamp >= ? AND timestamp < ?{key_where}
             ORDER BY timestamp"
         );
@@ -816,7 +820,8 @@ pub async fn read_field_series(
         };
         let sql = format!(
             "WITH input AS ({}) SELECT (timestamp / {step}) * {step} AS ts, {key_sel} AS k,
-            MAX(timestamp + source_width) AS data_through, {mean} AS v FROM input
+            MAX(timestamp + source_width) AS data_through, {mean} AS v,
+            SUM(COALESCE(sample_count, 1)) AS n FROM input
             GROUP BY (timestamp / {step}){group_key} ORDER BY ts{group_key}",
             vec![select; meta.sources.len()].join(" UNION ALL ")
         );
@@ -845,14 +850,17 @@ pub async fn read_field_series(
             row.try_get::<i64, _>("ts")?,
             row.try_get::<Option<f64>, _>("v")?,
         );
+        let samples: i64 = row.try_get("n")?;
         let at = *index.entry(key.clone()).or_insert_with(|| {
             series.push(FieldSeries {
                 key,
                 points: Vec::new(),
+                samples: Vec::new(),
             });
             series.len() - 1
         });
         series[at].points.push(point);
+        series[at].samples.push(samples);
     }
     Ok((series, meta))
 }

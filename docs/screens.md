@@ -69,7 +69,7 @@ Every node has a `type`. Unknown types and unknown fields are rejected.
 | `tabs`   | `tabs`: 1-6 × `{ title, child }`                     | one child at a time                                                                      |
 | `line`   | `title`, `series`: 1-8 × `{ label?, query }`, `range?` | history on shared axes; `range` overrides the screen's                                 |
 | `stat`   | `title`, `query`                                     | one current value                                                                        |
-| `table`  | `title`, `columns`: 1-6 × `{ label, query }`, `limit?` 1-50 | current values: one row per label set, one column per query, ranked by the first column |
+| `table`  | `title`, `columns`: 1-6 × `{ label, query, agg? }`, `limit?` 1-50, `range?` | one row per label set, one column per query, ranked by the first column |
 | `widget` | `title?`, `config`                                   | a built-in card. `config` is a remon-web `WidgetConfig`, e.g. `{ "kind": "cpu-detail" }` |
 
 Limits per screen: at most 4 levels of nesting, 24 panels, and 16 queries.
@@ -101,11 +101,18 @@ These are the same metric names that alert rules and the assistant's
   `series_catalog()` in `src/storage/repositories/chart.rs` is the source of
   this table. A keyed namespace takes only its own label. If the label is left
   out, the series shows the `limit` busiest keys (default 10, at most 50).
+  "Busiest" means the highest average over the window, where any tick in
+  which a key was absent counts as zero (see `stats.avg` below).
 
-- `stat` and `table` read the current value through the alert resolver. They
-  can use any namespace a rule can watch, including `probe`, `service`,
-  `heartbeat`, `smart` and `components`. A `stat` query must match exactly
-  one series. Put `limit` on the `table`, not on its queries.
+- `stat` reads the current value through the alert resolver. It can use any
+  namespace a rule can watch, including `probe`, `service`, `heartbeat`,
+  `smart` and `components`. A `stat` query must match exactly one series.
+
+- A `table` column has an optional `agg`. The default, `current`, reads the
+  current value in the same way a `stat` does. `avg`, `max` and `min` read
+  over the window: the table's own `range` if it has one, otherwise the
+  screen's. These need a charted namespace, the same as a `line` series.
+  Put `limit` on the `table`, not on its queries.
 
 ### Validation
 
@@ -144,8 +151,12 @@ request.
 
 - Window: `range`, or `start`/`end` in unix seconds, but not both. The default
   is the last hour.
-- `mode`: `series` (default) reads history over the window. `latest` reads the
-  current value.
+- `mode`:
+  - `series` (default) reads history over the window.
+  - `latest` reads the current value.
+  - `summary` returns no points. Each series carries
+    `stats: { avg, min, max }` over the window instead. A table column whose
+    `agg` is not `current` uses this mode.
 - 1-16 queries per request. Each `id` must be non-empty and unique.
 
 ```json
@@ -169,6 +180,13 @@ request.
 - Series are read on the same plan the built-in charts use (tier stitching,
   point budget, coverage). `chart` describes that plan. A keyed query without a
   label returns the busiest `limit` series.
+- `stats.avg` is the average over every collector tick in the window, and a
+  tick where the key was absent counts as zero. A process outside the top set
+  or a stopped container used next to nothing, so a burst that shows in a few
+  ticks does not outrank load that ran all day. A bucket's ticks are the raw
+  samples of the key that was present most often in it. `min` and `max` are
+  bucket means taken over the buckets where the key was present, so a spike
+  shorter than one bucket is flattened.
 - `unit` is one of `percent`, `bytes`, `bytes/s`, `/s` or `celsius`, and is
   absent for counts and ratios.
 - A malformed request fails as a whole with a 400. A query that is well formed
